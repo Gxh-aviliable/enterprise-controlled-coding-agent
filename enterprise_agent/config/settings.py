@@ -64,6 +64,7 @@ class Settings(BaseSettings):
 
     # Memory
     SHORT_TERM_TTL_HOURS: int = 24
+    CHECKPOINT_TTL_HOURS: int = 24  # RedisSaver checkpoint 过期时间（对话历史自动清理）
     MAX_MESSAGES_PER_SESSION: int = 100
     TOKEN_THRESHOLD: int = 500000
 
@@ -75,7 +76,7 @@ class Settings(BaseSettings):
     CONTEXT_SUMMARY_TRIGGER_CHARS: int = 200000
 
     # Agent behavior
-    MICROCOMPACT_KEEP_LAST: int = 3  # Messages to keep during microcompact
+    MICROCOMPACT_KEEP_LAST: int = 6  # Messages to keep during microcompact
     NAG_REMINDER_THRESHOLD: int = 3  # Rounds without TodoWrite before reminder
     COMMAND_TIMEOUT_SECONDS: int = 120  # Shell/background command timeout
     AGENT_INVOKE_TIMEOUT_SECONDS: int = 600  # Max seconds for a single graph invocation
@@ -83,6 +84,9 @@ class Settings(BaseSettings):
     SUBAGENT_MAX_ROUNDS: int = 30  # Max rounds for subagent execution
     TODO_MAX_ITEMS: int = 20  # Max todo items per session
     TODO_MAX_IN_PROGRESS: int = 1  # Max concurrent in_progress todos
+
+    # Memory accumulator (task-level storage, replaces per-round fragments)
+    MEMORY_ACCUMULATOR_MAX_ROUNDS: int = 20  # Max rounds before forcing flush (safety valve)
 
     # LangSmith tracing (optional — if API key is set, tracing auto-enables)
     LANGSMITH_API_KEY: str = ""

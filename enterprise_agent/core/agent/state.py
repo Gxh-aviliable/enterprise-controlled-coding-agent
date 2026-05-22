@@ -40,3 +40,7 @@ class AgentState(TypedDict):
     rounds_without_todo: int  # 计数：连续多少轮没有使用TodoWrite
     used_todo_last_round: bool  # 标记：上一轮是否使用了TodoWrite
     has_open_todos: bool  # 标记：是否有未完成的todo项
+
+    # Memory accumulator (task-level storage, not per-round fragments)
+    memory_accumulator: Dict[str, Any]  # 跨轮积累的任务内容（user_request, assistant_responses, tool_actions, etc.）
+    pending_memory_flush: bool  # 标记：是否需要将积累内容写入 Chroma

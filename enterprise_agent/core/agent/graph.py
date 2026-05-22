@@ -119,7 +119,6 @@ def build_agent_graph():
             "tool_call": "tool_confirm",  # First check for sensitive tools
             "save_memory": "save_memory",  # Text response -> save then end
             "compress": "compress_context",
-            "manual_compress": "manual_compress",
         }
     )
 
@@ -146,7 +145,11 @@ def build_agent_graph():
     graph.add_edge("manual_compress", END)
 
     # Compile with RedisSaver for persistent state management
-    checkpointer = AsyncRedisSaver(redis_client=_checkpointer_client)
+    # TTL ensures checkpoints are automatically cleaned up after expiry
+    checkpointer = AsyncRedisSaver(
+        redis_client=_checkpointer_client,
+        ttl=settings.CHECKPOINT_TTL_HOURS * 3600  # Convert hours to seconds
+    )
     return graph.compile(checkpointer=checkpointer)
 
 
@@ -188,7 +191,6 @@ def build_simple_agent_graph():
             "tool_call": "tool_confirm",  # First check for sensitive tools
             "save_memory": "save_memory",  # Text response -> save then end
             "compress": "compress_context",
-            "manual_compress": END,  # Simplified: manual compress just ends
         }
     )
 
@@ -211,7 +213,10 @@ def build_simple_agent_graph():
     # Compress back to LLM
     graph.add_edge("compress_context", "llm_call")
 
-    checkpointer = AsyncRedisSaver(redis_client=_checkpointer_client)
+    checkpointer = AsyncRedisSaver(
+        redis_client=_checkpointer_client,
+        ttl=settings.CHECKPOINT_TTL_HOURS * 3600
+    )
     return graph.compile(checkpointer=checkpointer)
 
 

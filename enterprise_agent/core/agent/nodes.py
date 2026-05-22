@@ -42,91 +42,33 @@ from enterprise_agent.core.agent.state import AgentState
 from enterprise_agent.core.agent.tools import ALL_TOOLS, tool_requires_confirmation, get_sensitive_tool_info
 
 
-def _content_similarity(s1: str, s2: str) -> float:
-    """Calculate simple text similarity based on common words.
-
-    Args:
-        s1: First string
-        s2: Second string
-
-    Returns:
-        Similarity score (0-1)
-    """
-    if not s1 or not s2:
-        return 0.0
-
-    # Normalize: lowercase, split into words
-    words1 = set(s1.lower().split())
-    words2 = set(s2.lower().split())
-
-    if not words1 or not words2:
-        return 0.0
-
-    # Jaccard similarity: intersection / union
-    intersection = len(words1 & words2)
-    union = len(words1 | words2)
-
-    return intersection / union if union > 0 else 0.0
-
 # System prompts for different agent roles
 MAIN_SYSTEM_PROMPT = """You are an enterprise-grade AI assistant with access to powerful tools.
 
 ## Environment
 {environment_info}
 
-## CRITICAL: When NOT to Use Tools
+## When NOT to Use Tools
+- Simple greetings ("你好", "hi", "hello") → respond directly, NO tools
+- Simple questions you can answer directly → respond directly, NO tools
+- Casual chat → just chat, NO tools
 
-**Simple greetings and casual conversation do NOT require tools.**
-- If user says "你好", "hi", "hello", "你好啊" — just respond with a friendly greeting, NO tools
-- If user asks a simple question that you can answer directly — respond directly, NO tools
-- If user wants to chat or make small talk — just chat, NO tools
+## Decision Framework
+Before acting, check these questions. If YES, use the indicated tool:
 
-**Only use tools when there's a clear task to accomplish:**
-- Reading/writing/editing files
-- Running shell commands
-- Searching codebase
-- Managing tasks/todos
-- Spawning subagents for complex work
+1. Simple chat? → respond directly (skip tools)
+2. Independent sub-tasks? → `spawn_teammate()` (parallel agents)
+3. Search large codebase? → `task(agent_type="Explore")`
+4. Long-running command? → `background_run()` then `check_background()`
+5. Domain knowledge needed? → `list_skills()` then `load_skill(name)`
+6. Complex implementation? → `task(agent_type="general-purpose")`
+7. Context too long? → use `compress`
 
-## Capabilities
-- **Shell execution**: Run commands via `bash` tool
-- **File operations**: Read, write, and edit files
-- **Task management**: Create and track TODO items with `todo_update`
-- **Team coordination**: Spawn and manage teammate agents
-- **Background tasks**: Run long-running commands asynchronously
-- **Context compression**: Compress conversation history when it gets too long
-
-## Task Delegation Rules
-- When a task has multiple independent sub-tasks, spawn teammates to work in parallel
-- Complex tasks involving research, coding, and review should be split across team members
-- Before doing everything yourself, ask: "Could this be parallelized with teammates?"
-- Use `task()` or `spawn_teammate()` when:
-  - A task can be split into independent sub-tasks
-  - You need parallel research, coding, or review work
-  - A sub-task requires focused, isolated work
-
-## Before You Act — Decision Framework
-
-Evaluate these questions. If YES, use the indicated tool (check tool docstring for details):
-
-1. PARALLELISM: Independent sub-tasks? -> `spawn_teammate()`
-2. SKILLS: Domain knowledge needed? -> `list_skills()` then `load_skill(name)`
-3. ISOLATED EXPLORATION: Search large codebase? -> `task(agent_type="Explore")`
-4. LONG-RUNNING: Commands > few seconds? -> `background_run()` + `check_background()`
-5. COMPLEX IMPLEMENTATION: Plan + code + review? -> `task(agent_type="general-purpose")`
-
-CRITICAL: When asked to build multi-agent systems, USE your actual team tools
-(spawn_teammate, task, background_run). Do NOT simulate by writing Python scripts
-that define agent classes. Your tools ARE the multi-agent system.
-
-## Guidelines
-1. Use tools when needed to accomplish tasks — don't just describe what to do
-2. Manage your work with TODO items for multi-step tasks
-3. Be concise and direct in your responses
-4. When spawning teammates, provide clear role descriptions and prompts
-5. Use background tasks for long-running operations
-6. If context gets too long, use the `compress` tool to summarize and continue
-7. Use Windows-compatible commands (cmd.exe shell) — avoid bash-isms like `pwd`, `ls`, `tail`, `/workspace` paths, `2>/dev/null`. Use `dir`, `cd /d`, `python` (not python3), and Windows path separators."""
+## Critical Rules
+- Use ACTUAL tools (spawn_teammate, task, background_run), NOT simulated Python scripts
+- Use Windows commands: `dir`, `cd /d`, `python` (NOT `ls`, `pwd`, `python3`)
+- Track multi-step work with `todo_update`
+- Be concise and direct in responses"""
 
 
 def _build_environment_info() -> str:
@@ -293,15 +235,19 @@ async def init_context_node(state: AgentState) -> Dict[str, Any]:
     """
     session_id = state.get("session_id", "")
 
-    # === Clear TodoManager for new sessions to prevent cross-session pollution ===
+    # === Clear TodoManager and BackgroundManager for new sessions ===
     from enterprise_agent.core.agent.tools.task import clear_todo_manager, get_todo_manager
+    from enterprise_agent.core.agent.tools.background import clear_background_manager
+    from enterprise_agent.core.agent.context import get_context_manager
+
     messages = state.get("messages", [])
     is_new_session = len(messages) == 1
 
     if is_new_session:
-        # New session: clear any leftover todos from previous sessions
+        # New session: clear any leftover state from previous sessions
         clear_todo_manager(session_id)
-        logging.info(f"[init_context] New session {session_id}: cleared TodoManager")
+        clear_background_manager(session_id)
+        logging.info(f"[init_context] New session {session_id}: cleared TodoManager and BackgroundManager")
     else:
         # Existing session: restore todos from AgentState if available
         todos = state.get("todos", [])
@@ -310,8 +256,14 @@ async def init_context_node(state: AgentState) -> Dict[str, Any]:
             todo_mgr.items = todos
             logging.info(f"[init_context] Session {session_id}: restored {len(todos)} todos from state")
 
+    # === Estimate token count from actual messages (not reset to 0) ===
+    # This ensures correct compression threshold check across multi-turn conversations
+    ctx_mgr = get_context_manager()
+    initial_token_count = ctx_mgr.estimate_tokens(messages)
+    logging.info(f"[init_context] Estimated token count from {len(messages)} messages: {initial_token_count}")
+
     result = {
-        "token_count": 0,
+        "token_count": initial_token_count,  # Estimated from actual messages, not 0
         "pending_tool_calls": [],
         "tool_results": {},
         "tool_call_stats": {},
@@ -323,35 +275,40 @@ async def init_context_node(state: AgentState) -> Dict[str, Any]:
         "rounds_without_todo": 0,
         "used_todo_last_round": False,
         "has_open_todos": False,
+        # Memory accumulator state
+        "memory_accumulator": {},  # Fresh accumulator for new session
+        "pending_memory_flush": False,
     }
 
     # === Chroma 长期记忆检索（仅新会话首条消息）===
     user_id = state.get("user_id")
 
-    # 仅当会话只有 1 条消息（全新会话的第一条用户消息）时注入
-    is_new_session = len(messages) == 1
-
-    if is_new_session and user_id:
-        last_user_msg = None
-        for msg in reversed(messages):
+    if is_new_session and user_id and messages:
+        # 找第一条用户消息（用于 prepend 长期记忆）
+        first_user_msg = None
+        for msg in messages:
             if isinstance(msg, dict) and msg.get("role") == "user":
-                last_user_msg = msg.get("content", "")
+                first_user_msg = msg
                 break
 
-        if last_user_msg:
+        if first_user_msg:
+            original_content = first_user_msg.get("content", "")
+            # 获取原始消息 ID（用于实现替换而不是追加）
+            msg_id = first_user_msg.get("id")
+
             try:
                 from enterprise_agent.memory.long_term import get_long_term_memory
                 memory = get_long_term_memory(user_id)
 
                 # Step 1: 检索用户 patterns（偏好、工作流）
                 user_patterns = await memory.search_patterns(
-                    query=last_user_msg,
+                    query=original_content,
                     n_results=3,
                 )
 
                 # Step 2: 检索相关历史对话
                 past_conversations = await memory.search_conversations(
-                    query=last_user_msg,
+                    query=original_content,
                     n_results=5,
                 )
 
@@ -377,9 +334,23 @@ async def init_context_node(state: AgentState) -> Dict[str, Any]:
                         context_parts.append(f"[{p_type}] {p_key} (置信度: {confidence:.2f})")
 
                 # Conversations section
+                # task_summary documents are prioritized and displayed differently
                 if past_conversations:
+                    # Sort: task_summary first, then other roles
+                    summaries = [c for c in past_conversations if c.get("metadata", {}).get("role") == "task_summary"]
+                    others = [c for c in past_conversations if c.get("metadata", {}).get("role") != "task_summary"]
+
                     context_parts.append("\n=== 相关历史对话 ===")
-                    for conv in past_conversations:
+
+                    # Task summaries: show more content (they're structured and concise)
+                    for conv in summaries:
+                        content = conv.get("content", "")
+                        if len(content) > 500:
+                            content = content[:500] + "..."
+                        context_parts.append(f"[Task Summary]: {content}")
+
+                    # Other roles: shorter preview
+                    for conv in others:
                         role = conv.get("metadata", {}).get("role", "unknown")
                         content = conv.get("content", "")
                         if len(content) > 300:
@@ -391,15 +362,30 @@ async def init_context_node(state: AgentState) -> Dict[str, Any]:
                     if len(context_text) > 2000:
                         context_text = context_text[:2000] + "..."
 
-                    result["messages"] = [{
+                    # Prepend 长期记忆到第一条用户消息内容中（而不是追加单独消息）
+                    # 保持相同 ID 以实现替换（而不是追加新消息）
+                    new_content = (
+                        "<long_term_memory>\n"
+                        "以下是与当前问题相关的历史记忆，供参考：\n"
+                        f"{context_text}\n"
+                        "</long_term_memory>\n\n"
+                        f"{original_content}"
+                    )
+
+                    new_msg = {
                         "role": "user",
-                        "content": (
-                            "<long_term_memory>\n"
-                            "以下是与当前问题相关的历史记忆，供参考：\n"
-                            f"{context_text}\n"
-                            "</long_term_memory>"
-                        )
-                    }]
+                        "content": new_content,
+                    }
+                    if msg_id:
+                        new_msg["id"] = msg_id  # 保持 ID 相同，实现替换
+
+                    result["messages"] = [new_msg]
+
+                    # 重新估算 token_count（长期记忆已注入）
+                    initial_token_count = ctx_mgr.estimate_tokens([new_msg])
+                    result["token_count"] = initial_token_count
+                    logging.info(f"[init_context] Re-estimated token count after memory injection: {initial_token_count}")
+
             except Exception:
                 logging.warning("Chroma memory search failed (non-fatal)", exc_info=True)
 
@@ -554,6 +540,14 @@ async def tool_executor_node(state: AgentState) -> Dict[str, Any]:
     Side-effect tools (write, bash, etc.) are never retried.
     """
     from enterprise_agent.core.agent.tools.task import get_todo_manager
+    from enterprise_agent.core.agent.tools.workspace import set_current_user_id, set_current_session_id
+
+    # Set context variables for tools to access
+    session_id = state.get("session_id", "")
+    user_id = state.get("user_id")
+    set_current_session_id(session_id)
+    if user_id:
+        set_current_user_id(user_id)
 
     results = {}
     tool_map = {t.name: t for t in ALL_TOOLS}
@@ -563,7 +557,6 @@ async def tool_executor_node(state: AgentState) -> Dict[str, Any]:
 
     pending = state.get("pending_tool_calls", [])
     tool_call_stats = state.get("tool_call_stats", {}).copy()  # mutable state: copy before modifying
-    session_id = state.get("session_id", "")
     logging.info(f"[tool_exec] Session {session_id}: executing {len(pending)} tool(s): {[tc.get('name') for tc in pending]}")
 
     for tool_call in pending:
@@ -664,14 +657,14 @@ async def tool_executor_node(state: AgentState) -> Dict[str, Any]:
 
 
 async def save_memory_node(state: AgentState) -> Dict[str, Any]:
-    """Save memory node - handles TodoWrite nag reminder logic + Chroma storage.
+    """Save memory node - handles TodoWrite nag reminder logic + memory accumulator.
 
     Message persistence is handled automatically by RedisSaver checkpointer.
 
     This node also:
-    1. Evaluates importance of last conversation round
-    2. Selectively stores high-importance messages to Chroma
-    3. Extracts user patterns from very high-importance conversations
+    1. Accumulates meaningful content across rounds (not per-round fragments)
+    2. Flushes accumulated content to Chroma at task boundaries as task_summary
+    3. Extracts user patterns from high-importance task summaries
     4. Injects auto-counted tool_call_stats when wrapping up
     """
     # === TodoWrite nag reminder mechanism (s03) ===
@@ -707,147 +700,38 @@ async def save_memory_node(state: AgentState) -> Dict[str, Any]:
             )
         })
 
-    # === Chroma 长期记忆选择性存储===
+    # === Task-level memory accumulator (replaces per-round fragment storage) ===
+    from enterprise_agent.memory.accumulator import MemoryAccumulator
+
     messages = state.get("messages", [])
     user_id = state.get("user_id")
     session_id = state.get("session_id", "unknown")
 
-    # 找到最后一条 user消息和对应的 assistant 响应
-    last_user_msg = None
-    last_user_idx = -1
-    last_assistant_msg = None
+    acc = MemoryAccumulator()
+    accumulator_state = state.get("memory_accumulator", {})
 
-    for i in range(len(messages) - 1, -1, -1):
-        msg = messages[i]
-        if isinstance(msg, dict):
-            role = msg.get("role", "")
-            if role == "user" and last_user_msg is None:
-                last_user_msg = msg.get("content", "")
-                last_user_idx = i
-            elif role == "assistant" and last_assistant_msg is None and last_user_idx > -1:
-                # 确保 assistant 在 user 之后
-                last_assistant_msg = msg.get("content", "")
-                break
-        elif hasattr(msg, "type"):
-            # LangChain message object
-            if msg.type == "human" and last_user_msg is None:
-                last_user_msg = _extract_text(msg.content)
-                last_user_idx = i
-            elif msg.type == "ai" and last_assistant_msg is None and last_user_idx > -1:
-                last_assistant_msg = _extract_text(msg.content)
-                break
+    # 1. Accumulate content from current round
+    accumulator_state = acc.accumulate_round(state, messages, accumulator_state)
 
-    # === 过滤系统消息（不应存储到长期记忆）===
-    def _should_skip_message(content: str) -> bool:
-        """检查是否应该跳过存储（系统生成的低价值消息）"""
-        if not content:
-            return True
-        # 跳过系统自动生成的提醒和统计
-        skip_patterns = [
-            "<reminder>",  # TodoWrite提醒
-            "<tool_stats>",  # 工具统计
-            "Update your todos",  # TodoWrite提醒内容
-            "Framework-counted tool usage",  # 工具统计内容
-        ]
-        content_lower = content.lower()
-        for pattern in skip_patterns:
-            if pattern.lower() in content_lower:
-                return True
-        # 跳过过短的消息（无实际内容）
-        if len(content.strip()) < 10:
-            return True
-        return False
+    # 2. Check if we're at a task boundary → flush to Chroma
+    should_flush = acc.should_flush(state)
 
-    if _should_skip_message(last_user_msg):
-        logging.debug(f"[save_memory] Skipped system-generated message")
-        return {"rounds_without_todo": rounds_without_todo, "messages": additional_messages}
-
-    # 如果找到了 user + assistant 对话，进行重要性评估和选择性存储
-    if last_user_msg and user_id:
+    if should_flush and accumulator_state.get("user_request"):
+        # 3. Flush: generate summary + evaluate importance + store to Chroma
         try:
-            from enterprise_agent.memory.long_term import get_long_term_memory
-            from enterprise_agent.memory.importance import get_importance_evaluator
-
-            memory = get_long_term_memory(user_id)
-            evaluator = get_importance_evaluator()
-
-            # === 去重检查：避免存储相同内容 ===
-            recent_results = await memory.search_conversations(
-                query=last_user_msg[:50] if len(last_user_msg) > 50 else last_user_msg,
-                n_results=3,
+            flush_result = await acc.flush(accumulator_state, session_id, user_id, messages)
+            accumulator_state = flush_result["accumulator_reset"]
+            logging.info(
+                f"[save_memory] Flush complete: stored={flush_result['stored']}, "
+                f"importance={flush_result['importance']:.2f}"
             )
-            for r in recent_results:
-                existing_content = r.get("content", "")
-                # 如果内容高度相似（>90%匹配），跳过存储
-                if existing_content and _content_similarity(last_user_msg, existing_content) > 0.9:
-                    logging.debug(f"[save_memory] Skipped duplicate message (similarity > 0.9)")
-                    return {"rounds_without_todo": rounds_without_todo, "messages": additional_messages}
-
-            # 评估用户消息的重要性
-            importance = await evaluator.evaluate(
-                content=last_user_msg,
-                role="user",
-                context=messages[-5:] if len(messages) >= 5 else messages,
-                enable_llm=settings.ENABLE_LLM_IMPORTANCE_EVAL,
-            )
-
-            # 选择性存储：重要性 >=阈值才存储
-            if importance >= settings.IMPORTANCE_THRESHOLD_STORE:
-                # 存储用户消息
-                await memory.store_conversation(
-                    session_id=session_id,
-                    role="user",
-                    content=last_user_msg,
-                    metadata={"importance": importance, "access_count": 0},
-                )
-
-                # 如果有 assistant 响应，也存储（重要性略低）
-                if last_assistant_msg:
-                    await memory.store_conversation(
-                        session_id=session_id,
-                        role="assistant",
-                        content=last_assistant_msg,
-                        metadata={"importance": importance * 0.8, "access_count": 0},
-                    )
-
-                logging.info(f"[save_memory] Stored conversation (importance={importance:.2f})")
-
-                # 高重要性：提取用户 pattern
-                if importance >= settings.IMPORTANCE_THRESHOLD_PATTERN and last_assistant_msg:
-                    try:
-                        from enterprise_agent.memory.pattern_extractor import get_pattern_extractor
-                        extractor = get_pattern_extractor()
-
-                        patterns = await extractor.extract_patterns_from_conversation(
-                            user_msg=last_user_msg,
-                            assistant_msg=last_assistant_msg,
-                            context=messages[-5:] if len(messages) >= 5 else messages,
-                        )
-
-                        # 存储提取的 patterns
-                        for p in patterns:
-                            await memory.store_pattern(
-                                pattern_type=p.get("type", "preference"),
-                                pattern_key=p.get("key", "unknown"),
-                                pattern_value=p.get("value", {}),
-                                confidence=p.get("confidence", 0.7),
-                            )
-
-                        if patterns:
-                            logging.info(f"[save_memory] Extracted {len(patterns)} user patterns")
-
-                    except Exception as e:
-                        logging.warning(f"Pattern extraction failed (non-fatal): {e}")
-
-            else:
-                logging.debug(f"[save_memory] Skipped low-importance message (score={importance:.2f})")
-
         except Exception as e:
-            logging.warning(f"Chroma memory storage failed (non-fatal): {e}", exc_info=True)
+            logging.warning(f"[save_memory] Accumulator flush failed (non-fatal): {e}", exc_info=True)
 
     return {
         "rounds_without_todo": rounds_without_todo,
         "messages": additional_messages,
+        "memory_accumulator": accumulator_state,
     }
 
 
@@ -901,7 +785,16 @@ async def compress_context_node(state: AgentState) -> Dict[str, Any]:
             "context_summary": summary,
             "transcript_path": compression_result["transcript_path"],
             "token_count": compression_result["token_count_reset"],
-            "should_compress": False
+            "should_compress": False,
+            # Reset accumulator but preserve pre-compression summary for future flush
+            "memory_accumulator": {
+                "user_request": "",
+                "assistant_responses": [],
+                "tool_actions": [],
+                "round_count": 0,
+                "start_timestamp": "",
+                "context_summary_pre": _extract_text(summary) if summary else "",
+            },
         }
 
     return {"should_compress": False}
@@ -941,7 +834,16 @@ async def manual_compress_node(state: AgentState) -> Dict[str, Any]:
         "transcript_path": compression_result["transcript_path"],
         "token_count": compression_result["token_count_reset"],
         "should_compress": False,
-        "should_end": True  # End this invocation after manual compress
+        "should_end": True,  # End this invocation after manual compress
+        # Reset accumulator — manual compress ends the invocation
+        "memory_accumulator": {
+            "user_request": "",
+            "assistant_responses": [],
+            "tool_actions": [],
+            "round_count": 0,
+            "start_timestamp": "",
+            "context_summary_pre": _extract_text(summary) if summary else "",
+        },
     }
 
 
@@ -964,10 +866,6 @@ def route_after_llm(state: AgentState) -> str:
     # Check for tool calls first
     if state.get("pending_tool_calls"):
         return "tool_call"
-
-    # Check for manual compression request (token not yet exceeded threshold)
-    if state.get("should_compress") and state.get("token_count", 0) <= settings.TOKEN_THRESHOLD:
-        return "manual_compress"
 
     # Check for auto compression threshold
     if state.get("token_count", 0) > settings.TOKEN_THRESHOLD:
@@ -1016,8 +914,16 @@ async def check_background_node(state: AgentState) -> Dict[str, Any]:
     Drains completed background task results and injects into context.
     """
     from enterprise_agent.core.agent.tools.background import get_background_manager
+    from enterprise_agent.core.agent.tools.workspace import set_current_user_id, set_current_session_id
 
-    bg_mgr = get_background_manager()
+    # Set context variables for tools to access
+    session_id = state.get("session_id", "")
+    user_id = state.get("user_id")
+    set_current_session_id(session_id)
+    if user_id:
+        set_current_user_id(user_id)
+
+    bg_mgr = get_background_manager(session_id)
     notifications = bg_mgr.drain_notifications()
 
     if notifications:

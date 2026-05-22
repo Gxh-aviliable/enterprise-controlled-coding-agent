@@ -165,7 +165,7 @@ class ContextManager:
 
         return total_chars // 4
 
-    def microcompact(self, messages: List[Any], keep_last: int = 3) -> List[Any]:
+    def microcompact(self, messages: List[Any], keep_last: int = 6) -> List[Any]:
         """Clear old tool result content to prevent output bloat.
 
         Handles both dict messages (``{"role": "tool", "content": "..."}``)
@@ -208,7 +208,7 @@ class ContextManager:
     def microcompact_langchain(
         self,
         messages: List[Any],
-        keep_last: int = 3
+        keep_last: int = 6
     ) -> List[Any]:
         """Microcompact for LangChain message objects.
 
@@ -305,19 +305,26 @@ Use a tool to move forward. Reference the transcript file if needed for detailed
         return await self.auto_compact(messages, session_id)
 
 
-# Per-user instances cache
-_context_managers: Dict[int, ContextManager] = {}
-_transcript_managers: Dict[int, TranscriptManager] = {}
+# Global singleton for ContextManager (stateless utility class, no isolation needed)
+_context_manager_singleton: ContextManager = None
 
 
 def get_context_manager() -> ContextManager:
-    """Get or create ContextManager instance for current user."""
-    from enterprise_agent.core.agent.tools.workspace import get_current_user_id
-    user_id = get_current_user_id()
+    """Get ContextManager instance (singleton for efficiency).
 
-    if user_id not in _context_managers:
-        _context_managers[user_id] = ContextManager()
-    return _context_managers[user_id]
+    ContextManager is a stateless utility class - it only operates on
+    messages passed to its methods. Messages are already isolated by
+    session_id in AgentState (managed by RedisSaver), so no additional
+    isolation is needed.
+    """
+    global _context_manager_singleton
+    if _context_manager_singleton is None:
+        _context_manager_singleton = ContextManager()
+    return _context_manager_singleton
+
+
+# Per-user instances cache for TranscriptManager (depends on workspace directory)
+_transcript_managers: Dict[int, TranscriptManager] = {}
 
 
 def get_transcript_manager() -> TranscriptManager:

@@ -11,6 +11,9 @@ from pathlib import Path
 # Context variable to store current user_id
 _current_user_id: ContextVar[int] = ContextVar('current_user_id', default=None)
 
+# Context variable to store current session_id
+_current_session_id: ContextVar[str] = ContextVar('current_session_id', default=None)
+
 # Base workspace directory
 WORKSPACE_BASE = Path(os.environ.get("WORKSPACE_BASE", "/workspaces"))
 
@@ -31,6 +34,24 @@ def get_current_user_id() -> int:
         User ID or None if not set
     """
     return _current_user_id.get()
+
+
+def set_current_session_id(session_id: str) -> None:
+    """Set the current session ID in context.
+
+    Args:
+        session_id: The session ID to set
+    """
+    _current_session_id.set(session_id)
+
+
+def get_current_session_id() -> str:
+    """Get the current session ID from context.
+
+    Returns:
+        Session ID or None if not set
+    """
+    return _current_session_id.get()
 
 
 def get_user_workspace(user_id: int = None) -> Path:

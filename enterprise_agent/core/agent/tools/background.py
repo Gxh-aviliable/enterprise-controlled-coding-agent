@@ -53,20 +53,32 @@ class BackgroundManager:
             "timeout": timeout
         }
 
-        # Start execution thread
+        # Capture user_id in main thread before spawning daemon thread
+        # ContextVar is copied to child threads in Python 3.7+, but explicit capture is more reliable
+        from enterprise_agent.core.agent.tools.workspace import get_current_user_id
+        user_id = get_current_user_id()
+
+        # Start execution thread with explicit user_id
         thread = threading.Thread(
             target=self._execute,
-            args=(task_id, command, timeout),
+            args=(task_id, command, timeout, user_id),
             daemon=True
         )
         thread.start()
 
         return f"Background task {task_id} started: {command[:80]}..."
 
-    def _execute(self, task_id: str, command: str, timeout: int) -> None:
-        """Execute command in thread."""
+    def _execute(self, task_id: str, command: str, timeout: int, user_id: int = None) -> None:
+        """Execute command in thread.
+
+        Args:
+            task_id: Task identifier
+            command: Shell command to execute
+            timeout: Maximum execution time
+            user_id: User ID for workspace (captured in main thread)
+        """
         try:
-            workdir = get_user_workspace()
+            workdir = get_user_workspace(user_id)  # Use explicit user_id, not ContextVar
             result = subprocess.run(
                 command,
                 shell=True,
@@ -138,17 +150,46 @@ class BackgroundManager:
         return notifications
 
 
-# Per-user instances cache
-_bg_managers: Dict[int, BackgroundManager] = {}
+# Per-session instances cache (to prevent cross-session pollution)
+_bg_managers: Dict[str, BackgroundManager] = {}  # Key is session_id
 
 
-def get_background_manager() -> BackgroundManager:
-    """Get or create BackgroundManager instance for current user."""
-    from enterprise_agent.core.agent.tools.workspace import get_current_user_id
-    user_id = get_current_user_id()
-    if user_id not in _bg_managers:
-        _bg_managers[user_id] = BackgroundManager()
-    return _bg_managers[user_id]
+def get_background_manager(session_id: str = None) -> BackgroundManager:
+    """Get or create BackgroundManager instance for current session.
+
+    Args:
+        session_id: Session ID to get manager for. If None, uses context variable.
+
+    Note: BackgroundManager is now per-session to prevent cross-session pollution.
+    Each session should have its own background tasks, isolated from other sessions.
+    """
+    if session_id is None:
+        from enterprise_agent.core.agent.tools.workspace import get_current_session_id
+        session_id = get_current_session_id()
+
+    if session_id is None:
+        # Return empty manager for operations that don't need session context
+        return BackgroundManager()
+
+    if session_id not in _bg_managers:
+        _bg_managers[session_id] = BackgroundManager()
+    return _bg_managers[session_id]
+
+
+def clear_background_manager(session_id: str) -> None:
+    """Clear BackgroundManager for a session.
+
+    Called when starting a new session or when background tasks should be reset.
+    """
+    if session_id in _bg_managers:
+        bg_mgr = _bg_managers[session_id]
+        for task_id, task in bg_mgr.tasks.items():
+            if task.get("status") == "running":
+                # Note: threading.Thread cannot be forcefully killed
+                # The task will continue but notification won't be delivered
+                task["status"] = "cancelled"
+        # Remove from cache
+        del _bg_managers[session_id]
 
 
 # === Tool Definitions ===
