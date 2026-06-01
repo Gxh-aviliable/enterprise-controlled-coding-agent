@@ -35,6 +35,13 @@ def _extract_delta(content) -> str:
     return str(content) if content else ""
 
 
+# Stateful suppression: tracks whether we're currently inside an internal
+# LLM evaluation output that's leaking through the stream. When True, ALL
+# deltas are suppressed until the internal output completes (JSON closes or
+# structured summary ends with a natural break).
+_suppress_internal = False
+
+
 def _is_internal_json(delta: str) -> bool:
     """Check if a delta looks like internal evaluation output leaking from
     memory/importance evaluator LLM calls inside the LangGraph.
@@ -43,6 +50,10 @@ def _is_internal_json(delta: str) -> bool:
     importance evaluations) and despite .with_config({"callbacks": []}),
     some tokens still leak through the graph's stream_mode=['messages'].
 
+    Uses a STATEFUL suppression mode: once an internal output is detected,
+    subsequent deltas are suppressed until the internal output completes
+    (JSON closing brace, or structured summary end marker).
+
     Detection covers two leak types:
     1. Structured task summary headers: [User Request]:, [Actions]:, etc.
        (from MemoryAccumulator._generate_task_summary / _format_simple_content)
@@ -50,7 +61,26 @@ def _is_internal_json(delta: str) -> bool:
        (from LLMEvaluator.evaluate_importance)
     """
     import re
+    global _suppress_internal
     stripped = delta.strip()
+
+    # ── If already in suppression mode ──
+    if _suppress_internal:
+        # JSON suppression: track brace balance to find the closing }
+        # The _suppress_json_balance tracks { and } count in internal output
+        _balance = getattr(_is_internal_json, '_json_balance', 0)
+        for ch in stripped:
+            if ch == '{':
+                _balance += 1
+            elif ch == '}':
+                _balance -= 1
+        _is_internal_json._json_balance = _balance
+
+        if _balance <= 0:
+            # JSON complete — exit suppression
+            _is_internal_json._json_balance = 0
+            _suppress_internal = False
+        return True  # Still suppressing this delta
 
     # ── Type 1: Task summary structured headers ──
     # These are unique to accumulator internal output. The agent never starts
@@ -65,26 +95,53 @@ def _is_internal_json(delta: str) -> bool:
     )
     for header in _accumulator_headers:
         if stripped.startswith(header):
+            _suppress_internal = True
+            _is_internal_json._json_balance = 0
             return True
         # Also check: header preceded by newline (multi-line chunk)
         if f"\n{header}" in stripped:
+            _suppress_internal = True
+            _is_internal_json._json_balance = 0
             return True
 
-    # ── Type 2: Importance evaluation JSON ──
+    # ── Type 2: Importance evaluation JSON start ──
     # Exact prefix matches for JSON deltas
     if stripped.startswith(('{"importance"', '[{"type"', '{"importance":', '{"type":')):
+        _suppress_internal = True
+        _balance = stripped.count('{') - stripped.count('}')
+        _is_internal_json._json_balance = _balance
+        if _balance <= 0:
+            # Complete JSON in a single chunk — reset immediately
+            _is_internal_json._json_balance = 0
+            _suppress_internal = False
         return True
+
     # Pattern match: importance JSON anywhere in the delta
     if re.search(r'\{\s*"importance"\s*:\s*[\d.]+', stripped):
+        _suppress_internal = True
+        _balance = stripped.count('{') - stripped.count('}')
+        _is_internal_json._json_balance = _balance
+        if _balance <= 0:
+            _is_internal_json._json_balance = 0
+            _suppress_internal = False
         return True
-    # Catch JSON that continues from a previous chunk: "reason": field
-    # Only matches when both "reason" and "importance" JSON keys appear in the
-    # SAME chunk, which is near-impossible in natural conversation but common
-    # in importance evaluator output: {"importance": 0.X, "reason": "..."}
+
+    # Catch JSON that continues from internal output: "reason" field with
+    # importance in the SAME chunk (near-impossible in normal conversation)
     if re.search(r'"reason"\s*:\s*"[^"]{5,}"\s*[,}]', stripped) and re.search(r'"importance"\s*:\s*[\d.]+', stripped):
+        _suppress_internal = True
+        _balance = stripped.count('{') - stripped.count('}')
+        _is_internal_json._json_balance = _balance
+        if _balance <= 0:
+            _is_internal_json._json_balance = 0
+            _suppress_internal = False
         return True
 
     return False
+
+
+# Initialize the balance attribute on the function object
+_is_internal_json._json_balance = 0
 
 
 def _extract_content_from_message(msg) -> str:
