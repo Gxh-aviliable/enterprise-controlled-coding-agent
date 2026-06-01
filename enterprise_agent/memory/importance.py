@@ -158,7 +158,10 @@ Return ONLY a JSON object with this exact format:
             model = getattr(settings, "IMPORTANCE_EVAL_MODEL", settings.MODEL_ID)
             # Note: LangChain uses the model from settings by default
 
-            response = await llm.ainvoke([HumanMessage(content=prompt)])
+            # Suppress callbacks so LangGraph stream_mode doesn't capture
+            response = await llm.with_config({"callbacks": []}).ainvoke(
+                [HumanMessage(content=prompt)]
+            )
             text = response.content
 
             # Parse JSON response

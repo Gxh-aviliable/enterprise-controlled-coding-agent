@@ -411,7 +411,11 @@ Keep total length under 500 words. Be specific (mention actual file paths, comma
 
         try:
             llm = get_llm()
-            response = await llm.ainvoke([HumanMessage(content=prompt)])
+            # Suppress callbacks so LangGraph stream_mode doesn't capture
+            # these internal evaluation tokens as user-facing output
+            response = await llm.with_config({"callbacks": []}).ainvoke(
+                [HumanMessage(content=prompt)]
+            )
             summary = _extract_text_from_content(response.content)
             logger.info(f"[accumulator] Generated task summary ({len(summary)} chars)")
             return summary
