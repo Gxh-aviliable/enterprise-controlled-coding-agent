@@ -2,26 +2,84 @@
 
 基于 LangGraph + FastAPI + Vue 3 构建的多用户 AI Agent 系统。
 
-## Git 工作流（每次修改后必做）
+## Git 分支策略
 
 ```
+main        ← 稳定版本（仅从 develop 合并，打 tag 发布）
+develop     ← 日常开发汇总（默认工作分支）
+feature/*   ← 单个功能分支（从 develop 分出，完成后合并回 develop）
+hotfix/*    ← 紧急修复（从 main 分出，修复后合并回 main + develop）
+```
+
+### 日常开发流程（每次修改后必做）
+
+```bash
+# 0. 确保在 develop 分支
+git checkout develop
+
 # 1. 查看变更
 git status
 
 # 2. 暂存所有修改
 git add -A
 
-# 3. 提交（按语义分组）
+# 3. 提交
 git commit -m "type: summary
-——Co-Authored-By: Claude <noreply@anthropic.com>"
 
-# 4. 推送
-git push origin master
+Co-Authored-By: Claude <noreply@anthropic.com>"
+
+# 4. 推送到远程 develop
+git push origin develop
 ```
 
-**Commit 类型规范:** `fix:` (Bug) / `feat:` (新功能) / `refactor:` (重构) / `docs:` (文档) / `style:` (UI样式) / `chore:` (构建/依赖)
+### 大功能开发流程（涉及多个文件/模块时）
 
-**每次修改后必须 commit + push**，不要积累大量未提交变更。
+```bash
+# 1. 从 develop 创建 feature 分支
+git checkout develop
+git pull origin develop
+git checkout -b feature/my-feature-name
+
+# 2. 开发 + 多次提交
+git add -A && git commit -m "feat: part 1"
+git add -A && git commit -m "feat: part 2"
+
+# 3. 推送 feature 分支
+git push origin feature/my-feature-name
+
+# 4. 合并回 develop（功能完成后）
+git checkout develop
+git pull origin develop
+git merge feature/my-feature-name
+git push origin develop
+
+# 5. 删除 feature 分支
+git branch -d feature/my-feature-name
+git push origin --delete feature/my-feature-name
+```
+
+### 发布流程（版本稳定后合并到 main）
+
+```bash
+git checkout main
+git pull origin main
+git merge develop
+git tag -a v0.3.0 -m "v0.3.0: description"
+git push origin main --tags
+```
+
+### Commit 类型规范
+
+| 前缀 | 用途 | 示例 |
+|------|------|------|
+| `fix:` | Bug 修复 | `fix: FileViewer scroll broken` |
+| `feat:` | 新功能 | `feat: add syntax highlighting` |
+| `refactor:` | 重构 | `refactor: SkillLoader multi-source` |
+| `docs:` | 文档 | `docs: update CLAUDE.md` |
+| `style:` | UI/CSS | `style: dark mode toggle` |
+| `chore:` | 构建/依赖 | `chore: install highlight.js` |
+
+**规则：每次修改后必须 commit + push 到 develop，不要积累大量未提交变更。**
 
 ## 启动命令
 
