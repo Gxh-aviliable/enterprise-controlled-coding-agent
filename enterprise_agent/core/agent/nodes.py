@@ -60,18 +60,20 @@ MAIN_SYSTEM_PROMPT = """You are an enterprise-grade AI assistant with access to 
 Before acting, check these questions. If YES, use the indicated tool:
 
 1. Simple chat? → respond directly (skip tools)
-2. Domain knowledge needed? → check Available Skills above first; use `load_skill(name)` if relevant
-3. Independent sub-tasks? → `spawn_teammate()` (parallel agents)
-4. Search large codebase? → `task(agent_type="Explore")`
-5. Long-running command? → `background_run()` then `check_background()`
-6. Complex implementation? → `task(agent_type="general-purpose")`
-7. Context too long? → use `compress`
+2. **User asks about their memory/preferences/history?** → check <long_term_memory> in the first message — it contains recalled memories. If present, reference it directly. DO NOT guess or fabricate.
+3. Domain knowledge needed? → check Available Skills above first; use `load_skill(name)` if relevant
+4. Independent sub-tasks? → `spawn_teammate()` (parallel agents)
+5. Search large codebase? → `task(agent_type="Explore")`
+6. Long-running command? → `background_run()` then `check_background()`
+7. Complex implementation? → `task(agent_type="general-purpose")`
+8. Context too long? → use `compress`
 
 ## Critical Rules
 - Use ACTUAL tools (spawn_teammate, task, background_run), NOT simulated Python scripts
 - Use Windows commands: `dir`, `cd /d`, `python` (NOT `ls`, `pwd`, `python3`)
 - Track multi-step work with `todo_update`
-- Be concise and direct in responses"""
+- Be concise and direct in responses
+- When asked about user's memory/preferences/profile: reference the <long_term_memory> block if it exists. If it says \"(no prior memories found)\", say so honestly — don't make things up."""
 
 
 def _build_environment_info() -> str:
@@ -330,6 +332,25 @@ async def init_context_node(state: AgentState) -> Dict[str, Any]:
                     n_results=5,
                 )
 
+                # Step 2b: 如果语义搜索没找到 task_summary，用宽泛查询兜底
+                # 这样用户问"我有什么记忆"时也能检索到
+                summary_count = sum(
+                    1 for c in past_conversations
+                    if c.get("metadata", {}).get("role") == "task_summary"
+                )
+                if summary_count == 0:
+                    fallback_results = await memory.search_conversations(
+                        query="task summary user preference workflow",
+                        n_results=10,
+                        role="task_summary",
+                    )
+                    # Merge (avoid duplicates by content)
+                    seen_contents = {c.get("content", "")[:100] for c in past_conversations}
+                    for c in fallback_results:
+                        if c.get("content", "")[:100] not in seen_contents:
+                            past_conversations.append(c)
+                            seen_contents.add(c.get("content", "")[:100])
+
                 # Step 3: 更新 access count（追踪使用频率）
                 for conv in past_conversations:
                     doc_id = conv.get("id") or conv.get("metadata", {}).get("doc_id")
@@ -380,29 +401,35 @@ async def init_context_node(state: AgentState) -> Dict[str, Any]:
                     if len(context_text) > 2000:
                         context_text = context_text[:2000] + "..."
 
-                    # Prepend 长期记忆到第一条用户消息内容中（而不是追加单独消息）
-                    # 保持相同 ID 以实现替换（而不是追加新消息）
-                    new_content = (
+                    memory_block = (
                         "<long_term_memory>\n"
                         "以下是与当前问题相关的历史记忆，供参考：\n"
                         f"{context_text}\n"
                         "</long_term_memory>\n\n"
-                        f"{original_content}"
+                    )
+                else:
+                    # No memories found — tell the LLM explicitly so it doesn't guess
+                    memory_block = (
+                        "<long_term_memory>\n"
+                        "(no prior memories or patterns found for this user yet)\n"
+                        "</long_term_memory>\n\n"
                     )
 
-                    new_msg = {
-                        "role": "user",
-                        "content": new_content,
-                    }
-                    if msg_id:
-                        new_msg["id"] = msg_id  # 保持 ID 相同，实现替换
+                # Prepend 长期记忆到第一条用户消息内容中（而不是追加单独消息）
+                new_content = memory_block + original_content
+                new_msg = {
+                    "role": "user",
+                    "content": new_content,
+                }
+                if msg_id:
+                    new_msg["id"] = msg_id  # 保持 ID 相同，实现替换
 
-                    result["messages"] = [new_msg]
+                result["messages"] = [new_msg]
 
-                    # 重新估算 token_count（长期记忆已注入）
-                    initial_token_count = ctx_mgr.estimate_tokens([new_msg])
-                    result["token_count"] = initial_token_count
-                    logging.info(f"[init_context] Re-estimated token count after memory injection: {initial_token_count}")
+                # 重新估算 token_count（长期记忆已注入）
+                initial_token_count = ctx_mgr.estimate_tokens([new_msg])
+                result["token_count"] = initial_token_count
+                logging.info(f"[init_context] Memory injection: {'found' if context_parts else 'none'}, tokens={initial_token_count}")
 
             except Exception:
                 logging.warning("Chroma memory search failed (non-fatal)", exc_info=True)
