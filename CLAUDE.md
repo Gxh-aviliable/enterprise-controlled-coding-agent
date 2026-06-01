@@ -20,15 +20,19 @@ git checkout develop
 # 1. 查看变更
 git status
 
-# 2. 暂存所有修改
+# 2. 分发 code-review 子 agent（强制执行）
+#    使用 Agent 工具，subagent_type="general-purpose"  # 用于 code review（无专用 CR agent），检查所有未提交改动
+#    如有 BLOCKER 问题 → 修复 → 重新 CR → 通过后继续
+
+# 3. 暂存所有修改
 git add -A
 
-# 3. 提交
+# 4. 提交
 git commit -m "type: summary
 
 Co-Authored-By: Claude <noreply@anthropic.com>"
 
-# 4. 推送到远程 develop
+# 5. 推送到远程 develop
 git push origin develop
 ```
 
@@ -40,11 +44,14 @@ git checkout develop
 git pull origin develop
 git checkout -b feature/my-feature-name
 
-# 2. 开发 + 多次提交
+# 2. 开发 + 多次提交（每次提交前先做 CR）
 git add -A && git commit -m "feat: part 1"
 git add -A && git commit -m "feat: part 2"
 
-# 3. 推送 feature 分支
+# 3. 对整个 feature 分支做最终 CR → push 到远程
+#    git fetch origin develop  # 先拉取最新 develop 作为 diff 基准
+#    CR prompt 包含: git diff origin/develop...feature/my-feature-name --stat 的所有文件
+#    CR 通过后:
 git push origin feature/my-feature-name
 
 # 4. 合并回 develop（功能完成后）
@@ -80,6 +87,64 @@ git push origin main --tags
 | `chore:` | 构建/依赖 | `chore: install highlight.js` |
 
 **规则：每次修改后必须 commit + push 到 develop，不要积累大量未提交变更。**
+
+### 代码审查流程（每次代码修改后强制执行）
+
+**任何代码执行修改完成后，必须在 commit 之前分发一个子 agent 做 code review。**
+
+```bash
+# 使用 Agent 工具启动 CR 子 agent：
+#   subagent_type: "general-purpose"  # 无专用 CR agent，使用通用 agent
+#   description: "review latest changes"
+#   prompt: 对当前未提交的改动做 code review，检查以下维度：
+#     1. 代码质量与可维护性（命名规范、注释密度、符合项目风格）
+#     2. 逻辑合理性（是否有死代码、边界条件是否处理、异常处理是否完善）
+#     3. 能否跑通（导入路径是否正确、类型是否匹配、API 签名是否一致）
+#     4. 安全风险（是否有注入风险、敏感信息是否暴露）
+#     5. 性能影响（是否有不必要的循环/IO、大对象拷贝）
+#     发现的问题分为：
+#     - BLOCKER: 必须修，否则代码无法运行或产生严重 bug
+#     - WARNING: 建议修，存在潜在风险或不符合最佳实践
+#     - INFO: 可选修，代码风格或优化建议
+```
+
+**CR 流程规则：**
+1. 代码修改完成后 → 立刻分发 `general-purpose` 子 agent 做 code review
+2. 如果 CR 发现 **BLOCKER 级别**问题 → 必须先修复，修复后重新 CR
+3. 如果 CR 只有 WARNING/INFO → 评估是否需要修，然后 commit
+4. CR 通过后 → 执行 `git add -A && git commit && git push`
+5. 如果修改涉及多个模块（3+ 文件），CR 的 prompt 中要列出所有变更文件路径
+
+**CR 豁免场景（可直接跳过 CR）：**
+- 纯文档修改（仅 `*.md` 文件）— 如 CLAUDE.md、README 更新
+- 单行 typo / 格式修正
+- 配置文件变更（`.env`、`settings.py` 中的常数值修改）
+- 修改文件数超过 5 个时，可合并为单次 CR（而非逐个文件 CR）
+
+**CR 子 agent 的 prompt 模板：**
+```
+（以下为模板，请将 "变更文件" 列表替换为 git status 显示的实际文件）
+
+对当前项目未提交的改动做 code review。
+
+变更文件：
+- path/to/changed_file_1.py (改动说明)
+- path/to/changed_file_2.py (改动说明)
+
+重点检查：
+1. 导入是否正确（所有 import 路径是否指向存在的模块）
+2. 类型是否匹配（async/sync 调用是否正确、参数签名是否一致）
+3. 异常处理是否完善（是否有裸 except、是否有资源泄漏）
+4. 逻辑完整性（新增代码的所有分支是否可达、边界条件是否覆盖）
+5. 与项目现有代码风格是否一致
+
+输出格式要求：在 CR 结果末尾以固定格式汇总：
+## CR 结果汇总
+- BLOCKER: N
+- WARNING: N
+- INFO: N
+- 整体评价: [一句话总结]
+```
 
 ## 启动命令
 
