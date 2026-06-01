@@ -738,7 +738,10 @@ async def save_memory_node(state: AgentState) -> Dict[str, Any]:
     accumulator_state = acc.accumulate_round(state, messages, accumulator_state)
 
     # 2. Check if we're at a task boundary → flush to Chroma
-    should_flush = acc.should_flush(state)
+    should_flush = acc.should_flush({
+        **state,
+        "memory_accumulator": accumulator_state  # Use updated accumulator
+    })
 
     if should_flush and accumulator_state.get("user_request"):
         # 3. Flush: generate summary + evaluate importance + store to Chroma

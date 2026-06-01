@@ -311,10 +311,17 @@ class MemoryAccumulator:
 
                 # Use the original user request + key assistant response
                 key_response = assistant_responses[-1] if assistant_responses else ""
+                # Convert messages to dicts (they may be LangChain objects)
+                context_dicts = []
+                for m in (messages or []):
+                    if hasattr(m, 'type'):
+                        context_dicts.append({'role': m.type, 'content': str(m.content)[:200]})
+                    elif isinstance(m, dict):
+                        context_dicts.append(m)
                 patterns = await extractor.extract_patterns_from_conversation(
                     user_msg=user_request,
                     assistant_msg=key_response,
-                    context=messages[-5:] if messages and len(messages) >= 5 else (messages or []),
+                    context=context_dicts,
                 )
 
                 if patterns:
