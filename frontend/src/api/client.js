@@ -401,6 +401,24 @@ export async function fetchPatterns() {
   return data
 }
 
+export async function deleteMemory(docId) {
+  const res = await request(`/memory/conversations/${encodeURIComponent(docId)}`, { method: 'DELETE' })
+  if (!res.ok) {
+    const data = await res.json().catch(() => ({}))
+    throw new Error(data.detail || 'Failed to delete memory')
+  }
+  return res.json()
+}
+
+export async function deletePattern(patternId) {
+  const res = await request(`/memory/patterns/${encodeURIComponent(patternId)}`, { method: 'DELETE' })
+  if (!res.ok) {
+    const data = await res.json().catch(() => ({}))
+    throw new Error(data.detail || 'Failed to delete pattern')
+  }
+  return res.json()
+}
+
 export async function deleteItem(path) {
   const params = new URLSearchParams({ path })
   const res = await request(`/workspace/delete?${params}`, { method: 'DELETE' })

@@ -156,7 +156,9 @@ class ChromaLongTermMemory(MemoryBase):
         if results and results.get("documents"):
             for i, doc in enumerate(results["documents"][0]):
                 meta = results["metadatas"][0][i] if results.get("metadatas") else {}
+                doc_id = results["ids"][0][i] if results.get("ids") else None
                 messages.append({
+                    "id": doc_id,
                     "content": doc,
                     "metadata": meta,
                     "distance": results["distances"][0][i] if results.get("distances") else None,
@@ -270,7 +272,9 @@ class ChromaLongTermMemory(MemoryBase):
         if results and results.get("documents"):
             for i, doc in enumerate(results["documents"][0]):
                 meta = results["metadatas"][0][i] if results.get("metadatas") else {}
+                pattern_id = results["ids"][0][i] if results.get("ids") else None
                 patterns.append({
+                    "id": pattern_id,
                     "text": doc,
                     "pattern_type": meta.get("pattern_type"),
                     "pattern_key": meta.get("pattern_key"),
@@ -293,8 +297,10 @@ class ChromaLongTermMemory(MemoryBase):
 
         patterns = []
         if results and results.get("metadatas"):
-            for meta in results["metadatas"]:
+            for i, meta in enumerate(results["metadatas"]):
+                pattern_id = results["ids"][i] if results.get("ids") else None
                 patterns.append({
+                    "id": pattern_id,
                     "pattern_type": meta.get("pattern_type"),
                     "pattern_key": meta.get("pattern_key"),
                     "confidence": meta.get("confidence"),
@@ -358,6 +364,88 @@ class ChromaLongTermMemory(MemoryBase):
                 )
         except Exception:
             logging.warning(f"Failed to update access count for {doc_id}", exc_info=True)
+
+    async def delete_conversation(self, doc_id: str) -> bool:
+        """Delete a single conversation memory by document ID.
+
+        Verifies user ownership before deletion.
+
+        Args:
+            doc_id: ChromaDB document ID to delete
+
+        Returns:
+            True if deleted, False if not found or not owned by user
+        """
+        import logging
+        try:
+            # Verify ownership: get the document first
+            result = await asyncio.to_thread(
+                self.conversations.get,
+                ids=[doc_id],
+                include=["metadatas"],
+            )
+            if not result or not result.get("ids"):
+                return False
+
+            meta = result["metadatas"][0] if result.get("metadatas") else {}
+            owner_id = meta.get("user_id")
+            if owner_id is not None and owner_id != self.user_id:
+                logging.warning(
+                    f"User {self.user_id} attempted to delete memory "
+                    f"owned by user {owner_id}: {doc_id}"
+                )
+                return False
+
+            await asyncio.to_thread(
+                self.conversations.delete,
+                ids=[doc_id],
+            )
+            logging.info(f"Deleted conversation memory: {doc_id}")
+            return True
+        except Exception:
+            logging.warning(f"Failed to delete conversation {doc_id}", exc_info=True)
+            return False
+
+    async def delete_pattern(self, pattern_id: str) -> bool:
+        """Delete a single user pattern by document ID.
+
+        Verifies user ownership before deletion.
+
+        Args:
+            pattern_id: ChromaDB document ID to delete
+
+        Returns:
+            True if deleted, False if not found or not owned by user
+        """
+        import logging
+        try:
+            # Verify ownership: get the document first
+            result = await asyncio.to_thread(
+                self.patterns.get,
+                ids=[pattern_id],
+                include=["metadatas"],
+            )
+            if not result or not result.get("ids"):
+                return False
+
+            meta = result["metadatas"][0] if result.get("metadatas") else {}
+            owner_id = meta.get("user_id")
+            if owner_id is not None and owner_id != self.user_id:
+                logging.warning(
+                    f"User {self.user_id} attempted to delete pattern "
+                    f"owned by user {owner_id}: {pattern_id}"
+                )
+                return False
+
+            await asyncio.to_thread(
+                self.patterns.delete,
+                ids=[pattern_id],
+            )
+            logging.info(f"Deleted pattern: {pattern_id}")
+            return True
+        except Exception:
+            logging.warning(f"Failed to delete pattern {pattern_id}", exc_info=True)
+            return False
 
     async def cleanup_low_retention(self, threshold: float = 0.1) -> int:
         """Remove memories with retention score below threshold.

@@ -26,22 +26,46 @@
           <span>Conversations will be summarized and stored here over time</span>
         </div>
         <div v-else class="memory-list">
-          <div v-for="(m, i) in memories" :key="i" class="memory-card">
-            <div class="card-header">
-              <span class="importance-stars">
-                <template v-for="s in 5" :key="s">
-                  <svg width="12" height="12" viewBox="0 0 24 24" :fill="s <= stars(m.importance) ? 'var(--accent)' : 'none'" :stroke="s <= stars(m.importance) ? 'var(--accent)' : 'var(--text-tertiary)'" stroke-width="2"><polygon points="12 2 15.09 8.26 22 9.27 17 14.14 18.18 21.02 12 17.77 5.82 21.02 7 14.14 2 9.27 8.91 8.26 12 2"/></svg>
-                </template>
-              </span>
-              <span class="importance-label">{{ (m.importance * 100).toFixed(0) }}%</span>
-              <span class="card-meta">
-                <template v-if="m.rounds">{{ m.rounds }} rounds · </template>
-                <template v-if="m.has_tool_actions">🔧 · </template>
-                {{ formatDate(m.timestamp) }}
-              </span>
-            </div>
-            <div class="card-content">{{ m.content }}</div>
-            <div v-if="m.session_id" class="card-footer">Session: {{ m.session_id.slice(0, 8) }}</div>
+          <div v-for="(m, i) in memories" :key="m.id || i" class="memory-card" :class="{ deleting: deletingId === m.id }">
+            <!-- Normal view -->
+            <template v-if="confirmingId !== m.id">
+              <div class="card-header">
+                <span class="importance-stars">
+                  <template v-for="s in 5" :key="s">
+                    <svg width="12" height="12" viewBox="0 0 24 24" :fill="s <= stars(m.importance) ? 'var(--accent)' : 'none'" :stroke="s <= stars(m.importance) ? 'var(--accent)' : 'var(--text-tertiary)'" stroke-width="2"><polygon points="12 2 15.09 8.26 22 9.27 17 14.14 18.18 21.02 12 17.77 5.82 21.02 7 14.14 2 9.27 8.91 8.26 12 2"/></svg>
+                  </template>
+                </span>
+                <span class="importance-label">{{ (m.importance * 100).toFixed(0) }}%</span>
+                <span class="card-meta">
+                  <template v-if="m.rounds">{{ m.rounds }} rounds · </template>
+                  <template v-if="m.has_tool_actions">🔧 · </template>
+                  {{ formatDate(m.timestamp) }}
+                </span>
+                <button
+                  class="btn-delete"
+                  title="Delete this memory"
+                  @click.stop="confirmingId = m.id"
+                  :disabled="deletingId !== null"
+                >
+                  <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="3 6 5 6 21 6"/><path d="M19 6v14a2 2 0 01-2 2H7a2 2 0 01-2-2V6m3 0V4a2 2 0 012-2h4a2 2 0 012 2v2"/><line x1="10" y1="11" x2="10" y2="17"/><line x1="14" y1="11" x2="14" y2="17"/></svg>
+                </button>
+              </div>
+              <div class="card-content">{{ m.content }}</div>
+              <div v-if="m.session_id" class="card-footer">Session: {{ m.session_id.slice(0, 8) }}</div>
+            </template>
+            <!-- Confirm delete view -->
+            <template v-else>
+              <div class="confirm-delete">
+                <p class="confirm-text">Delete this memory?</p>
+                <p class="confirm-hint">This action cannot be undone.</p>
+                <div class="confirm-actions">
+                  <button class="btn-cancel" @click="confirmingId = null" :disabled="deletingId !== null">Cancel</button>
+                  <button class="btn-confirm-delete" @click="handleDelete(m.id, i)" :disabled="deletingId !== null">
+                    {{ deletingId === m.id ? 'Deleting...' : 'Delete' }}
+                  </button>
+                </div>
+              </div>
+            </template>
           </div>
         </div>
       </template>
@@ -54,10 +78,29 @@
           <span>The system learns your preferences and workflows over time</span>
         </div>
         <div v-else class="pattern-list">
-          <div v-for="(p, i) in patterns" :key="i" class="pattern-card">
-            <span :class="['pattern-badge', p.pattern_type]">{{ p.pattern_type }}</span>
-            <span class="pattern-key">{{ p.pattern_key }}</span>
-            <span class="pattern-confidence">{{ (p.confidence * 100).toFixed(0) }}% confidence</span>
+          <div v-for="(p, i) in patterns" :key="p.id || i" class="pattern-card" :class="{ deleting: deletingPatternId === p.id }">
+            <!-- Normal view -->
+            <template v-if="confirmingPatternId !== p.id">
+              <span :class="['pattern-badge', p.pattern_type]">{{ p.pattern_type }}</span>
+              <span class="pattern-key">{{ p.pattern_key }}</span>
+              <span class="pattern-confidence">{{ (p.confidence * 100).toFixed(0) }}% confidence</span>
+              <button
+                class="btn-delete-sm"
+                title="Delete this pattern"
+                @click.stop="confirmingPatternId = p.id"
+                :disabled="deletingPatternId !== null"
+              >
+                <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
+              </button>
+            </template>
+            <!-- Confirm delete view -->
+            <template v-else>
+              <span class="confirm-text-sm">Delete this pattern?</span>
+              <button class="btn-cancel-sm" @click="confirmingPatternId = null" :disabled="deletingPatternId !== null">Cancel</button>
+              <button class="btn-confirm-delete-sm" @click="handleDeletePattern(p.id, i)" :disabled="deletingPatternId !== null">
+                {{ deletingPatternId === p.id ? '...' : 'Delete' }}
+              </button>
+            </template>
           </div>
         </div>
       </template>
@@ -74,6 +117,12 @@ const loading = ref(false)
 const error = ref('')
 const memories = ref([])
 const patterns = ref([])
+
+// Delete state
+const confirmingId = ref(null)
+const deletingId = ref(null)
+const confirmingPatternId = ref(null)
+const deletingPatternId = ref(null)
 
 function stars(importance) {
   if (importance >= 0.8) return 5
@@ -105,6 +154,43 @@ async function loadData() {
     error.value = 'Failed to load memories: ' + (e.message || 'Unknown error')
   } finally {
     loading.value = false
+  }
+}
+
+async function handleDelete(docId, index) {
+  if (!docId) {
+    // Fallback: if no id, remove from local state only
+    memories.value.splice(index, 1)
+    confirmingId.value = null
+    return
+  }
+  deletingId.value = docId
+  try {
+    await api.deleteMemory(docId)
+    memories.value.splice(index, 1)
+    confirmingId.value = null
+  } catch (e) {
+    error.value = 'Failed to delete: ' + (e.message || 'Unknown error')
+  } finally {
+    deletingId.value = null
+  }
+}
+
+async function handleDeletePattern(patternId, index) {
+  if (!patternId) {
+    patterns.value.splice(index, 1)
+    confirmingPatternId.value = null
+    return
+  }
+  deletingPatternId.value = patternId
+  try {
+    await api.deletePattern(patternId)
+    patterns.value.splice(index, 1)
+    confirmingPatternId.value = null
+  } catch (e) {
+    error.value = 'Failed to delete: ' + (e.message || 'Unknown error')
+  } finally {
+    deletingPatternId.value = null
   }
 }
 
@@ -225,10 +311,12 @@ onMounted(loadData)
   border: 1px solid var(--border-light);
   border-radius: var(--radius-md);
   padding: 14px 16px;
-  transition: border-color var(--transition);
+  transition: border-color var(--transition), opacity 0.2s;
+  position: relative;
 }
 
 .memory-card:hover { border-color: var(--border); }
+.memory-card.deleting { opacity: 0.5; pointer-events: none; }
 
 .card-header {
   display: flex;
@@ -241,10 +329,94 @@ onMounted(loadData)
 .importance-label { font-size: var(--text-xs); font-weight: 600; color: var(--accent); }
 
 .card-meta {
-  margin-left: auto;
+  flex: 1;
   font-size: var(--text-xs);
   color: var(--text-tertiary);
 }
+
+/* Delete button — hidden until hover */
+.btn-delete {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 28px;
+  height: 28px;
+  background: transparent;
+  border: 1px solid transparent;
+  border-radius: var(--radius-sm);
+  color: var(--text-tertiary);
+  cursor: pointer;
+  opacity: 0;
+  transition: all var(--transition);
+  flex-shrink: 0;
+}
+
+.memory-card:hover .btn-delete {
+  opacity: 1;
+}
+
+.btn-delete:hover {
+  color: #ef4444;
+  background: #fef2f2;
+  border-color: #fecaca;
+}
+
+.btn-delete:disabled { opacity: 0.3; pointer-events: none; }
+
+/* Confirm delete */
+.confirm-delete {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 0;
+}
+
+.confirm-text {
+  font-size: var(--text-base);
+  font-weight: 600;
+  color: var(--text-primary);
+  margin: 0;
+}
+
+.confirm-hint {
+  font-size: var(--text-xs);
+  color: var(--text-tertiary);
+  margin: 0;
+}
+
+.confirm-actions {
+  display: flex;
+  gap: 8px;
+  margin-top: 4px;
+}
+
+.btn-cancel, .btn-confirm-delete {
+  padding: 6px 16px;
+  border-radius: var(--radius-sm);
+  font-size: var(--text-sm);
+  font-weight: 500;
+  font-family: var(--font-ui);
+  cursor: pointer;
+  transition: all var(--transition);
+  border: 1px solid var(--border);
+}
+
+.btn-cancel {
+  background: var(--bg-primary);
+  color: var(--text-secondary);
+}
+
+.btn-cancel:hover { background: var(--bg-hover); }
+
+.btn-confirm-delete {
+  background: #ef4444;
+  color: #fff;
+  border-color: #ef4444;
+}
+
+.btn-confirm-delete:hover { background: #dc2626; }
+.btn-confirm-delete:disabled { opacity: 0.5; pointer-events: none; }
 
 .card-content {
   font-size: var(--text-sm);
@@ -276,7 +448,10 @@ onMounted(loadData)
   background: var(--bg-secondary);
   border: 1px solid var(--border-light);
   border-radius: var(--radius-sm);
+  position: relative;
 }
+
+.pattern-card.deleting { opacity: 0.5; pointer-events: none; }
 
 .pattern-badge {
   font-size: var(--text-xs);
@@ -301,4 +476,59 @@ onMounted(loadData)
   font-size: var(--text-xs);
   color: var(--text-tertiary);
 }
+
+/* Pattern delete button */
+.btn-delete-sm {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 24px;
+  height: 24px;
+  background: transparent;
+  border: none;
+  border-radius: 4px;
+  color: var(--text-tertiary);
+  cursor: pointer;
+  opacity: 0;
+  transition: all var(--transition);
+  flex-shrink: 0;
+}
+
+.pattern-card:hover .btn-delete-sm { opacity: 1; }
+.btn-delete-sm:hover { color: #ef4444; background: #fef2f2; }
+.btn-delete-sm:disabled { opacity: 0.3; pointer-events: none; }
+
+/* Pattern confirm delete (inline) */
+.confirm-text-sm {
+  font-size: var(--text-sm);
+  font-weight: 500;
+  color: #ef4444;
+}
+
+.btn-cancel-sm, .btn-confirm-delete-sm {
+  padding: 3px 10px;
+  border-radius: 4px;
+  font-size: var(--text-xs);
+  font-weight: 500;
+  font-family: var(--font-ui);
+  cursor: pointer;
+  border: 1px solid var(--border);
+  transition: all var(--transition);
+}
+
+.btn-cancel-sm {
+  background: var(--bg-primary);
+  color: var(--text-secondary);
+}
+
+.btn-cancel-sm:hover { background: var(--bg-hover); }
+
+.btn-confirm-delete-sm {
+  background: #ef4444;
+  color: #fff;
+  border-color: #ef4444;
+}
+
+.btn-confirm-delete-sm:hover { background: #dc2626; }
+.btn-confirm-delete-sm:disabled { opacity: 0.5; pointer-events: none; }
 </style>
