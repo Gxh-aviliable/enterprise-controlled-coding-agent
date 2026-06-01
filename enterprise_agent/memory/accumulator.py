@@ -51,11 +51,21 @@ def _extract_text_from_content(content: Any) -> str:
     if isinstance(content, list):
         parts = []
         for block in content:
-            if isinstance(block, dict) and block.get("type") == "text":
-                parts.append(block.get("text", ""))
+            if isinstance(block, dict):
+                # Content blocks from DeepSeek/Anthropic
+                if block.get("type") == "text":
+                    parts.append(block.get("text", ""))
+                # Skip thinking blocks — they're internal reasoning
+                elif block.get("type") == "thinking":
+                    continue
+                else:
+                    parts.append(str(block))
+            elif isinstance(block, str):
+                # Plain strings in content lists (DeepSeek returns these)
+                parts.append(block)
             elif hasattr(block, "text"):
                 parts.append(block.text)
-        return "\n".join(parts) if parts else str(content)
+        return "\n".join(parts) if parts else ""
     return str(content)
 
 
