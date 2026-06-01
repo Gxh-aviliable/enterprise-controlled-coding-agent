@@ -48,10 +48,21 @@
       <div
         v-for="(msg, i) in messages"
         :key="i"
-        :class="['message-wrapper', msg.role]"
       >
-        <div class="message-avatar">
-          <template v-if="msg.role === 'user'">
+        <ToolCallCard
+          v-if="msg.role === 'tool_call'"
+          :name="msg.toolName"
+          :status="msg.toolStatus"
+          :result="msg.toolResult"
+          :error="msg.toolError"
+          :duration="msg.toolDuration"
+        />
+        <div
+          v-else
+          :class="['message-wrapper', msg.role]"
+        >
+          <div class="message-avatar">
+            <template v-if="msg.role === 'user'">
             <div class="avatar user-avatar">
               <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M20 21v-2a4 4 0 00-4-4H8a4 4 0 00-4 4v2"/><circle cx="12" cy="7" r="4"/></svg>
             </div>
@@ -73,6 +84,7 @@
             <pre v-else class="message-text">{{ msg.content }}</pre>
           </div>
         </div>
+      </div>
       </div>
 
       <div v-if="streaming && messages.length === 0" class="message-wrapper assistant">
@@ -153,9 +165,12 @@
 <script setup>
 import { ref, watch, nextTick } from 'vue'
 import * as api from '../api/client.js'
+import ToolCallCard from './ToolCallCard.vue'
 
 import { marked } from 'marked'
 import DOMPurify from 'dompurify'
+import hljs from 'highlight.js'
+import 'highlight.js/styles/github.css'
 
 // Configure marked for safe rendering
 marked.setOptions({
@@ -172,6 +187,19 @@ function renderMarkdown(text) {
       'table', 'thead', 'tbody', 'tr', 'th', 'td', 'hr', 'img', 'span'],
     ALLOWED_ATTR: ['href', 'src', 'alt', 'title', 'class', 'target', 'rel']
   })
+}
+
+let _highlightTimer = null
+function scheduleHighlight() {
+  // Debounce: highlight after DOM settles (good for streaming)
+  clearTimeout(_highlightTimer)
+  _highlightTimer = setTimeout(() => {
+    nextTick(() => {
+      document.querySelectorAll('.markdown-body pre code').forEach(el => {
+        hljs.highlightElement(el)
+      })
+    })
+  }, 120)
 }
 
 const props = defineProps({
@@ -268,18 +296,45 @@ function startStream(sessionId, content, isNewSession, signal) {
     onDelta: (delta) => {
       if (streamMsgRef.value) {
         streamMsgRef.value.content += delta
+        scheduleHighlight()
         scrollBottom()
       }
     },
     onToolStart: (name) => {
       currentTool.value = name
-      if (streamMsgRef.value) {
-        streamMsgRef.value.content += `\n\n🔧 *Running \`${name}\`...*`
-        scrollBottom()
+      // Push structured tool call card
+      const toolMsg = {
+        role: 'tool_call',
+        toolName: name,
+        toolStatus: 'running',
+        toolResult: '',
+        toolError: '',
+        toolDuration: null,
+        _startTime: Date.now()
       }
+      messages.value.push(toolMsg)
+      scrollBottom()
     },
     onToolEnd: (name) => {
       currentTool.value = ''
+      // Update the last running tool card for this tool name
+      const toolMsg = messages.value.findLast(
+        m => m.role === 'tool_call' && m.toolName === name && m.toolStatus === 'running'
+      )
+      if (toolMsg) {
+        toolMsg.toolStatus = 'done'
+        toolMsg.toolDuration = Date.now() - toolMsg._startTime
+      }
+    },
+    onToolResult: (id, result) => {
+      // Update the running tool card with result data
+      const toolMsg = messages.value.findLast(
+        m => m.role === 'tool_call' && m.toolStatus === 'running'
+      )
+      if (toolMsg && result) {
+        const parsed = typeof result === 'string' ? result : JSON.stringify(result, null, 2)
+        toolMsg.toolResult = parsed
+      }
     },
     onInterrupt: (data) => {
       const tools = (data.tools || []).map(t => ({ ...t, approved: true }))
@@ -365,17 +420,35 @@ function resumeAfterConfirm(approvedIds) {
     onDelta: (delta) => {
       if (streamMsgRef.value) {
         streamMsgRef.value.content += delta
+        scheduleHighlight()
         scrollBottom()
       }
     },
     onToolStart: (name) => {
       currentTool.value = name
-      if (streamMsgRef.value) {
-        streamMsgRef.value.content += `\n\n🔧 *Running \`${name}\`...*`
-        scrollBottom()
+      const toolMsg = {
+        role: 'tool_call', toolName: name, toolStatus: 'running',
+        toolResult: '', toolError: '', toolDuration: null, _startTime: Date.now()
+      }
+      messages.value.push(toolMsg)
+      scrollBottom()
+    },
+    onToolEnd: (name) => {
+      currentTool.value = ''
+      const toolMsg = messages.value.findLast(
+        m => m.role === 'tool_call' && m.toolName === name && m.toolStatus === 'running'
+      )
+      if (toolMsg) {
+        toolMsg.toolStatus = 'done'
+        toolMsg.toolDuration = Date.now() - toolMsg._startTime
       }
     },
-    onToolEnd: (name) => { currentTool.value = '' },
+    onToolResult: (id, result) => {
+      const toolMsg = messages.value.findLast(m => m.role === 'tool_call' && m.toolStatus === 'running')
+      if (toolMsg && result) {
+        toolMsg.toolResult = typeof result === 'string' ? result : JSON.stringify(result, null, 2)
+      }
+    },
     onInterrupt: (data) => {
       const tools = (data.tools || []).map(t => ({ ...t, approved: true }))
       pendingConfirm.value = {
@@ -432,6 +505,7 @@ watch(() => props.sessionId, async (newId) => {
           content: m.content,
           streaming: false
         }))
+        scheduleHighlight()
         scrollBottom()
       } catch (e) {
         console.error('Failed to load session messages:', e)

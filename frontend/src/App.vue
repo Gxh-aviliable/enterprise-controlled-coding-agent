@@ -157,4 +157,39 @@ body {
   background: var(--bg-primary);
 }
 
+/* Dark theme */
+[data-theme="dark"] {
+  --bg-primary: #1a1b1e;
+  --bg-secondary: #25262b;
+  --bg-tertiary: #2c2e33;
+  --bg-hover: #2c2e33;
+  --bg-active: #3b3d54;
+  --text-primary: #e4e5e7;
+  --text-secondary: #909296;
+  --text-tertiary: #6b6d75;
+  --text-inverse: #1a1b1e;
+  --accent: #8b8cf8;
+  --accent-hover: #a0a1fa;
+  --accent-light: #2a2b4a;
+  --accent-soft: #3b3d54;
+  --border: #373a40;
+  --border-light: #2c2e33;
+  --shadow-sm: 0 1px 2px rgba(0, 0, 0, 0.2);
+  --shadow-md: 0 4px 12px rgba(0, 0, 0, 0.3);
+  --shadow-lg: 0 12px 40px rgba(0, 0, 0, 0.4);
+}
+
+/* Dark mode code blocks */
+[data-theme="dark"] .markdown-body :deep(code) {
+  background: rgba(255, 255, 255, 0.08);
+}
+
+[data-theme="dark"] .markdown-body :deep(pre) {
+  background: rgba(255, 255, 255, 0.04);
+}
+
+[data-theme="dark"] .message-wrapper.user .markdown-body :deep(code) {
+  background: rgba(255, 255, 255, 0.12);
+}
+
 </style>

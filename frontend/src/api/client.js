@@ -102,7 +102,7 @@ export async function sendMessage({ session_id, content }) {
   return data
 }
 
-export function streamMessage({ session_id, content, signal, onDelta, onToolStart, onToolEnd, onInterrupt, onError, onDone }) {
+export function streamMessage({ session_id, content, signal, onDelta, onToolStart, onToolEnd, onToolResult, onInterrupt, onError, onDone }) {
   const token = getToken()
   console.log('[stream] Starting stream, session:', session_id, 'content:', content.slice(0, 50))
 
@@ -163,7 +163,7 @@ export function streamMessage({ session_id, content, signal, onDelta, onToolStar
               console.log('[stream] Tool end:', json.name)
               onToolEnd(json.name)
             } else if (json.event === 'tool_result') {
-              console.log('[stream] Tool result:', json.id)
+              onToolResult?.(json.id, json.result)
             } else if (json.event === 'interrupt') {
               // Interrupt received - tool confirmation required
               console.log('[stream] Interrupt received:', json.data)
@@ -192,7 +192,7 @@ export function streamMessage({ session_id, content, signal, onDelta, onToolStar
 }
 
 // Resume stream after interrupt confirmation
-export function resumeStream({ session_id, approved, approved_ids, signal, onDelta, onToolStart, onToolEnd, onInterrupt, onError, onDone }) {
+export function resumeStream({ session_id, approved, approved_ids, signal, onDelta, onToolStart, onToolEnd, onToolResult, onInterrupt, onError, onDone }) {
   const token = getToken()
   console.log('[resume] Resuming stream, session:', session_id, 'approved:', approved)
 

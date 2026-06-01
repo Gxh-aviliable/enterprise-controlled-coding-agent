@@ -7,6 +7,7 @@
         <circle cx="16" cy="16" r="3" fill="white"/>
       </svg>
       <span class="brand-text">Mini Claude Code</span>
+      <ThemeToggle />
     </div>
 
     <div class="sidebar-tabs">
@@ -85,6 +86,7 @@
 <script setup>
 import { ref, watch, nextTick } from 'vue'
 import FileTree from './FileTree.vue'
+import ThemeToggle from './ThemeToggle.vue'
 
 defineProps({
   sessions: { type: Array, default: () => [] },
