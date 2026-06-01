@@ -740,6 +740,27 @@ async def tool_executor_node(state: AgentState) -> Dict[str, Any]:
     return result_dict
 
 
+async def _background_flush(acc, accumulator_state, session_id, user_id, messages):
+    """Background task: flush accumulated content to Chroma.
+
+    Runs as a fire-and-forget asyncio task, detached from the LangGraph
+    streaming context. This prevents internal LLM evaluation tokens
+    (task summaries, importance JSON) from leaking through
+    stream_mode=["messages"] to the user-facing SSE stream.
+
+    All parameters are copies owned exclusively by this task — the
+    graph node continues immediately and may mutate its originals.
+    """
+    try:
+        flush_result = await acc.flush(accumulator_state, session_id, user_id, messages)
+        logging.info(
+            f"[save_memory] Background flush complete: stored={flush_result['stored']}, "
+            f"importance={flush_result['importance']:.2f}"
+        )
+    except Exception as e:
+        logging.warning(f"[save_memory] Background flush failed (non-fatal): {e}", exc_info=True)
+
+
 async def save_memory_node(state: AgentState) -> Dict[str, Any]:
     """Save memory node - handles TodoWrite nag reminder logic + memory accumulator.
 
@@ -804,16 +825,21 @@ async def save_memory_node(state: AgentState) -> Dict[str, Any]:
     })
 
     if should_flush and accumulator_state.get("user_request"):
-        # 3. Flush: generate summary + evaluate importance + store to Chroma
-        try:
-            flush_result = await acc.flush(accumulator_state, session_id, user_id, messages)
-            accumulator_state = flush_result["accumulator_reset"]
-            logging.info(
-                f"[save_memory] Flush complete: stored={flush_result['stored']}, "
-                f"importance={flush_result['importance']:.2f}"
-            )
-        except Exception as e:
-            logging.warning(f"[save_memory] Accumulator flush failed (non-fatal): {e}", exc_info=True)
+        # 3. Flush: generate summary + evaluate importance + store to Chroma.
+        # CRITICAL: Fire-and-forget as background task — detach from the
+        # LangGraph streaming context so internal LLM tokens (task summary
+        # headers like [User Request]: and importance JSON like
+        # {"importance": 0.X, "reason": "..."}) never leak through
+        # stream_mode=["messages"] to the frontend.
+        import copy
+        flush_acc_state = copy.deepcopy(accumulator_state)
+        # Shallow-copy messages (background task only reads last few)
+        flush_messages = list(messages) if messages else []
+        asyncio.create_task(
+            _background_flush(acc, flush_acc_state, session_id, user_id, flush_messages)
+        )
+        # Reset accumulator immediately — background task owns the copy
+        accumulator_state = acc._new_accumulator()
 
     return {
         "rounds_without_todo": rounds_without_todo,
