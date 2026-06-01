@@ -9,6 +9,8 @@
     "preview": "vite preview"
   },
   "dependencies": {
+    "dompurify": "^3.4.7",
+    "marked": "^18.0.4",
     "vue": "^3.4.0"
   },
   "devDependencies": {

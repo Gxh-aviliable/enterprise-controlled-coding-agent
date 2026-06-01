@@ -48,6 +48,9 @@ MAIN_SYSTEM_PROMPT = """You are an enterprise-grade AI assistant with access to 
 ## Environment
 {environment_info}
 
+## Available Skills
+{available_skills}
+
 ## When NOT to Use Tools
 - Simple greetings ("你好", "hi", "hello") → respond directly, NO tools
 - Simple questions you can answer directly → respond directly, NO tools
@@ -57,10 +60,10 @@ MAIN_SYSTEM_PROMPT = """You are an enterprise-grade AI assistant with access to 
 Before acting, check these questions. If YES, use the indicated tool:
 
 1. Simple chat? → respond directly (skip tools)
-2. Independent sub-tasks? → `spawn_teammate()` (parallel agents)
-3. Search large codebase? → `task(agent_type="Explore")`
-4. Long-running command? → `background_run()` then `check_background()`
-5. Domain knowledge needed? → `list_skills()` then `load_skill(name)`
+2. Domain knowledge needed? → check Available Skills above first; use `load_skill(name)` if relevant
+3. Independent sub-tasks? → `spawn_teammate()` (parallel agents)
+4. Search large codebase? → `task(agent_type="Explore")`
+5. Long-running command? → `background_run()` then `check_background()`
 6. Complex implementation? → `task(agent_type="general-purpose")`
 7. Context too long? → use `compress`
 
@@ -85,6 +88,21 @@ def _build_environment_info() -> str:
         f"- Python: {platform.python_version()}\n"
         f"- Encoding: utf-8 (PYTHONIOENCODING=utf-8 is auto-set for all commands)"
     )
+
+def _build_available_skills(state: Dict) -> str:
+    """Build available skills block for system prompt.
+
+    Injects the list of global + user skills so the LLM knows
+    what knowledge modules are available without a tool call.
+    """
+    try:
+        from enterprise_agent.core.agent.tools.skills import get_skill_loader
+        user_id = state.get("user_id")
+        loader = get_skill_loader(user_id)
+        return loader.descriptions()
+    except Exception as e:
+        return f"(skills unavailable: {e})"
+
 
 def _extract_text(content: Any) -> str:
     """Extract plain text from LLM response content, which may be str or content blocks."""
@@ -430,10 +448,10 @@ async def llm_call_node(state: AgentState) -> Dict[str, Any]:
     lc_messages = _convert_to_langchain_messages(messages)
 
     # Insert system prompt as the sole SystemMessage at the beginning.
-    # Inject live environment info (OS, shell, workspace, encoding) so the
-    # agent doesn't waste rounds discovering the environment.
+    # Inject live environment info, available skills
     lc_messages.insert(0, SystemMessage(content=MAIN_SYSTEM_PROMPT.format(
-        environment_info=_build_environment_info()
+        environment_info=_build_environment_info(),
+        available_skills=_build_available_skills(state)
     )))
 
     # Log: entering LLM call
@@ -447,16 +465,22 @@ async def llm_call_node(state: AgentState) -> Dict[str, Any]:
             response = await get_llm_with_tools().ainvoke(lc_messages)
             break
         except Exception as e:
-            if attempt < MAX_LLM_RETRIES - 1:
-                delay = RETRY_BASE_DELAY * (2 ** attempt)
-                logging.warning(
-                    f"LLM call failed (attempt {attempt+1}/{MAX_LLM_RETRIES}): {e}. "
-                    f"Retrying in {delay}s..."
-                )
-                await asyncio.sleep(delay)
-            else:
-                logging.exception(f"LLM call failed after {MAX_LLM_RETRIES} attempts")
+            # Don't retry on permanent errors (auth, bad request, not found)
+            error_msg = str(e).lower()
+            non_retryable = any(code in error_msg for code in (
+                '401', '403', '400', '404', 'invalid', 'unauthorized',
+                'authentication', 'permission', 'not found'
+            ))
+            if non_retryable or attempt >= MAX_LLM_RETRIES - 1:
+                logging.exception(f"LLM call failed (attempt {attempt+1}/{MAX_LLM_RETRIES}): {e}")
                 raise
+
+            delay = RETRY_BASE_DELAY * (2 ** attempt)
+            logging.warning(
+                f"LLM call failed (attempt {attempt+1}/{MAX_LLM_RETRIES}): {e}. "
+                f"Retrying in {delay}s..."
+            )
+            await asyncio.sleep(delay)
 
     # Extract tool calls if present
     tool_calls = []

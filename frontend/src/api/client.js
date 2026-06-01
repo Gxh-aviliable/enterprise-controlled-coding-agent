@@ -18,17 +18,17 @@ export function clearTokens() {
   localStorage.removeItem('refresh_token')
 }
 
-async function request(path, options = {}) {
-  const headers = { 'Content-Type': 'application/json', ...options.headers }
-  const token = getToken()
-  if (token) headers['Authorization'] = `Bearer ${token}`
+// Refresh lock — prevents concurrent 401s from triggering multiple refresh calls
+let _refreshPromise = null
 
-  let res = await fetch(`${BASE}${path}`, { ...options, headers })
+async function _tryRefreshToken() {
+  if (_refreshPromise) return _refreshPromise
 
-  // Auto-refresh on 401
-  if (res.status === 401) {
-    const refresh = getRefreshToken()
-    if (refresh) {
+  const refresh = getRefreshToken()
+  if (!refresh) return null
+
+  _refreshPromise = (async () => {
+    try {
       const refreshRes = await fetch(`${BASE}/auth/refresh`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
@@ -37,9 +37,32 @@ async function request(path, options = {}) {
       if (refreshRes.ok) {
         const data = await refreshRes.json()
         setTokens(data.access_token, data.refresh_token)
-        headers['Authorization'] = `Bearer ${data.access_token}`
-        res = await fetch(`${BASE}${path}`, { ...options, headers })
+        return data.access_token
       }
+      // Refresh failed — clear tokens so caller can redirect to login
+      clearTokens()
+      return null
+    } finally {
+      _refreshPromise = null
+    }
+  })()
+
+  return _refreshPromise
+}
+
+async function request(path, options = {}) {
+  const headers = { 'Content-Type': 'application/json', ...options.headers }
+  const token = getToken()
+  if (token) headers['Authorization'] = `Bearer ${token}`
+
+  let res = await fetch(`${BASE}${path}`, { ...options, headers })
+
+  // Auto-refresh on 401 — uses shared lock to prevent token refresh storms
+  if (res.status === 401) {
+    const newToken = await _tryRefreshToken()
+    if (newToken) {
+      headers['Authorization'] = `Bearer ${newToken}`
+      res = await fetch(`${BASE}${path}`, { ...options, headers })
     }
   }
   return res
@@ -79,12 +102,13 @@ export async function sendMessage({ session_id, content }) {
   return data
 }
 
-export function streamMessage({ session_id, content, onDelta, onToolStart, onToolEnd, onInterrupt, onError, onDone }) {
+export function streamMessage({ session_id, content, signal, onDelta, onToolStart, onToolEnd, onInterrupt, onError, onDone }) {
   const token = getToken()
   console.log('[stream] Starting stream, session:', session_id, 'content:', content.slice(0, 50))
 
   fetch(`${BASE}/chat/stream`, {
     method: 'POST',
+    signal,
     headers: {
       'Content-Type': 'application/json',
       'Authorization': `Bearer ${token}`
@@ -168,7 +192,7 @@ export function streamMessage({ session_id, content, onDelta, onToolStart, onToo
 }
 
 // Resume stream after interrupt confirmation
-export function resumeStream({ session_id, approved, approved_ids, onDelta, onToolStart, onToolEnd, onInterrupt, onError, onDone }) {
+export function resumeStream({ session_id, approved, approved_ids, signal, onDelta, onToolStart, onToolEnd, onInterrupt, onError, onDone }) {
   const token = getToken()
   console.log('[resume] Resuming stream, session:', session_id, 'approved:', approved)
 
@@ -177,6 +201,7 @@ export function resumeStream({ session_id, approved, approved_ids, onDelta, onTo
 
   fetch(url, {
     method: 'POST',
+    signal,
     headers: {
       'Content-Type': 'application/json',
       'Authorization': `Bearer ${token}`
@@ -269,6 +294,13 @@ export async function deleteSession(sessionId) {
   const res = await request(`/sessions/${sessionId}`, { method: 'DELETE' })
   const data = await res.json()
   if (!res.ok) throw new Error(data.detail || 'Failed to delete session')
+  return data
+}
+
+export async function getSessionMessages(sessionId) {
+  const res = await request(`/sessions/${sessionId}/messages`)
+  const data = await res.json()
+  if (!res.ok) throw new Error(data.detail || 'Failed to load messages')
   return data
 }
 

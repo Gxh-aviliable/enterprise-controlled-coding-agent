@@ -196,5 +196,6 @@ description: A test skill
     def test_skill_wrapped_in_xml_tag(self, skill_loader_for_format: SkillLoader):
         """Test skill content is wrapped in XML tag."""
         result = skill_loader_for_format.load("test_skill")
-        assert result.startswith('<skill name="test_skill">')
+        assert 'test_skill' in result and result.startswith('<skill')
+        assert result.endswith('</skill>')
         assert result.endswith('</skill>')

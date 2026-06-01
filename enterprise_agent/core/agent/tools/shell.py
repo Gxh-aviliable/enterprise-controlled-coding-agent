@@ -11,29 +11,62 @@ from enterprise_agent.config.settings import settings
 from enterprise_agent.core.agent.tools.workspace import get_user_workspace
 
 BLOCKED_PATTERNS = [
-    "rm -rf /", "rm -rf /*", "sudo ", "shutdown", "reboot", "mkfs",
-    "dd if=", ":(){ :|:& };:", "chmod -R 777 /",
-    "| sh", "| bash",
+    # Destructive file operations (any path)
+    "rm -rf", "rm -r", "del /f", "del /s", "rmdir /s",
+    # Recursive permission changes on root
+    "chmod -R 777 /", "chmod -R 777 /*",
+    # Privilege escalation
+    "sudo ", "su -", "su root",
+    # System control
+    "shutdown", "reboot", "halt", "poweroff",
+    # Filesystem destruction
+    "mkfs", "dd if=", "format c:",
+    # Fork bombs
+    ":(){ :|:& };:",
+    # Pipe to shell (block all variants including absolute paths)
+    "| sh", "| bash", "| /bin/sh", "| /bin/bash",
+    "| zsh", "| /bin/zsh", "| /usr/bin/sh", "| /usr/bin/bash",
+    # Redirect output to critical paths
+    "> /etc/", ">> /etc/",
+    # Download-and-execute patterns
+    "curl", "| sh", "wget", "| bash",
 ]
 
-BLOCKED_BINARIES = {"rm", "sudo", "shutdown", "reboot", "mkfs", "dd"}
+BLOCKED_BINARIES = {
+    "rm", "sudo", "su", "shutdown", "reboot", "halt", "poweroff",
+    "mkfs", "dd", "format", "fdisk",
+    "chmod", "chown", "chgrp",
+}
 
 
 def validate_command(command: str) -> Optional[str]:
     """Return error message if command is dangerous, None if OK."""
     cmd_lower = command.lower().strip()
+
+    # Check blocked patterns (substring match)
     for pattern in BLOCKED_PATTERNS:
-        if pattern in cmd_lower:
+        if pattern.lower() in cmd_lower:
             return f"Blocked: command contains '{pattern}'"
-    # Block path variants of dangerous binaries
+
+    # Check for rm/mv/cp targeting root filesystem
+    import re
+    destructive_on_root = re.search(
+        r'(?:rm|mv|cp|move|del|erase)\s+.*?(?:/etc|/boot|/sys|/proc|C:\\\\Windows|/bin|/sbin|/usr|/var|/home|/root)',
+        cmd_lower
+    )
+    if destructive_on_root and not re.search(r'(?:workspace|/tmp)', cmd_lower):
+        return f"Blocked: potentially destructive operation outside workspace"
+
+    # Block base binary name
     try:
         parts = shlex.split(command)
         if parts:
-            cmd_name = Path(parts[0]).name
+            cmd_name = Path(parts[0]).name.lower()
             if cmd_name in BLOCKED_BINARIES:
                 return f"Blocked: '{cmd_name}' is not allowed"
     except ValueError:
         pass
+
     return None
 
 

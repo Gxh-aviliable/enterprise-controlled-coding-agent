@@ -2,6 +2,8 @@ import logging
 import os
 from contextlib import asynccontextmanager
 
+from sqlalchemy import text
+
 logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(name)s: %(message)s")
 
 from fastapi import FastAPI, Request
@@ -55,6 +57,19 @@ async def lifespan(app: FastAPI):
     # Shutdown
     logger.info("Shutting down...")
     cleanup_task.cancel()  # Stop memory cleanup task
+
+    # Close Redis checkpointer connection pool
+    try:
+        from enterprise_agent.core.agent.graph import _checkpointer_client, _checkpointer_pool
+        if _checkpointer_client:
+            await _checkpointer_client.aclose()
+            logger.info("Redis checkpointer client closed")
+        if _checkpointer_pool:
+            await _checkpointer_pool.disconnect()
+            logger.info("Redis checkpointer pool closed")
+    except Exception as e:
+        logger.warning("Error closing checkpointer: %s", e)
+
     await close_db()
     await close_redis()
 
@@ -67,11 +82,13 @@ app = FastAPI(
 )
 
 # CORS middleware
+# NOTE: allow_credentials=True cannot be combined with allow_origins=["*"]
 origins_str = settings.CORS_ORIGINS
 if origins_str:
     origins = [o.strip() for o in origins_str.split(",") if o.strip()]
 else:
-    origins = ["*"]
+    # Default to local dev origins when not configured
+    origins = ["http://localhost:3000", "http://127.0.0.1:3000"]
 app.add_middleware(
     CORSMiddleware,
     allow_origins=origins,
@@ -96,11 +113,37 @@ async def global_exception_handler(request: Request, exc: Exception):
 
 @app.get("/health")
 async def health_check():
-    """Health check endpoint"""
+    """Health check endpoint — verifies all dependencies"""
+    import asyncio
+    from enterprise_agent.db.mysql import async_session_factory
+    from enterprise_agent.db.redis import get_redis
+
+    status = "healthy"
+    checks = {}
+
+    # Check MySQL
+    try:
+        async with async_session_factory() as session:
+            await session.execute(text("SELECT 1"))
+        checks["mysql"] = "ok"
+    except Exception as e:
+        checks["mysql"] = f"error: {e}"
+        status = "degraded"
+
+    # Check Redis
+    try:
+        redis = get_redis()
+        await redis.ping()
+        checks["redis"] = "ok"
+    except Exception as e:
+        checks["redis"] = f"error: {e}"
+        status = "degraded"
+
     return {
-        "status": "healthy",
+        "status": status,
         "version": settings.APP_VERSION,
-        "name": settings.APP_NAME
+        "name": settings.APP_NAME,
+        "checks": checks
     }
 
 

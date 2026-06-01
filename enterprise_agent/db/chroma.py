@@ -19,8 +19,9 @@ from chromadb.config import Settings as ChromaSettings
 
 from enterprise_agent.config.settings import settings
 
-# Global Chroma client
+# Global Chroma client and embedding function (cached singletons)
 _chroma_client: Optional[chromadb.Client] = None
+_embedding_function = None
 
 
 def get_chroma_client() -> chromadb.Client:
@@ -38,7 +39,7 @@ def get_chroma_client() -> chromadb.Client:
             path=str(persist_dir),
             settings=ChromaSettings(
                 anonymized_telemetry=False,
-                allow_reset=True,
+                allow_reset=settings.DEBUG,  # Only allow reset in dev mode
             )
         )
 
@@ -46,16 +47,18 @@ def get_chroma_client() -> chromadb.Client:
 
 
 def get_embedding_function():
-    """Get embedding function for Chroma.
+    """Get embedding function for Chroma (cached singleton).
 
     Uses sentence-transformers local model (all-MiniLM-L6-v2).
     No API key required.
     """
-    from chromadb.utils import embedding_functions
-
-    return embedding_functions.SentenceTransformerEmbeddingFunction(
-        model_name=settings.EMBEDDING_MODEL
-    )
+    global _embedding_function
+    if _embedding_function is None:
+        from chromadb.utils import embedding_functions
+        _embedding_function = embedding_functions.SentenceTransformerEmbeddingFunction(
+            model_name=settings.EMBEDDING_MODEL
+        )
+    return _embedding_function
 
 
 def get_conversations_collection() -> chromadb.Collection:

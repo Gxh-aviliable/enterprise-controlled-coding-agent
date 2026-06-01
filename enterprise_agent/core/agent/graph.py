@@ -148,7 +148,7 @@ def build_agent_graph():
     # TTL ensures checkpoints are automatically cleaned up after expiry
     checkpointer = AsyncRedisSaver(
         redis_client=_checkpointer_client,
-        ttl=settings.CHECKPOINT_TTL_HOURS * 3600  # Convert hours to seconds
+        ttl={"default_ttl": settings.CHECKPOINT_TTL_HOURS * 60}
     )
     return graph.compile(checkpointer=checkpointer)
 
@@ -215,7 +215,7 @@ def build_simple_agent_graph():
 
     checkpointer = AsyncRedisSaver(
         redis_client=_checkpointer_client,
-        ttl=settings.CHECKPOINT_TTL_HOURS * 3600
+        ttl={"default_ttl": settings.CHECKPOINT_TTL_HOURS * 60}
     )
     return graph.compile(checkpointer=checkpointer)
 

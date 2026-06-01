@@ -2,7 +2,10 @@
   <div class="file-manager">
     <!-- Path Bar -->
     <div class="path-bar">
-      <button class="btn-path" @click="navigateTo('')">~</button>
+      <button class="btn-path" @click="navigateTo('')">
+        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 9l9-7 9 7v11a2 2 0 01-2 2H5a2 2 0 01-2-2z"/></svg>
+        ~
+      </button>
       <template v-for="(seg, i) in pathSegments" :key="i">
         <span class="path-sep">/</span>
         <button class="btn-path" @click="navigateTo(pathSegments.slice(0, i + 1).join('/'))">
@@ -10,7 +13,9 @@
         </button>
       </template>
       <span class="path-spacer"></span>
-      <button class="btn-action" @click="$emit('refresh')" title="Refresh">&#x21bb;</button>
+      <button class="btn-icon" @click="$emit('refresh')" title="Refresh">
+        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="23 4 23 10 17 10"/><path d="M20.49 15a9 9 0 11-2.12-9.36L23 10"/></svg>
+      </button>
     </div>
 
     <!-- File Table -->
@@ -25,7 +30,12 @@
         </thead>
         <tbody>
           <tr v-if="currentPath" class="row-dir" @click="parentDir">
-            <td colspan="3">&#x1F4C1; ..</td>
+            <td colspan="3">
+              <span class="item-icon">
+                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M22 19a2 2 0 01-2 2H4a2 2 0 01-2-2V5a2 2 0 012-2h5l2 3h9a2 2 0 012 2z"/></svg>
+              </span>
+              ..
+            </td>
           </tr>
           <tr
             v-for="item in currentItems"
@@ -34,13 +44,24 @@
             @click="handleItemClick(item)"
           >
             <td class="col-name">
-              <span class="item-icon">{{ item.type === 'dir' ? '&#x1F4C1;' : '&#x1F4C4;' }}</span>
+              <span class="item-icon">
+                <template v-if="item.type === 'dir'">
+                  <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M22 19a2 2 0 01-2 2H4a2 2 0 01-2-2V5a2 2 0 012-2h5l2 3h9a2 2 0 012 2z"/></svg>
+                </template>
+                <template v-else>
+                  <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M14 2H6a2 2 0 00-2 2v16a2 2 0 002 2h12a2 2 0 002-2V8z"/><polyline points="14 2 14 8 20 8"/></svg>
+                </template>
+              </span>
               {{ item.name }}
             </td>
-            <td class="col-size">{{ item.type === 'dir' ? '' : formatSize(item.size) }}</td>
+            <td class="col-size">{{ item.type === 'dir' ? '—' : formatSize(item.size) }}</td>
             <td class="col-actions">
-              <button class="btn-sm" @click.stop="downloadItem(item)">&#x2B07;</button>
-              <button class="btn-sm btn-danger" @click.stop="deleteItem(item)">&#x2715;</button>
+              <button class="btn-sm" @click.stop="downloadItem(item)" title="Download">
+                <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><path d="M21 15v4a2 2 0 01-2 2H5a2 2 0 01-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>
+              </button>
+              <button class="btn-sm btn-sm-danger" @click.stop="deleteItem(item)" title="Delete">
+                <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><path d="M3 6h18"/><path d="M19 6v14a2 2 0 01-2 2H7a2 2 0 01-2-2V6m3 0V4a2 2 0 012-2h4a2 2 0 012 2v2"/></svg>
+              </button>
             </td>
           </tr>
           <tr v-if="!currentItems.length">
@@ -50,37 +71,45 @@
       </table>
     </div>
 
-    <!-- Divider -->
-    <div class="preview-divider">
-      <span class="preview-label">
-        Preview
-        <template v-if="previewFile">: {{ previewFile.name }}</template>
-      </span>
-    </div>
-
     <!-- Preview -->
-    <div class="preview-area">
-      <div v-if="!previewFile" class="preview-empty">Select a file to preview</div>
-      <div v-else-if="previewContent?.binary" class="preview-empty">
-        Binary file ({{ formatSize(previewContent.size) }})
-        <br />
-        <button class="btn-action" @click="downloadItem(previewFile)">Download</button>
+    <div class="preview-section">
+      <div class="preview-header">
+        <span class="preview-title">
+          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"/><circle cx="12" cy="12" r="3"/></svg>
+          Preview
+          <template v-if="previewFile">: {{ previewFile.name }}</template>
+        </span>
       </div>
-      <pre v-else class="preview-code"><code>{{ previewContent?.content || '(empty)' }}</code></pre>
+      <div class="preview-body">
+        <div v-if="!previewFile" class="preview-empty">Select a file to preview</div>
+        <div v-else-if="previewContent?.binary" class="preview-empty">
+          Binary file ({{ formatSize(previewContent.size) }})
+          <br />
+          <button class="btn-action" @click="downloadItem(previewFile)">Download File</button>
+        </div>
+        <pre v-else class="preview-code"><code>{{ previewContent?.content || '(empty)' }}</code></pre>
+      </div>
     </div>
 
     <!-- Toolbar -->
     <div class="toolbar">
-      <label class="btn-upload">
-        &#x2B06; Upload
+      <label class="btn-toolbar btn-upload">
+        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><path d="M21 15v4a2 2 0 01-2 2H5a2 2 0 01-2-2v-4"/><polyline points="17 8 12 3 7 8"/><line x1="12" y1="3" x2="12" y2="15"/></svg>
+        Upload
         <input type="file" hidden @change="handleUpload" multiple />
       </label>
-      <button class="btn-action" @click="newFolder">+ Folder</button>
-      <button class="btn-action" @click="downloadSelected" :disabled="!selectedCount">
-        &#x2B07; Download {{ selectedCount ? `(${selectedCount})` : '' }}
+      <button class="btn-toolbar" @click="newFolder">
+        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><path d="M22 19a2 2 0 01-2 2H4a2 2 0 01-2-2V5a2 2 0 012-2h5l2 3h9a2 2 0 012 2z"/><line x1="12" y1="11" x2="12" y2="17"/><line x1="9" y1="14" x2="15" y2="14"/></svg>
+        New Folder
       </button>
-      <button class="btn-action btn-danger" @click="deleteSelected" :disabled="!selectedCount">
-        &#x2715; Delete {{ selectedCount ? `(${selectedCount})` : '' }}
+      <span class="toolbar-spacer"></span>
+      <button class="btn-toolbar" @click="downloadSelected" :disabled="!selectedCount">
+        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><path d="M21 15v4a2 2 0 01-2 2H5a2 2 0 01-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>
+        Download {{ selectedCount ? `(${selectedCount})` : '' }}
+      </button>
+      <button class="btn-toolbar btn-toolbar-danger" @click="deleteSelected" :disabled="!selectedCount">
+        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><path d="M3 6h18"/><path d="M19 6v14a2 2 0 01-2 2H7a2 2 0 01-2-2V6m3 0V4a2 2 0 012-2h4a2 2 0 012 2v2"/></svg>
+        Delete {{ selectedCount ? `(${selectedCount})` : '' }}
       </button>
     </div>
   </div>
@@ -89,6 +118,9 @@
 <script setup>
 import { ref, computed, watch } from 'vue'
 import * as api from '../api/client.js'
+
+import { useToast } from '../composables/useToast.js'
+const toast = useToast()
 
 const emit = defineEmits(['refresh'])
 
@@ -128,6 +160,8 @@ async function loadDir(path) {
       return a.name.localeCompare(b.name)
     })
   } catch (e) {
+    console.error('Failed to load directory:', e)
+    toast.error('Failed to load directory: ' + (e.message || 'Network error'))
     items.value = []
   }
 }
@@ -171,7 +205,7 @@ async function downloadItem(item) {
     a.href = url; a.download = item.name; document.body.appendChild(a)
     a.click(); document.body.removeChild(a); URL.revokeObjectURL(url)
   } catch (e) {
-    alert(e.message)
+    toast.error(e.message)
   }
 }
 
@@ -185,7 +219,7 @@ async function deleteItem(item) {
       previewContent.value = null
     }
     emit('refresh')
-  } catch (e) { alert(e.message) }
+  } catch (e) { toast.error(e.message) }
 }
 
 async function newFolder() {
@@ -196,7 +230,7 @@ async function newFolder() {
     await api.createDir(fullPath)
     loadDir(currentPath.value)
     emit('refresh')
-  } catch (e) { alert(e.message) }
+  } catch (e) { toast.error(e.message) }
 }
 
 async function handleUpload(e) {
@@ -208,7 +242,7 @@ async function handleUpload(e) {
     }
     loadDir(currentPath.value)
     emit('refresh')
-  } catch (e) { alert(e.message) }
+  } catch (e) { toast.error(e.message) }
 }
 
 async function downloadSelected() {
@@ -220,7 +254,7 @@ async function downloadSelected() {
     const a = document.createElement('a')
     a.href = url; a.download = 'export.zip'; document.body.appendChild(a)
     a.click(); document.body.removeChild(a); URL.revokeObjectURL(url)
-  } catch (e) { alert(e.message) }
+  } catch (e) { toast.error(e.message) }
 }
 
 function deleteSelected() {
@@ -238,72 +272,305 @@ watch(() => currentPath.value, () => {
   selectedItems.value.clear()
 })
 
-// Initial load
 loadDir('')
 </script>
 
 <style scoped>
 .file-manager {
-  display: flex; flex-direction: column; height: 100%; overflow: hidden; background: #1a1a2e;
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+  overflow: hidden;
+  background: var(--bg-primary);
 }
 
 /* Path Bar */
 .path-bar {
-  display: flex; align-items: center; gap: 2px; padding: 6px 10px;
-  background: #16213e; border-bottom: 1px solid #222; font-size: 13px; flex-shrink: 0;
+  display: flex;
+  align-items: center;
+  gap: 1px;
+  padding: 8px 16px;
+  background: var(--bg-secondary);
+  border-bottom: 1px solid var(--border);
+  font-size: 13px;
+  flex-shrink: 0;
 }
-.btn-path { background: none; border: none; color: #54a0ff; cursor: pointer; font-size: 12px; font-family: monospace; }
-.btn-path:hover { text-decoration: underline; }
-.path-sep { color: #555; font-size: 12px; }
-.path-spacer { flex: 1; }
+
+.btn-path {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  background: none;
+  border: none;
+  color: var(--text-secondary);
+  cursor: pointer;
+  font-size: 12px;
+  font-family: var(--font-mono);
+  padding: 3px 6px;
+  border-radius: 4px;
+  transition: all var(--transition);
+}
+
+.btn-path:hover {
+  background: var(--bg-hover);
+  color: var(--accent);
+}
+
+.path-sep {
+  color: var(--border);
+  font-size: 14px;
+  padding: 0 1px;
+}
+
+.path-spacer {
+  flex: 1;
+}
+
+.btn-icon {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 28px;
+  height: 28px;
+  background: transparent;
+  border: none;
+  border-radius: var(--radius-sm);
+  color: var(--text-secondary);
+  cursor: pointer;
+  transition: all var(--transition);
+}
+
+.btn-icon:hover {
+  background: var(--bg-hover);
+  color: var(--text-primary);
+}
 
 /* File Table */
-.file-table-wrapper { flex: 1; overflow-y: auto; min-height: 0; }
-.file-table { width: 100%; border-collapse: collapse; font-size: 12px; }
-.file-table th { padding: 6px 10px; text-align: left; color: #888; font-weight: 600; border-bottom: 1px solid #222; position: sticky; top: 0; background: #1a1a2e; }
-.file-table td { padding: 5px 10px; border-bottom: 1px solid #111; cursor: pointer; }
-.file-table tr:hover td { background: #16213e; }
-.file-table tr.selected td { background: #0f3460; }
-.col-name { width: auto; }
-.col-size { width: 80px; color: #888; }
-.col-actions { width: 70px; text-align: right; }
-.item-icon { margin-right: 4px; }
+.file-table-wrapper {
+  flex: 1;
+  overflow-y: auto;
+  min-height: 0;
+}
+
+.file-table-wrapper::-webkit-scrollbar {
+  width: 6px;
+}
+
+.file-table-wrapper::-webkit-scrollbar-thumb {
+  background: var(--border);
+  border-radius: 3px;
+}
+
+.file-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 13px;
+}
+
+.file-table th {
+  padding: 8px 16px;
+  text-align: left;
+  color: var(--text-tertiary);
+  font-weight: 500;
+  font-size: 11px;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+  border-bottom: 1px solid var(--border-light);
+  position: sticky;
+  top: 0;
+  background: var(--bg-primary);
+}
+
+.file-table td {
+  padding: 7px 16px;
+  border-bottom: 1px solid var(--border-light);
+  cursor: pointer;
+  transition: background var(--transition);
+}
+
+.file-table tbody tr:hover td {
+  background: var(--bg-hover);
+}
+
+.file-table tr.selected td {
+  background: var(--accent-light);
+}
+
+.col-name {
+  width: auto;
+}
+
+.col-size {
+  width: 90px;
+  color: var(--text-tertiary);
+}
+
+.col-actions {
+  width: 76px;
+  text-align: right;
+}
+
+.item-icon {
+  margin-right: 6px;
+  color: var(--text-tertiary);
+  vertical-align: -2px;
+}
+
+.row-dir {
+  color: var(--accent);
+  font-weight: 500;
+}
 
 /* Preview */
-.preview-divider {
-  padding: 6px 10px; background: #16213e; border-top: 1px solid #222; border-bottom: 1px solid #222;
-  font-size: 11px; color: #888; flex-shrink: 0;
+.preview-section {
+  border-top: 1px solid var(--border);
+  flex-shrink: 0;
 }
-.preview-area { height: 200px; overflow: auto; flex-shrink: 0; }
+
+.preview-header {
+  padding: 8px 16px;
+  background: var(--bg-secondary);
+  border-bottom: 1px solid var(--border-light);
+}
+
+.preview-title {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 12px;
+  font-weight: 500;
+  color: var(--text-secondary);
+}
+
+.preview-body {
+  height: 180px;
+  overflow: auto;
+  background: var(--bg-secondary);
+}
+
+.preview-body::-webkit-scrollbar {
+  width: 4px;
+}
+
+.preview-body::-webkit-scrollbar-thumb {
+  background: var(--border);
+  border-radius: 2px;
+}
+
 .preview-code {
-  padding: 10px; margin: 0; font-family: 'Consolas', 'Monaco', monospace; font-size: 12px;
-  color: #ddd; white-space: pre-wrap; word-break: break-all; line-height: 1.4;
+  padding: 14px 16px;
+  margin: 0;
+  font-family: var(--font-mono);
+  font-size: 12px;
+  color: var(--text-primary);
+  white-space: pre-wrap;
+  word-break: break-all;
+  line-height: 1.5;
 }
-.preview-empty { padding: 20px; text-align: center; color: #666; font-size: 12px; }
+
+.preview-empty {
+  padding: 32px;
+  text-align: center;
+  color: var(--text-tertiary);
+  font-size: 13px;
+}
+
+.btn-action {
+  display: inline-block;
+  margin-top: 10px;
+  padding: 6px 14px;
+  background: var(--accent);
+  border: none;
+  border-radius: var(--radius-sm);
+  color: white;
+  font-size: 12px;
+  font-family: var(--font-ui);
+  cursor: pointer;
+  transition: background var(--transition);
+}
+
+.btn-action:hover {
+  background: var(--accent-hover);
+}
 
 /* Toolbar */
 .toolbar {
-  display: flex; gap: 8px; padding: 8px 10px;
-  background: #16213e; border-top: 1px solid #222; flex-shrink: 0;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 10px 16px;
+  background: var(--bg-primary);
+  border-top: 1px solid var(--border);
+  flex-shrink: 0;
 }
-.btn-action {
-  background: #0f3460; border: none; border-radius: 4px; color: #ddd;
-  padding: 5px 12px; font-size: 11px; cursor: pointer;
+
+.toolbar-spacer {
+  flex: 1;
 }
-.btn-action:hover:not(:disabled) { background: #1a4a7a; }
-.btn-action:disabled { opacity: 0.4; cursor: not-allowed; }
+
+.btn-toolbar {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  padding: 7px 14px;
+  background: var(--bg-secondary);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  color: var(--text-primary);
+  font-size: 12px;
+  font-weight: 500;
+  font-family: var(--font-ui);
+  cursor: pointer;
+  transition: all var(--transition);
+}
+
+.btn-toolbar:hover:not(:disabled) {
+  background: var(--bg-hover);
+  border-color: var(--text-tertiary);
+}
+
+.btn-toolbar:disabled {
+  opacity: 0.4;
+  cursor: not-allowed;
+}
+
+.btn-toolbar-danger:hover:not(:disabled) {
+  color: #ef4444;
+  border-color: #fecaca;
+  background: #fef2f2;
+}
+
 .btn-upload {
-  background: #0f3460; border: none; border-radius: 4px; color: #ddd;
-  padding: 5px 12px; font-size: 11px; cursor: pointer; display: inline-flex; align-items: center;
+  cursor: pointer;
 }
-.btn-upload:hover { background: #1a4a7a; }
-.btn-danger { color: #e74c3c; }
-.btn-danger:hover:not(:disabled) { background: #4a1a1a; }
 
 .btn-sm {
-  background: none; border: none; color: #888; cursor: pointer; font-size: 12px; padding: 1px 4px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  background: none;
+  border: none;
+  color: var(--text-tertiary);
+  cursor: pointer;
+  padding: 3px;
+  border-radius: 4px;
+  transition: all var(--transition);
 }
-.btn-sm:hover { color: #e0e0e0; }
 
-.empty-msg { color: #666; text-align: center; padding: 20px !important; }
+.btn-sm:hover {
+  color: var(--text-primary);
+  background: var(--bg-hover);
+}
+
+.btn-sm-danger:hover {
+  color: #ef4444;
+  background: #fef2f2;
+}
+
+.empty-msg {
+  color: var(--text-tertiary);
+  text-align: center;
+  padding: 32px !important;
+  font-size: 13px;
+}
 </style>

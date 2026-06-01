@@ -265,10 +265,8 @@ async def chat_stream(
 
             yield "data: [DONE]\n\n"
         except GeneratorExit:
-            # GeneratorExit is normal when stream ends early (interrupt or client disconnect)
-            # Don't log as error - this is expected behavior for SSE streams
             logging.debug(f"[stream] Generator closed (normal for interrupt/client disconnect)")
-            yield "data: [DONE]\n\n"
+            return  # Do NOT yield inside GeneratorExit — causes RuntimeError
         except Exception as e:
             logging.exception("Stream error: %s", e)
             yield f"data: {json.dumps({'error': str(e)}, ensure_ascii=False)}\n\n"
@@ -379,9 +377,8 @@ async def chat_stream_resume(
 
             yield "data: [DONE]\n\n"
         except GeneratorExit:
-            # GeneratorExit is normal when stream ends early (interrupt or client disconnect)
             logging.debug(f"[stream/resume] Generator closed (normal for interrupt/client disconnect)")
-            yield "data: [DONE]\n\n"
+            return  # Do NOT yield inside GeneratorExit — causes RuntimeError
         except Exception as e:
             logging.exception("Stream resume error: %s", e)
             yield f"data: {json.dumps({'error': str(e)}, ensure_ascii=False)}\n\n"
@@ -493,6 +490,82 @@ async def delete_session(
     await db.commit()
 
     return {"message": "Session deleted"}
+
+
+@sessions_router.get("/{session_id}/messages")
+async def get_session_messages(
+    session_id: str,
+    user_id: int = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db)
+):
+    """Get chat history for a session.
+
+    Loads messages from the LangGraph RedisSaver checkpointer.
+
+    Args:
+        session_id: Session/thread ID
+        user_id: Current user ID
+        db: Database session
+
+    Returns:
+        Session with messages list
+
+    Raises:
+        HTTPException: If session not found
+    """
+    # Verify session ownership
+    result = await db.execute(
+        select(Session).where(Session.id == session_id, Session.user_id == user_id)
+    )
+    session = result.scalar_one_or_none()
+    if not session:
+        raise HTTPException(status_code=404, detail="Session not found")
+
+    # Load state from Redis checkpointer
+    config = {"configurable": {"thread_id": session_id}}
+    graph = get_agent_graph()
+    state = await graph.aget_state(config)
+
+    # Extract and serialize messages (skip tool results and system prompts)
+    messages = []
+    if state and state.values:
+        raw_messages = state.values.get("messages", [])
+        logging.debug(f"[history] session={session_id}, raw message count={len(raw_messages)}")
+        for msg in raw_messages:
+            if hasattr(msg, "type"):
+                role = msg.type
+                logging.debug(f"[history] msg type={role}, content_preview={str(msg.content)[:80] if msg.content else '(empty)'}")
+                # Skip tool results (raw JSON) and internal system prompts
+                if role in ("tool", "system"):
+                    continue
+                content = _extract_content_from_message(msg)
+                if not content:
+                    continue  # Skip empty messages (e.g., AI with only tool_calls)
+                if role in ("human", "user"):
+                    role = "user"
+                elif role in ("ai", "assistant"):
+                    role = "assistant"
+                else:
+                    continue  # Unknown role — skip
+                messages.append({"role": role, "content": content})
+            elif isinstance(msg, dict):
+                role = msg.get("role", "")
+                if role in ("tool", "system"):
+                    continue
+                content = _extract_content_from_message(msg)
+                if not content:
+                    continue
+                messages.append({
+                    "role": msg.get("role", "user"),
+                    "content": content
+                })
+
+    logging.debug(f"[history] returning {len(messages)} messages")
+    return {
+        "session_id": session_id,
+        "title": session.title,
+        "messages": messages
+    }
 
 
 # === Human-in-the-loop Tool Confirmation ===

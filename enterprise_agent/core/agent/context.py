@@ -142,7 +142,10 @@ class ContextManager:
     def estimate_tokens(self, messages: List[Any]) -> int:
         """Estimate token count from messages.
 
-        Uses simple estimation: 1 token ≈ 4 characters.
+        Uses weighted estimation:
+        - CJK characters: ~1.5 tok/char (Chinese/Japanese/Korean ~2 tokens per char)
+        - Other characters: ~4 tok/char (English ~4 chars per token)
+        - Message overhead: ~4 tokens per message (role marker, formatting)
 
         Args:
             messages: List of messages (can be dict or LangChain message objects)
@@ -150,20 +153,45 @@ class ContextManager:
         Returns:
             Estimated token count
         """
-        total_chars = 0
-        for msg in messages:
-            if isinstance(msg, dict):
-                total_chars += len(json.dumps(msg, default=str))
-            elif hasattr(msg, "content"):
-                # LangChain message object
-                content = str(msg.content) if msg.content else ""
-                total_chars += len(content)
-                # Add overhead for role, metadata
-                total_chars += 50
-            else:
-                total_chars += len(str(msg))
+        import unicodedata
 
-        return total_chars // 4
+        total_tokens = 0
+        for msg in messages:
+            text = ""
+            if isinstance(msg, dict):
+                text = json.dumps(msg, default=str)
+            elif hasattr(msg, "content"):
+                content = str(msg.content) if msg.content else ""
+                text = content
+                total_tokens += 4  # Message overhead (role marker, formatting)
+            else:
+                text = str(msg)
+
+            cjk_chars = 0
+            other_chars = 0
+            for ch in text:
+                # Check if character is in a CJK Unicode block
+                cp = ord(ch)
+                if (0x4E00 <= cp <= 0x9FFF or   # CJK Unified Ideographs
+                    0x3400 <= cp <= 0x4DBF or   # CJK Unified Ideographs Extension A
+                    0x20000 <= cp <= 0x2A6DF or # CJK Unified Ideographs Extension B
+                    0x2A700 <= cp <= 0x2B73F or # CJK Unified Ideographs Extension C
+                    0x2B740 <= cp <= 0x2B81F or # CJK Unified Ideographs Extension D
+                    0x2B820 <= cp <= 0x2CEAF or # CJK Unified Ideographs Extension E
+                    0xF900 <= cp <= 0xFAFF or   # CJK Compatibility Ideographs
+                    0x2F800 <= cp <= 0x2FA1F or # CJK Compatibility Ideographs Supplement
+                    0x3000 <= cp <= 0x303F or   # CJK Symbols and Punctuation
+                    0xFF00 <= cp <= 0xFFEF or   # Halfwidth and Fullwidth Forms
+                    0x3040 <= cp <= 0x309F or   # Hiragana
+                    0x30A0 <= cp <= 0x30FF or   # Katakana
+                    0xAC00 <= cp <= 0xD7AF):    # Hangul Syllables
+                    cjk_chars += 1
+                else:
+                    other_chars += 1
+
+            total_tokens += int(cjk_chars / 1.5) + int(other_chars / 4)
+
+        return max(total_tokens, 1)
 
     def microcompact(self, messages: List[Any], keep_last: int = 6) -> List[Any]:
         """Clear old tool result content to prevent output bloat.

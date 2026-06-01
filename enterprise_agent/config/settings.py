@@ -42,6 +42,11 @@ class Settings(BaseSettings):
 
     # Database - Chroma (long-term vector memory)
     CHROMA_PERSIST_DIR: str = str(Path(__file__).resolve().parent.parent.parent / "chroma_data")
+
+    # Skills — shared global skills directory
+    SHARED_SKILLS_DIR: str = str(
+        Path(__file__).resolve().parent.parent.parent / "shared_skills"
+    )
     CHROMA_COLLECTION_CONVERSATIONS: str = "conversations"
     CHROMA_COLLECTION_PATTERNS: str = "user_patterns"
 
