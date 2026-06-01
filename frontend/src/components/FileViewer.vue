@@ -101,6 +101,7 @@ watch(() => props.file, loadFile, { immediate: true })
   display: flex;
   flex-direction: column;
   background: var(--bg-primary);
+  min-height: 0;
 }
 
 .viewer-header {
