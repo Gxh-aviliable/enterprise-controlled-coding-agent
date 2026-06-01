@@ -127,8 +127,6 @@ defineProps({
 })
 const emit = defineEmits(['select', 'delete', 'new-session', 'file-select', 'tab-change'])
 
-watch(activeTab, (tab) => emit('tab-change', tab))
-
 // User menu
 const showUserMenu = ref(false)
 const footerRef = ref(null)
@@ -159,8 +157,9 @@ function handleLogout() {
 const activeTab = ref('sessions')
 const fileTreeRef = ref(null)
 
-// Auto-refresh file tree when switching to Files tab
+// Auto-refresh file tree + notify App when tab changes
 watch(activeTab, async (tab) => {
+  emit('tab-change', tab)
   if (tab === 'files') {
     await nextTick()
     fileTreeRef.value?.loadTree()
