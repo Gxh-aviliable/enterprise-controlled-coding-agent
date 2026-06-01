@@ -41,13 +41,15 @@ def _is_internal_json(delta: str) -> bool:
     These leak from memory/importance evaluator LLM calls that run
     inside the LangGraph and get captured by stream_mode=['messages'].
     """
+    import re
     stripped = delta.strip()
-    return (
-        stripped.startswith('{"importance"') or
-        stripped.startswith('[{"type"') or
-        stripped.startswith('{"importance":') or
-        stripped.startswith('{"type":')
-    )
+    # Exact prefix matches for JSON that starts the delta
+    if stripped.startswith(('{"importance"', '[{"type"', '{"importance":', '{"type":')):
+        return True
+    # Pattern match: importance JSON anywhere in the delta
+    if re.search(r'\{\s*"importance"\s*:\s*[\d.]+', stripped):
+        return True
+    return False
 
 
 def _extract_content_from_message(msg) -> str:
