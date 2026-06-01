@@ -361,6 +361,12 @@ function startStream(sessionId, content, isNewSession, signal) {
     onDone: () => {
       streaming.value = false
       currentTool.value = ''
+      // Safety net: mark any remaining running tool cards as done
+      for (const m of messages.value) {
+        if (m.role === 'tool_call' && m.toolStatus === 'running') {
+          m.toolStatus = 'done'
+        }
+      }
       if (streamMsgRef.value) streamMsgRef.value.streaming = false
       if (isNewSession && !pendingConfirm.value) {
         emit('session-created', sessionId)
@@ -466,6 +472,12 @@ function resumeAfterConfirm(approvedIds) {
     onDone: () => {
       streaming.value = false
       currentTool.value = ''
+      // Safety net: mark any remaining running tool cards as done
+      for (const m of messages.value) {
+        if (m.role === 'tool_call' && m.toolStatus === 'running') {
+          m.toolStatus = 'done'
+        }
+      }
       if (streamMsgRef.value) streamMsgRef.value.streaming = false
       if (isNewSession) emit('session-created', sessionId)
       scrollBottom()

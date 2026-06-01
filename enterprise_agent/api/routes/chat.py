@@ -245,11 +245,15 @@ async def chat_stream(
                         # Tool executor output
                         if node_name == "tool_executor":
                             tool_results = node_output.get("tool_results", {})
+                            pending_tools = node_output.get("pending_tool_calls", [])
                             for tool_id, result in tool_results.items():
                                 result_str = str(result)
                                 if len(result_str) > 200:
                                     result_str = result_str[:200] + "..."
                                 yield f"data: {json.dumps({'event': 'tool_result', 'id': tool_id, 'result': result_str}, ensure_ascii=False)}\n\n"
+                            # Emit tool_end for each tool so frontend can mark cards as done
+                            for tc in pending_tools:
+                                yield f"data: {json.dumps({'event': 'tool_end', 'name': tc.get('name', '')}, ensure_ascii=False)}\n\n"
 
             yield "data: [DONE]\n\n"
         except GeneratorExit:
