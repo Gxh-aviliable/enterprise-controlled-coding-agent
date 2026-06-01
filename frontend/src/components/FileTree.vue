@@ -3,18 +3,46 @@
     <div class="tree-header">
       <span class="tree-title">Workspace</span>
       <div class="tree-actions">
-        <button class="btn-icon" title="Refresh" @click="loadTree">
-          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="23 4 23 10 17 10"/><path d="M20.49 15a9 9 0 11-2.12-9.36L23 10"/></svg>
+        <!-- Upload -->
+        <label class="btn-icon upload-btn" title="Upload files">
+          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5">
+            <path d="M21 15v4a2 2 0 01-2 2H5a2 2 0 01-2-2v-4"/><polyline points="17 8 12 3 7 8"/><line x1="12" y1="3" x2="12" y2="15"/>
+          </svg>
+          <input type="file" hidden multiple @change="handleUpload" ref="fileInput" />
+        </label>
+        <!-- Download workspace -->
+        <button class="btn-icon" title="Download workspace" @click="downloadAll">
+          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5">
+            <path d="M21 15v4a2 2 0 01-2 2H5a2 2 0 01-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/>
+          </svg>
         </button>
+        <!-- New folder -->
         <button class="btn-icon" title="New Folder" @click="newFolder">
           <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><path d="M12 5v14M5 12h14"/></svg>
+        </button>
+        <!-- Refresh -->
+        <button class="btn-icon" title="Refresh" @click="loadTree">
+          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="23 4 23 10 17 10"/><path d="M20.49 15a9 9 0 11-2.12-9.36L23 10"/></svg>
         </button>
       </div>
     </div>
 
     <div v-if="loading" class="tree-status">Loading...</div>
     <div v-else-if="error" class="tree-status tree-error">{{ error }}</div>
-    <div v-else class="tree-body">
+    <div
+      v-else
+      class="tree-body"
+      :class="{ 'drag-over': dragOver }"
+      @dragover.prevent="dragOver = true"
+      @dragleave.prevent="onDragLeave"
+      @drop.prevent="handleDrop"
+    >
+      <div v-if="dragOver" class="drop-overlay">
+        <svg width="32" height="32" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+          <path d="M21 15v4a2 2 0 01-2 2H5a2 2 0 01-2-2v-4"/><polyline points="17 8 12 3 7 8"/><line x1="12" y1="3" x2="12" y2="15"/>
+        </svg>
+        <span>Drop files to upload</span>
+      </div>
       <TreeNode
         v-for="node in treeChildren"
         :key="node.path"
@@ -24,8 +52,9 @@
         @select="$emit('select', $event)"
         @delete="handleDelete"
         @rename="handleRename"
+        @download="handleDownload"
       />
-      <div v-if="!treeChildren.length" class="tree-status">Empty workspace</div>
+      <div v-if="!treeChildren.length" class="tree-status">Empty workspace — drop files or click 📤 to upload</div>
     </div>
   </div>
 </template>
@@ -46,6 +75,8 @@ const emit = defineEmits(['select', 'refresh'])
 const treeData = ref(null)
 const loading = ref(false)
 const error = ref('')
+const dragOver = ref(false)
+const fileInput = ref(null)
 
 const treeChildren = computed(() => treeData.value?.children || [])
 
@@ -54,13 +85,91 @@ async function loadTree() {
   error.value = ''
   try {
     const data = await api.fetchTree('', 3)
-    console.log('[FileTree] Loaded tree:', data)
     treeData.value = data
   } catch (e) {
     console.error('[FileTree] Failed:', e)
     error.value = 'Failed to load files: ' + (e.message || 'Unknown error')
   } finally {
     loading.value = false
+  }
+}
+
+// ── Upload ──
+async function handleUpload(e) {
+  const files = e.target.files
+  if (!files?.length) return
+  try {
+    toast.show(`Uploading ${files.length} file(s)...`, 'info', 0)
+    await api.uploadFiles(files, '', (done, total) => {
+      // update toast or progress
+    })
+    toast.show(`Uploaded ${files.length} file(s)`, 'success')
+    await loadTree()
+    emit('refresh')
+  } catch (err) {
+    toast.error('Upload failed: ' + (err.message || 'Unknown error'))
+  }
+  // Reset input so same files can be re-selected
+  if (fileInput.value) fileInput.value.value = ''
+}
+
+// ── Drag & drop ──
+let dragCounter = 0
+function onDragLeave() {
+  dragCounter--
+  if (dragCounter <= 0) {
+    dragOver.value = false
+    dragCounter = 0
+  }
+}
+
+async function handleDrop(e) {
+  dragOver.value = false
+  dragCounter = 0
+  const files = e.dataTransfer?.files
+  if (!files?.length) return
+  try {
+    toast.show(`Uploading ${files.length} file(s)...`, 'info', 0)
+    await api.uploadFiles(files, '', (done, total) => {
+      // Could update a progress bar here
+    })
+    toast.show(`Uploaded ${files.length} file(s)`, 'success')
+    await loadTree()
+    emit('refresh')
+  } catch (err) {
+    toast.error('Upload failed: ' + (err.message || 'Unknown error'))
+  }
+}
+
+// ── Download all ──
+async function downloadAll() {
+  try {
+    const allPaths = treeChildren.value.map(n => n.path)
+    if (!allPaths.length) {
+      toast.show('Workspace is empty', 'warning')
+      return
+    }
+    const blob = await api.downloadWorkspace(allPaths)
+    const url = URL.createObjectURL(blob)
+    const a = document.createElement('a')
+    a.href = url; a.download = 'workspace.zip'; document.body.appendChild(a)
+    a.click(); document.body.removeChild(a); URL.revokeObjectURL(url)
+    toast.show('Downloaded workspace.zip', 'success')
+  } catch (err) {
+    toast.error('Download failed: ' + (err.message || 'Unknown error'))
+  }
+}
+
+// ── Single file download (from TreeNode) ──
+async function handleDownload(node) {
+  try {
+    const blob = await api.downloadFile(node.path)
+    const url = URL.createObjectURL(blob)
+    const a = document.createElement('a')
+    a.href = url; a.download = node.name; document.body.appendChild(a)
+    a.click(); document.body.removeChild(a); URL.revokeObjectURL(url)
+  } catch (err) {
+    toast.error('Download failed: ' + (err.message || 'Unknown error'))
   }
 }
 
@@ -155,6 +264,29 @@ defineExpose({ loadTree })
   flex: 1;
   overflow-y: auto;
   padding: 4px 0;
+  position: relative;
+}
+
+.tree-body.drag-over {
+  outline: 2px dashed var(--accent);
+  outline-offset: -4px;
+  background: var(--accent-light);
+}
+
+.drop-overlay {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  background: var(--accent-light);
+  color: var(--accent);
+  font-size: var(--text-sm);
+  font-weight: 600;
+  z-index: 10;
+  pointer-events: none;
 }
 
 .tree-body::-webkit-scrollbar {
@@ -165,4 +297,9 @@ defineExpose({ loadTree })
   background: var(--border);
   border-radius: 2px;
 }
+
+.upload-btn {
+  cursor: pointer;
+}
+.upload-btn input { display: none; }
 </style>

@@ -357,6 +357,26 @@ export async function uploadFile(file, path = '') {
   return data
 }
 
+export async function uploadFiles(files, path = '', onProgress) {
+  let done = 0
+  const results = []
+  for (const file of files) {
+    const result = await uploadFile(file, path)
+    results.push(result)
+    done++
+    onProgress?.(done, files.length, result)
+  }
+  return results
+}
+
+export async function downloadWorkspace(files) {
+  if (!files || !files.length) {
+    throw new Error('No files to download')
+  }
+  const paths = files.map(f => f.path || f)
+  return downloadZip(paths, 'workspace')
+}
+
 export async function createDir(path) {
   const params = new URLSearchParams({ path })
   const res = await request(`/workspace/mkdir?${params}`, { method: 'POST' })
