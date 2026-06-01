@@ -29,6 +29,13 @@
         </svg>
         <span>Files</span>
       </button>
+      <button
+        :class="['tab-btn', { active: activeTab === 'memory' }]"
+        @click="activeTab = 'memory'"
+      >
+        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M12 2L2 7l10 5 10-5-10-5z"/><path d="M2 17l10 5 10-5"/><path d="M2 12l10 5 10-5"/></svg>
+        <span>Memory</span>
+      </button>
     </div>
 
     <!-- Sessions Tab -->
@@ -118,7 +125,9 @@ defineProps({
   activeId: { type: String, default: '' },
   selectedFilePath: { type: String, default: '' }
 })
-const emit = defineEmits(['select', 'delete', 'new-session', 'file-select'])
+const emit = defineEmits(['select', 'delete', 'new-session', 'file-select', 'tab-change'])
+
+watch(activeTab, (tab) => emit('tab-change', tab))
 
 // User menu
 const showUserMenu = ref(false)

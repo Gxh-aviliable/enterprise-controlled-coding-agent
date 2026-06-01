@@ -385,6 +385,22 @@ export async function createDir(path) {
   return data
 }
 
+// Memory API
+export async function fetchMemories(limit = 50, minImportance = 0) {
+  const params = new URLSearchParams({ limit: String(limit), min_importance: String(minImportance) })
+  const res = await request(`/memory/conversations?${params}`)
+  const data = await res.json()
+  if (!res.ok) throw new Error(data.detail || 'Failed to fetch memories')
+  return data
+}
+
+export async function fetchPatterns() {
+  const res = await request('/memory/patterns')
+  const data = await res.json()
+  if (!res.ok) throw new Error(data.detail || 'Failed to fetch patterns')
+  return data
+}
+
 export async function deleteItem(path) {
   const params = new URLSearchParams({ path })
   const res = await request(`/workspace/delete?${params}`, { method: 'DELETE' })

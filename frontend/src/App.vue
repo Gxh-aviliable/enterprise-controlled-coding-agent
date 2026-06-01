@@ -10,18 +10,22 @@
       @new-session="newSession"
       @delete="deleteSession"
       @file-select="onFileSelect"
+      @tab-change="onTabChange"
     />
 
     <div class="main-area">
       <ChatPanel
-        v-if="!selectedFile"
+        v-if="mainView === 'chat'"
         :sessionId="activeSessionId"
         @session-created="onSessionCreated"
       />
       <FileViewer
-        v-else
+        v-else-if="mainView === 'file'"
         :file="selectedFile"
-        @close="selectedFile = null"
+        @close="onCloseFileViewer"
+      />
+      <MemoryViewer
+        v-else-if="mainView === 'memory'"
       />
     </div>
   </div>
@@ -36,11 +40,13 @@ import LoginForm from './components/LoginForm.vue'
 import Sidebar from './components/Sidebar.vue'
 import ChatPanel from './components/ChatPanel.vue'
 import FileViewer from './components/FileViewer.vue'
+import MemoryViewer from './components/MemoryViewer.vue'
 import Toast from './components/Toast.vue'
 
 const sessions = ref([])
 const activeSessionId = ref('')
 const selectedFile = ref(null)
+const mainView = ref('chat')
 
 async function loadSessions() {
   try {
@@ -55,11 +61,13 @@ async function loadSessions() {
 function selectSession(id) {
   activeSessionId.value = id
   selectedFile.value = null
+  mainView.value = 'chat'
 }
 
 function newSession() {
   activeSessionId.value = ''
   selectedFile.value = null
+  mainView.value = 'chat'
 }
 
 async function onSessionCreated(sid) {
@@ -70,7 +78,19 @@ async function onSessionCreated(sid) {
 function onFileSelect(node) {
   if (node.type === 'file') {
     selectedFile.value = node
+    mainView.value = 'file'
   }
+}
+
+function onCloseFileViewer() {
+  selectedFile.value = null
+  mainView.value = 'chat'
+}
+
+function onTabChange(tab) {
+  if (tab === 'sessions') { mainView.value = 'chat'; selectedFile.value = null }
+  else if (tab === 'files') { /* keep current view, let file tree control it */ }
+  else if (tab === 'memory') { mainView.value = 'memory'; selectedFile.value = null }
 }
 
 async function deleteSession(id) {
