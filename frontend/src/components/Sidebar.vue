@@ -82,22 +82,33 @@
     </div>
 
     <!-- User footer -->
-    <div class="sidebar-footer">
+    <div ref="footerRef" class="sidebar-footer" @click="showUserMenu = !showUserMenu">
       <div class="user-info">
         <div class="user-avatar-sm">
           <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M20 21v-2a4 4 0 00-4-4H8a4 4 0 00-4 4v2"/><circle cx="12" cy="7" r="4"/></svg>
         </div>
         <span class="user-name">{{ username }}</span>
       </div>
-      <button class="btn-logout" @click="handleLogout" title="Logout">
-        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round"><path d="M9 21H5a2 2 0 01-2-2V5a2 2 0 012-2h4"/><polyline points="16 17 21 12 16 7"/><line x1="21" y1="12" x2="9" y2="12"/></svg>
-      </button>
+      <svg :class="['chevron', { rotated: showUserMenu }]" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><path d="M6 9l6 6 6-6"/></svg>
+
+      <!-- Dropdown menu -->
+      <div v-if="showUserMenu" class="user-menu" @click.stop>
+        <div class="menu-header">
+          <span>{{ username }}</span>
+        </div>
+        <div class="menu-divider"></div>
+        <!-- Future items go here -->
+        <button class="menu-item" @click="handleLogout">
+          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round"><path d="M9 21H5a2 2 0 01-2-2V5a2 2 0 012-2h4"/><polyline points="16 17 21 12 16 7"/><line x1="21" y1="12" x2="9" y2="12"/></svg>
+          Sign Out
+        </button>
+      </div>
     </div>
   </aside>
 </template>
 
 <script setup>
-import { ref, watch, nextTick, computed } from 'vue'
+import { ref, watch, nextTick, computed, onMounted, onUnmounted } from 'vue'
 import FileTree from './FileTree.vue'
 import ThemeToggle from './ThemeToggle.vue'
 import { auth } from '../stores/auth.js'
@@ -108,6 +119,18 @@ defineProps({
   selectedFilePath: { type: String, default: '' }
 })
 const emit = defineEmits(['select', 'delete', 'new-session', 'file-select'])
+
+// User menu
+const showUserMenu = ref(false)
+const footerRef = ref(null)
+
+function onDocumentClick(e) {
+  if (footerRef.value && !footerRef.value.contains(e.target)) {
+    showUserMenu.value = false
+  }
+}
+onMounted(() => document.addEventListener('click', onDocumentClick))
+onUnmounted(() => document.removeEventListener('click', onDocumentClick))
 
 // Extract username from JWT (base64 decode the payload)
 const username = computed(() => {
@@ -120,6 +143,7 @@ const username = computed(() => {
 })
 
 function handleLogout() {
+  showUserMenu.value = false
   auth.logout()
 }
 
@@ -366,6 +390,13 @@ function handleFileSelect(node) {
   padding: 10px 14px;
   border-top: 1px solid var(--border-light);
   flex-shrink: 0;
+  cursor: pointer;
+  position: relative;
+  transition: background var(--transition);
+}
+
+.sidebar-footer:hover {
+  background: var(--bg-hover);
 }
 
 .user-info {
@@ -396,22 +427,67 @@ function handleFileSelect(node) {
   white-space: nowrap;
 }
 
-.btn-logout {
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  width: 30px;
-  height: 30px;
-  background: transparent;
-  border: none;
-  border-radius: var(--radius-sm);
-  color: var(--text-tertiary);
-  cursor: pointer;
-  transition: all var(--transition);
+.chevron {
   flex-shrink: 0;
+  color: var(--text-tertiary);
+  transition: transform 0.15s ease;
 }
 
-.btn-logout:hover {
+.chevron.rotated {
+  transform: rotate(180deg);
+}
+
+/* Dropdown menu */
+.user-menu {
+  position: absolute;
+  bottom: 100%;
+  left: 8px;
+  right: 8px;
+  margin-bottom: 4px;
+  background: var(--bg-primary);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  box-shadow: var(--shadow-lg);
+  z-index: 200;
+  overflow: hidden;
+}
+
+.menu-header {
+  padding: 10px 14px 6px;
+  font-size: var(--text-xs);
+  font-weight: 600;
+  color: var(--text-tertiary);
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+}
+
+.menu-divider {
+  height: 1px;
+  background: var(--border-light);
+  margin: 4px 0;
+}
+
+.menu-item {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+  padding: 8px 14px;
+  background: none;
+  border: none;
+  color: var(--text-primary);
+  font-size: var(--text-sm);
+  font-family: var(--font-ui);
+  cursor: pointer;
+  transition: background var(--transition);
+  text-align: left;
+}
+
+.menu-item:hover {
+  background: var(--bg-hover);
+}
+
+.menu-item:last-child:hover {
   background: #fef2f2;
   color: #ef4444;
 }
