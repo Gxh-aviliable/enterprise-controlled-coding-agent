@@ -332,7 +332,13 @@ def task_update(
 
 @tool
 def task_list() -> str:
-    """List all tasks.
+    """List all persistent file-based task-tracking items from the .tasks/ directory.
+
+    CRITICAL: These are OPERATIONAL task-tracking records (created by `task_create`),
+    NOT user long-term memory. Do NOT use this tool when the user asks about their
+    memory, preferences, history, or "what do you remember about me". For long-term
+    memory queries, use `search_memory` instead — it searches the ChromaDB vector
+    database where actual user memories (conversations, preferences, decisions) are stored.
 
     Returns:
         Formatted list of all tasks

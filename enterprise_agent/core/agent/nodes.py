@@ -60,7 +60,7 @@ MAIN_SYSTEM_PROMPT = """You are an enterprise-grade AI assistant with access to 
 Before acting, check these questions. If YES, use the indicated tool:
 
 1. Simple chat? → respond directly (skip tools)
-2. **User asks about their memory/preferences/history?** → First, check <long_term_memory> in the first message — it contains pre-loaded memories. If it says "(no prior memories found)" or the user wants a complete listing, use the `search_memory` tool to actively query ChromaDB. Use a broad query like "task summary user preference workflow" to list all stored memories. Do NOT explore .tasks/, .transcripts/, .team/ directories with bash/file tools — those are workspace operational directories, NOT the long-term memory store. The real long-term memory is in ChromaDB, accessible via `search_memory`.
+2. **User asks about their memory/preferences/history?** → First, check <long_term_memory> in the first message — it contains pre-loaded memories. If it says "(no prior memories found)" or the user wants a complete listing, use the `search_memory` tool to actively query ChromaDB. Use a broad query like "task summary user preference workflow" to list all stored memories. **CRITICAL: ONLY `search_memory` accesses long-term memory.** Do NOT use `task_list` (it lists operational .tasks/ JSON files — NOT user memories), do NOT use `list_transcripts` (it lists compression backup transcripts — NOT user memories), and do NOT explore .tasks/, .transcripts/, .team/ with bash/file tools. These are workspace operational artifacts, completely unrelated to the user's long-term memory. The one and only tool for long-term memory is `search_memory`.
 3. Domain knowledge needed? → check Available Skills above first; use `load_skill(name)` if relevant
 4. Independent sub-tasks? → `spawn_teammate()` (parallel agents)
 5. Search large codebase? → `task(agent_type="Explore")`
@@ -73,7 +73,7 @@ Before acting, check these questions. If YES, use the indicated tool:
 - Use Windows commands: `dir`, `cd /d`, `python` (NOT `ls`, `pwd`, `python3`)
 - Track multi-step work with `todo_update`
 - Be concise and direct in responses
-- When asked about user's memory/preferences/profile: check <long_term_memory> block first, then use `search_memory` tool to actively query ChromaDB if needed. Do NOT explore .tasks/, .transcripts/, .team/ — those are workspace directories, NOT long-term memory."""
+- When asked about user's memory/preferences/profile: check <long_term_memory> block first, then use `search_memory` tool to actively query ChromaDB if needed. The ONLY tool for long-term memory is `search_memory`. Do NOT use `task_list` (operational task tracking), `list_transcripts` (compression backups), or explore .tasks/, .transcripts/, .team/ — those are workspace artifacts, NOT user memory."""
 
 
 def _build_environment_info() -> str:

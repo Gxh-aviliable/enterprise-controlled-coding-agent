@@ -117,10 +117,12 @@ async def search_memory(query: Optional[str] = None) -> str:
        long-term memory store)
     2. User patterns (learned preferences, workflows, habits)
 
-    IMPORTANT: This IS the long-term memory. Do NOT use bash/dir/read_file to
-    explore .tasks/, .transcripts/, or .team/ directories — those are NOT the
-    long-term memory store. This tool queries the actual ChromaDB vector database
-    where memories are persisted.
+    CRITICAL: This IS the ONLY tool for long-term memory. Do NOT use `task_list`
+    (operational task tracking in .tasks/), `list_transcripts` (compression
+    backup transcripts), or bash/dir/read_file on .tasks/, .transcripts/, .team/
+    directories. Those are workspace operational artifacts — COMPLETELY UNRELATED
+    to the user's long-term memory. Only `search_memory` queries the ChromaDB
+    vector database where actual user memories are persisted.
 
     Args:
         query: What to search for. Use descriptive English queries like:
