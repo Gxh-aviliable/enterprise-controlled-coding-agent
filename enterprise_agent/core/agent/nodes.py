@@ -60,7 +60,7 @@ MAIN_SYSTEM_PROMPT = """You are an enterprise-grade AI assistant with access to 
 Before acting, check these questions. If YES, use the indicated tool:
 
 1. Simple chat? → respond directly (skip tools)
-2. **User asks about their memory/preferences/history?** → check <long_term_memory> in the first message — it contains recalled memories from previous conversations. If present, reference it directly. If it says "(no prior memories found)", say so honestly. This project has an automatic long-term memory system — you don't need to suggest manual solutions. It already stores task summaries and user preferences to ChromaDB automatically.
+2. **User asks about their memory/preferences/history?** → First, check <long_term_memory> in the first message — it contains pre-loaded memories. If it says "(no prior memories found)" or the user wants a complete listing, use the `search_memory` tool to actively query ChromaDB. Use a broad query like "task summary user preference workflow" to list all stored memories. Do NOT explore .tasks/, .transcripts/, .team/ directories with bash/file tools — those are workspace operational directories, NOT the long-term memory store. The real long-term memory is in ChromaDB, accessible via `search_memory`.
 3. Domain knowledge needed? → check Available Skills above first; use `load_skill(name)` if relevant
 4. Independent sub-tasks? → `spawn_teammate()` (parallel agents)
 5. Search large codebase? → `task(agent_type="Explore")`
@@ -73,7 +73,7 @@ Before acting, check these questions. If YES, use the indicated tool:
 - Use Windows commands: `dir`, `cd /d`, `python` (NOT `ls`, `pwd`, `python3`)
 - Track multi-step work with `todo_update`
 - Be concise and direct in responses
-- When asked about user's memory/preferences/profile: reference the <long_term_memory> block if it exists. If it says \"(no prior memories found)\", say so honestly — don't make things up."""
+- When asked about user's memory/preferences/profile: check <long_term_memory> block first, then use `search_memory` tool to actively query ChromaDB if needed. Do NOT explore .tasks/, .transcripts/, .team/ — those are workspace directories, NOT long-term memory."""
 
 
 def _build_environment_info() -> str:
@@ -320,25 +320,53 @@ async def init_context_node(state: AgentState) -> Dict[str, Any]:
                 from enterprise_agent.memory.long_term import get_long_term_memory
                 memory = get_long_term_memory(user_id)
 
+                # Detect meta-memory questions (user asking about memory itself,
+                # not a normal topic). When the user asks "what's in my memory?"
+                # the semantic search should use a broad query to find ALL
+                # stored memories, not just those semantically similar to the
+                # question text "what's in my memory".
+                _META_MEMORY_KEYWORDS = [
+                    # Chinese
+                    "长期记忆", "记忆里", "记得什么", "记住什么", "我的记忆",
+                    "我的偏好", "我的信息", "关于我", "存储了什么", "有什么记忆",
+                    "你的记忆", "保存了什么", "记了什么",
+                    # English
+                    "my memory", "remember me", "what do you know about me",
+                    "my preferences", "my info", "stored about me",
+                    "what do you remember", "any memories",
+                ]
+                is_meta_memory_question = any(
+                    kw in original_content.lower() for kw in _META_MEMORY_KEYWORDS
+                )
+
+                # Use broader query for meta-memory questions
+                if is_meta_memory_question:
+                    search_query = "task summary user preference workflow"
+                    search_n = 15  # Get more results for "show all" requests
+                    logging.info(f"[init_context] Meta-memory question detected, using broad query: '{search_query}'")
+                else:
+                    search_query = original_content
+                    search_n = 5
+
                 # Step 1: 检索用户 patterns（偏好、工作流）
                 user_patterns = await memory.search_patterns(
-                    query=original_content,
-                    n_results=3,
+                    query=search_query,
+                    n_results=5 if is_meta_memory_question else 3,
                 )
 
                 # Step 2: 检索相关历史对话
                 past_conversations = await memory.search_conversations(
-                    query=original_content,
-                    n_results=5,
+                    query=search_query,
+                    n_results=search_n,
                 )
 
                 # Step 2b: 如果语义搜索没找到 task_summary，用宽泛查询兜底
-                # 这样用户问"我有什么记忆"时也能检索到
+                # 但如果已经是 meta-memory 宽泛查询了，跳过（避免重复）
                 summary_count = sum(
                     1 for c in past_conversations
                     if c.get("metadata", {}).get("role") == "task_summary"
                 )
-                if summary_count == 0:
+                if summary_count == 0 and not is_meta_memory_question:
                     fallback_results = await memory.search_conversations(
                         query="task summary user preference workflow",
                         n_results=10,
@@ -398,12 +426,17 @@ async def init_context_node(state: AgentState) -> Dict[str, Any]:
 
                 if context_parts:
                     context_text = "\n".join(context_parts)
-                    if len(context_text) > 2000:
-                        context_text = context_text[:2000] + "..."
+                    if len(context_text) > 3000:
+                        context_text = context_text[:3000] + "..."
+
+                    if is_meta_memory_question:
+                        label = "以下是你所有已存储的长期记忆（完整列表）："
+                    else:
+                        label = "以下是与当前问题相关的历史记忆，供参考："
 
                     memory_block = (
                         "<long_term_memory>\n"
-                        "以下是与当前问题相关的历史记忆，供参考：\n"
+                        f"{label}\n"
                         f"{context_text}\n"
                         "</long_term_memory>\n\n"
                     )

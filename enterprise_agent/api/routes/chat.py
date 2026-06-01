@@ -36,19 +36,54 @@ def _extract_delta(content) -> str:
 
 
 def _is_internal_json(delta: str) -> bool:
-    """Check if a delta looks like internal evaluation JSON (importance, patterns).
+    """Check if a delta looks like internal evaluation output leaking from
+    memory/importance evaluator LLM calls inside the LangGraph.
 
-    These leak from memory/importance evaluator LLM calls that run
-    inside the LangGraph and get captured by stream_mode=['messages'].
+    These LLM calls run inside save_memory_node (accumulator task summaries,
+    importance evaluations) and despite .with_config({"callbacks": []}),
+    some tokens still leak through the graph's stream_mode=['messages'].
+
+    Detection covers two leak types:
+    1. Structured task summary headers: [User Request]:, [Actions]:, etc.
+       (from MemoryAccumulator._generate_task_summary / _format_simple_content)
+    2. Importance evaluation JSON: {"importance": 0.X, "reason": "..."}
+       (from LLMEvaluator.evaluate_importance)
     """
     import re
     stripped = delta.strip()
-    # Exact prefix matches for JSON that starts the delta
+
+    # ── Type 1: Task summary structured headers ──
+    # These are unique to accumulator internal output. The agent never starts
+    # a user-facing message with these exact bracket headers at line start.
+    _accumulator_headers = (
+        "[User Request]:",
+        "[Actions]:",
+        "[Result]:",
+        "[Key Findings]:",
+        "[Prior Context]:",
+        "[Prior compressed context]:",
+    )
+    for header in _accumulator_headers:
+        if stripped.startswith(header):
+            return True
+        # Also check: header preceded by newline (multi-line chunk)
+        if f"\n{header}" in stripped:
+            return True
+
+    # ── Type 2: Importance evaluation JSON ──
+    # Exact prefix matches for JSON deltas
     if stripped.startswith(('{"importance"', '[{"type"', '{"importance":', '{"type":')):
         return True
     # Pattern match: importance JSON anywhere in the delta
     if re.search(r'\{\s*"importance"\s*:\s*[\d.]+', stripped):
         return True
+    # Catch JSON that continues from a previous chunk: "reason": field
+    # Only matches when both "reason" and "importance" JSON keys appear in the
+    # SAME chunk, which is near-impossible in natural conversation but common
+    # in importance evaluator output: {"importance": 0.X, "reason": "..."}
+    if re.search(r'"reason"\s*:\s*"[^"]{5,}"\s*[,}]', stripped) and re.search(r'"importance"\s*:\s*[\d.]+', stripped):
+        return True
+
     return False
 
 
@@ -311,7 +346,7 @@ async def chat_stream_resume(
                     msg_chunk, _ = data
                     if hasattr(msg_chunk, "content") and msg_chunk.content:
                         delta = _extract_delta(msg_chunk.content)
-                        if delta:
+                        if delta and not _is_internal_json(delta):
                             yield f"data: {json.dumps({'delta': delta}, ensure_ascii=False)}\n\n"
                     if hasattr(msg_chunk, "tool_calls") and msg_chunk.tool_calls:
                         for tc in msg_chunk.tool_calls:

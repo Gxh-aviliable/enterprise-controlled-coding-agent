@@ -159,7 +159,12 @@ Return ONLY a JSON object with this exact format:
             # Note: LangChain uses the model from settings by default
 
             # Suppress callbacks so LangGraph stream_mode doesn't capture
-            response = await llm.with_config({"callbacks": []}).ainvoke(
+            # these internal evaluation tokens as user-facing output.
+            # tags=["memory_internal"] provides an additional hint for
+            # LangGraph 1.0+ to exclude these from message streaming.
+            response = await llm.with_config(
+                {"callbacks": [], "tags": ["memory_internal"]}
+            ).ainvoke(
                 [HumanMessage(content=prompt)]
             )
             text = response.content

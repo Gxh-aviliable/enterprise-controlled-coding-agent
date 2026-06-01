@@ -11,6 +11,7 @@ Tools are organized by module:
 - team: spawn_teammate, list_teammates, send_message, read_inbox,
         broadcast, shutdown_request, plan_approval, idle
 - context_tools: compress, list_transcripts, get_transcript, context_status
+- memory: search_memory
 """
 
 # File operations
@@ -42,6 +43,9 @@ from enterprise_agent.core.agent.tools.skills import (
     load_skill,
     reload_skills,
 )
+
+# Memory query
+from enterprise_agent.core.agent.tools.memory import search_memory
 
 # Subagent delegation
 from enterprise_agent.core.agent.tools.subagent import task as subagent_task
@@ -93,6 +97,7 @@ SAFE_TOOLS = {
     "task_list",
     "task_get",
     "todo_update",  # Task tracking is safe
+    "search_memory",  # Read-only memory query
 }
 
 
@@ -196,6 +201,9 @@ ALL_TOOLS = [
     list_transcripts,
     get_transcript,
     context_status,
+
+    # Memory
+    search_memory,
 ]
 
 
@@ -222,6 +230,7 @@ def get_tools_for_permissions(user_permissions: list) -> list:
             broadcast, shutdown_request, plan_approval, idle,
         ],
         "tools:context": [compress, list_transcripts, get_transcript, context_status],
+        "tools:memory": [search_memory],
         "tools:all": ALL_TOOLS,
     }
 

@@ -412,8 +412,12 @@ Keep total length under 500 words. Be specific (mention actual file paths, comma
         try:
             llm = get_llm()
             # Suppress callbacks so LangGraph stream_mode doesn't capture
-            # these internal evaluation tokens as user-facing output
-            response = await llm.with_config({"callbacks": []}).ainvoke(
+            # these internal evaluation tokens as user-facing output.
+            # tags=["memory_internal"] provides an additional hint for
+            # LangGraph 1.0+ to exclude these from message streaming.
+            response = await llm.with_config(
+                {"callbacks": [], "tags": ["memory_internal"]}
+            ).ainvoke(
                 [HumanMessage(content=prompt)]
             )
             summary = _extract_text_from_content(response.content)
