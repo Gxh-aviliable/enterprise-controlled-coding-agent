@@ -35,6 +35,21 @@ def _extract_delta(content) -> str:
     return str(content) if content else ""
 
 
+def _is_internal_json(delta: str) -> bool:
+    """Check if a delta looks like internal evaluation JSON (importance, patterns).
+
+    These leak from memory/importance evaluator LLM calls that run
+    inside the LangGraph and get captured by stream_mode=['messages'].
+    """
+    stripped = delta.strip()
+    return (
+        stripped.startswith('{"importance"') or
+        stripped.startswith('[{"type"') or
+        stripped.startswith('{"importance":') or
+        stripped.startswith('{"type":')
+    )
+
+
 def _extract_content_from_message(msg) -> str:
     """Extract text content from a message object or dict."""
     if isinstance(msg, dict):
@@ -182,7 +197,9 @@ async def chat_stream(
                     msg_chunk, _ = data
                     if hasattr(msg_chunk, "content") and msg_chunk.content:
                         delta = _extract_delta(msg_chunk.content)
-                        if delta:
+                        # Filter out internal evaluation JSON (importance, patterns)
+                        # that leak from memory evaluator LLM calls inside the graph
+                        if delta and not _is_internal_json(delta):
                             yield f"data: {json.dumps({'delta': delta}, ensure_ascii=False)}\n\n"
                     # Check for tool calls in the chunk
                     if hasattr(msg_chunk, "tool_calls") and msg_chunk.tool_calls:

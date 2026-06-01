@@ -347,9 +347,7 @@ function startStream(sessionId, content, isNewSession, signal) {
       streaming.value = false
       currentTool.value = ''
       if (streamMsgRef.value) {
-        streamMsgRef.value.content += '\n\n---\n⏳ *Awaiting your confirmation...*'
         streamMsgRef.value.streaming = false
-        scrollBottom()
       }
     },
     onError: (err) => {
@@ -386,10 +384,6 @@ function approveAll() {
 
 function rejectTools() {
   if (!pendingConfirm.value) return
-  if (streamMsgRef.value) {
-    streamMsgRef.value.content += '\n\n❌ *Tool execution rejected by user*'
-    scrollBottom()
-  }
   if (pendingConfirm.value.isNewSession) {
     emit('session-created', pendingConfirm.value.session_id)
   }
@@ -406,9 +400,7 @@ function resumeAfterConfirm(approvedIds) {
   currentTool.value = ''
 
   if (streamMsgRef.value) {
-    streamMsgRef.value.content += `\n\n✅ *Proceeding with ${approvedIds.length} approved tool(s)...*`
     streamMsgRef.value.streaming = true
-    scrollBottom()
   }
 
   const signal = getAbortSignal()
@@ -460,9 +452,7 @@ function resumeAfterConfirm(approvedIds) {
       streaming.value = false
       currentTool.value = ''
       if (streamMsgRef.value) {
-        streamMsgRef.value.content += '\n\n---\n⏳ *Awaiting your confirmation...*'
         streamMsgRef.value.streaming = false
-        scrollBottom()
       }
     },
     onError: (err) => {
