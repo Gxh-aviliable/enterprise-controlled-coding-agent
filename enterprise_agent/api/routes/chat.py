@@ -161,112 +161,83 @@ async def chat_stream(
 
     async def generate():
         try:
-            # Use astream with stream_mode="updates" to support interrupt detection
-            async for update in graph.astream(
+            # Dual stream modes:
+            #   "messages" → token-level deltas from LLM (true streaming)
+            #   "updates" → node-level state updates (interrupts, tool results)
+            async for stream_event in graph.astream(
                 {
                     "session_id": session_id,
                     "user_id": user_id,
                     "messages": [{"role": "user", "content": request.content}]
                 },
                 config=config,
-                stream_mode="updates"
+                stream_mode=["messages", "updates"]
             ):
-                # Check for interrupt (from tool_confirm_node)
-                if "__interrupt__" in update:
-                    interrupt_obj = update["__interrupt__"]
-                    logging.info(f"[stream] Interrupt detected: {type(interrupt_obj)} - {interrupt_obj}")
+                # With dual modes, LangGraph yields (mode, data) tuples
+                mode, data = stream_event
 
-                    # Extract interrupt value - handle various Interrupt formats
-                    # LangGraph returns: (Interrupt(value=...),) tuple format
-                    interrupt_data = None
+                # ── Token-level streaming from LLM ──
+                if mode == "messages":
+                    # data is (AIMessageChunk, metadata) tuple
+                    msg_chunk, _ = data
+                    if hasattr(msg_chunk, "content") and msg_chunk.content:
+                        delta = _extract_delta(msg_chunk.content)
+                        if delta:
+                            yield f"data: {json.dumps({'delta': delta}, ensure_ascii=False)}\n\n"
+                    # Check for tool calls in the chunk
+                    if hasattr(msg_chunk, "tool_calls") and msg_chunk.tool_calls:
+                        for tc in msg_chunk.tool_calls:
+                            if tc.get("name"):
+                                yield f"data: {json.dumps({'event': 'tool_start', 'name': tc['name']}, ensure_ascii=False)}\n\n"
 
-                    # Debug: check what type we actually received
-                    logging.debug(f"[stream] Checking tuple: isinstance={isinstance(interrupt_obj, tuple)}, len={len(interrupt_obj) if hasattr(interrupt_obj, '__len__') else 'N/A'}")
+                # ── Node-level updates for interrupts & tool results ──
+                elif mode == "updates":
+                    # Check for interrupt (from tool_confirm_node)
+                    if "__interrupt__" in data:
+                        interrupt_obj = data["__interrupt__"]
+                        logging.info(f"[stream] Interrupt detected: {type(interrupt_obj)}")
 
-                    # Handle tuple format: (Interrupt(value=...),)
-                    if isinstance(interrupt_obj, tuple):
-                        if len(interrupt_obj) > 0:
+                        interrupt_data = None
+                        if isinstance(interrupt_obj, tuple) and len(interrupt_obj) > 0:
                             first_item = interrupt_obj[0]
-                            logging.debug(f"[stream] First item type: {type(first_item)}, hasattr value: {hasattr(first_item, 'value')}")
                             if hasattr(first_item, 'value'):
                                 interrupt_data = first_item.value
-                                logging.debug(f"[stream] Extracted value from Interrupt.value: {interrupt_data}")
                             elif isinstance(first_item, dict):
                                 interrupt_data = first_item
-                        else:
-                            interrupt_data = {}
-                    # Handle single Interrupt object
-                    elif hasattr(interrupt_obj, 'value') and not isinstance(interrupt_obj, tuple):
-                        interrupt_data = interrupt_obj.value
-                    # Handle dict format
-                    elif isinstance(interrupt_obj, dict):
-                        interrupt_data = interrupt_obj
-                    # Handle list format
-                    elif isinstance(interrupt_obj, list) and len(interrupt_obj) > 0:
-                        first_item = interrupt_obj[0]
-                        if hasattr(first_item, 'value'):
-                            interrupt_data = first_item.value
-                        else:
+                        elif hasattr(interrupt_obj, 'value') and not isinstance(interrupt_obj, tuple):
+                            interrupt_data = interrupt_obj.value
+                        elif isinstance(interrupt_obj, dict):
                             interrupt_data = interrupt_obj
-                    # Last resort: try to parse the string representation
-                    else:
-                        # If it looks like a string representation of Interrupt tuple
-                        str_repr = str(interrupt_obj)
-                        logging.warning(f"[stream] Could not extract interrupt data, raw: {str_repr[:200]}")
-                        interrupt_data = {"raw": str_repr}
+                        elif isinstance(interrupt_obj, list) and len(interrupt_obj) > 0:
+                            first_item = interrupt_obj[0]
+                            interrupt_data = first_item.value if hasattr(first_item, 'value') else interrupt_obj
+                        else:
+                            interrupt_data = {"raw": str(interrupt_obj)[:200]}
 
-                    # Ensure interrupt_data is JSON-serializable (dict or list)
-                    if not isinstance(interrupt_data, (dict, list)):
-                        logging.warning(f"[stream] interrupt_data is not dict/list: {type(interrupt_data)}, converting")
-                        interrupt_data = {"raw": str(interrupt_data)}
+                        if not isinstance(interrupt_data, (dict, list)):
+                            interrupt_data = {"raw": str(interrupt_data)}
 
-                    logging.info(f"[stream] Final interrupt_data: {interrupt_data}")
-                    yield f"data: {json.dumps({'event': 'interrupt', 'data': interrupt_data}, ensure_ascii=False)}\n\n"
-                    # After sending interrupt, the stream ends gracefully
-                    # Frontend should call /stream/resume to continue
-                    # GeneratorExit will be raised when we return, but this is normal behavior
-                    return
+                        yield f"data: {json.dumps({'event': 'interrupt', 'data': interrupt_data}, ensure_ascii=False)}\n\n"
+                        return
 
-                # Process normal node updates
-                for node_name, node_output in update.items():
-                    if node_name == "__interrupt__":
-                        continue
+                    # Process node outputs
+                    for node_name, node_output in data.items():
+                        if node_name == "__interrupt__":
+                            continue
 
-                    # Handle LLM call output
-                    if node_name == "llm_call":
-                        messages = node_output.get("messages", [])
-                        if messages:
-                            last_msg = messages[-1]
-                            content = _extract_content_from_message(last_msg)
-                            if content:
-                                yield f"data: {json.dumps({'delta': content}, ensure_ascii=False)}\n\n"
-
-                    # Handle tool executor output
-                    elif node_name == "tool_executor":
-                        tool_results = node_output.get("tool_results", {})
-                        pending_tools = node_output.get("pending_tool_calls", [])
-
-                        # Send tool_start events for pending tools
-                        for tc in pending_tools:
-                            tool_name = tc.get("name", "")
-                            yield f"data: {json.dumps({'event': 'tool_start', 'name': tool_name}, ensure_ascii=False)}\n\n"
-
-                        # Send tool results
-                        for tool_id, result in tool_results.items():
-                            result_str = str(result)
-                            if len(result_str) > 200:
-                                result_str = result_str[:200] + "..."
-                            yield f"data: {json.dumps({'event': 'tool_result', 'id': tool_id, 'result': result_str}, ensure_ascii=False)}\n\n"
-
-                    # Handle tool confirm node (when confirmation is disabled)
-                    elif node_name == "tool_confirm":
-                        # This node doesn't produce output when disabled
-                        pass
+                        # Tool executor output
+                        if node_name == "tool_executor":
+                            tool_results = node_output.get("tool_results", {})
+                            for tool_id, result in tool_results.items():
+                                result_str = str(result)
+                                if len(result_str) > 200:
+                                    result_str = result_str[:200] + "..."
+                                yield f"data: {json.dumps({'event': 'tool_result', 'id': tool_id, 'result': result_str}, ensure_ascii=False)}\n\n"
 
             yield "data: [DONE]\n\n"
         except GeneratorExit:
             logging.debug(f"[stream] Generator closed (normal for interrupt/client disconnect)")
-            return  # Do NOT yield inside GeneratorExit — causes RuntimeError
+            return
         except Exception as e:
             logging.exception("Stream error: %s", e)
             yield f"data: {json.dumps({'error': str(e)}, ensure_ascii=False)}\n\n"
@@ -306,79 +277,49 @@ async def chat_stream_resume(
         try:
             logging.info(f"[stream/resume] Session {session_id}: approved={approved}, approved_ids={approved_ids}")
 
-            # Resume execution with user's decision
-            async for update in graph.astream(
+            async for stream_event in graph.astream(
                 Command(resume={"approved": approved, "approved_ids": approved_ids or []}),
                 config=config,
-                stream_mode="updates"
+                stream_mode=["messages", "updates"]
             ):
-                # Check for another interrupt (multiple tool confirmations)
-                if "__interrupt__" in update:
-                    interrupt_obj = update["__interrupt__"]
-                    logging.info(f"[stream/resume] Another interrupt: {interrupt_obj}")
+                mode, data = stream_event
 
-                    # Extract interrupt value - handle tuple format: (Interrupt(value=...),)
-                    interrupt_data = None
+                if mode == "messages":
+                    msg_chunk, _ = data
+                    if hasattr(msg_chunk, "content") and msg_chunk.content:
+                        delta = _extract_delta(msg_chunk.content)
+                        if delta:
+                            yield f"data: {json.dumps({'delta': delta}, ensure_ascii=False)}\n\n"
+                    if hasattr(msg_chunk, "tool_calls") and msg_chunk.tool_calls:
+                        for tc in msg_chunk.tool_calls:
+                            if tc.get("name"):
+                                yield f"data: {json.dumps({'event': 'tool_start', 'name': tc['name']}, ensure_ascii=False)}\n\n"
 
-                    if isinstance(interrupt_obj, tuple):
-                        if len(interrupt_obj) > 0:
+                elif mode == "updates":
+                    if "__interrupt__" in data:
+                        interrupt_obj = data["__interrupt__"]
+                        logging.info(f"[stream/resume] Another interrupt: {interrupt_obj}")
+
+                        interrupt_data = None
+                        if isinstance(interrupt_obj, tuple) and len(interrupt_obj) > 0:
                             first_item = interrupt_obj[0]
-                            if hasattr(first_item, 'value'):
-                                interrupt_data = first_item.value
-                            elif isinstance(first_item, dict):
-                                interrupt_data = first_item
-                        else:
-                            interrupt_data = {}
-                    elif hasattr(interrupt_obj, 'value') and not isinstance(interrupt_obj, tuple):
-                        interrupt_data = interrupt_obj.value
-                    elif isinstance(interrupt_obj, dict):
-                        interrupt_data = interrupt_obj
-                    elif isinstance(interrupt_obj, list) and len(interrupt_obj) > 0:
-                        first_item = interrupt_obj[0]
-                        if hasattr(first_item, 'value'):
-                            interrupt_data = first_item.value
-                        else:
+                            interrupt_data = first_item.value if hasattr(first_item, 'value') else first_item
+                        elif hasattr(interrupt_obj, 'value') and not isinstance(interrupt_obj, tuple):
+                            interrupt_data = interrupt_obj.value
+                        elif isinstance(interrupt_obj, dict):
                             interrupt_data = interrupt_obj
+                        else:
+                            interrupt_data = {"raw": str(interrupt_obj)[:200]}
 
-                    if interrupt_data is None or not isinstance(interrupt_data, (dict, list)):
-                        interrupt_data = {"raw": str(interrupt_obj)}
-
-                    yield f"data: {json.dumps({'event': 'interrupt', 'data': interrupt_data}, ensure_ascii=False)}\n\n"
-                    return  # Wait for another confirmation
-
-                # Process normal node updates
-                for node_name, node_output in update.items():
-                    if node_name == "__interrupt__":
-                        continue
-
-                    # Handle LLM call output
-                    if node_name == "llm_call":
-                        messages = node_output.get("messages", [])
-                        if messages:
-                            last_msg = messages[-1]
-                            content = _extract_content_from_message(last_msg)
-                            if content:
-                                yield f"data: {json.dumps({'delta': content}, ensure_ascii=False)}\n\n"
-
-                    # Handle tool executor output
-                    elif node_name == "tool_executor":
-                        tool_results = node_output.get("tool_results", {})
-                        pending_tools = node_output.get("pending_tool_calls", [])
-
-                        for tc in pending_tools:
-                            tool_name = tc.get("name", "")
-                            yield f"data: {json.dumps({'event': 'tool_start', 'name': tool_name}, ensure_ascii=False)}\n\n"
-
-                        for tool_id, result in tool_results.items():
-                            result_str = str(result)
-                            if len(result_str) > 200:
-                                result_str = result_str[:200] + "..."
-                            yield f"data: {json.dumps({'event': 'tool_result', 'id': tool_id, 'result': result_str}, ensure_ascii=False)}\n\n"
+                        if not isinstance(interrupt_data, (dict, list)):
+                            interrupt_data = {"raw": str(interrupt_data)}
+                        yield f"data: {json.dumps({'event': 'interrupt', 'data': interrupt_data}, ensure_ascii=False)}\n\n"
+                        return
 
             yield "data: [DONE]\n\n"
         except GeneratorExit:
             logging.debug(f"[stream/resume] Generator closed (normal for interrupt/client disconnect)")
-            return  # Do NOT yield inside GeneratorExit — causes RuntimeError
+            return
         except Exception as e:
             logging.exception("Stream resume error: %s", e)
             yield f"data: {json.dumps({'error': str(e)}, ensure_ascii=False)}\n\n"
