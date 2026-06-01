@@ -28,7 +28,7 @@ async def list_conversation_memories(
     memory = get_long_term_memory(user_id)
 
     # Search with a broad query to get all task summaries
-    results = memory.search_conversations(
+    results = await memory.search_conversations(
         query="task summary",
         n_results=limit,
         role="task_summary",
@@ -75,7 +75,7 @@ async def list_user_patterns(
         List of pattern objects with type, key, confidence
     """
     memory = get_long_term_memory(user_id)
-    patterns = memory.get_all_patterns()
+    patterns = await memory.get_all_patterns()
 
     return {
         "user_id": user_id,
