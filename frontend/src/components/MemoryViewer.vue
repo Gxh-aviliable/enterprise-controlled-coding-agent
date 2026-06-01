@@ -26,9 +26,9 @@
           <span>Conversations will be summarized and stored here over time</span>
         </div>
         <div v-else class="memory-list">
-          <div v-for="(m, i) in memories" :key="m.id || i" class="memory-card" :class="{ deleting: deletingId === m.id }">
+          <div v-for="(m, i) in memories" :key="memUid(m, i)" class="memory-card" :class="{ deleting: deletingId === memUid(m, i) }">
             <!-- Normal view -->
-            <template v-if="confirmingId !== m.id">
+            <template v-if="confirmingId !== memUid(m, i)">
               <div class="card-header">
                 <span class="importance-stars">
                   <template v-for="s in 5" :key="s">
@@ -44,7 +44,7 @@
                 <button
                   class="btn-delete"
                   title="Delete this memory"
-                  @click.stop="confirmingId = m.id"
+                  @click.stop="confirmingId = memUid(m, i)"
                   :disabled="deletingId !== null"
                 >
                   <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="3 6 5 6 21 6"/><path d="M19 6v14a2 2 0 01-2 2H7a2 2 0 01-2-2V6m3 0V4a2 2 0 012-2h4a2 2 0 012 2v2"/><line x1="10" y1="11" x2="10" y2="17"/><line x1="14" y1="11" x2="14" y2="17"/></svg>
@@ -61,7 +61,7 @@
                 <div class="confirm-actions">
                   <button class="btn-cancel" @click="confirmingId = null" :disabled="deletingId !== null">Cancel</button>
                   <button class="btn-confirm-delete" @click="handleDelete(m.id, i)" :disabled="deletingId !== null">
-                    {{ deletingId === m.id ? 'Deleting...' : 'Delete' }}
+                    {{ deletingId === memUid(m, i) ? 'Deleting...' : 'Delete' }}
                   </button>
                 </div>
               </div>
@@ -78,16 +78,16 @@
           <span>The system learns your preferences and workflows over time</span>
         </div>
         <div v-else class="pattern-list">
-          <div v-for="(p, i) in patterns" :key="p.id || i" class="pattern-card" :class="{ deleting: deletingPatternId === p.id }">
+          <div v-for="(p, i) in patterns" :key="patUid(p, i)" class="pattern-card" :class="{ deleting: deletingPatternId === patUid(p, i) }">
             <!-- Normal view -->
-            <template v-if="confirmingPatternId !== p.id">
+            <template v-if="confirmingPatternId !== patUid(p, i)">
               <span :class="['pattern-badge', p.pattern_type]">{{ p.pattern_type }}</span>
               <span class="pattern-key">{{ p.pattern_key }}</span>
               <span class="pattern-confidence">{{ (p.confidence * 100).toFixed(0) }}% confidence</span>
               <button
                 class="btn-delete-sm"
                 title="Delete this pattern"
-                @click.stop="confirmingPatternId = p.id"
+                @click.stop="confirmingPatternId = patUid(p, i)"
                 :disabled="deletingPatternId !== null"
               >
                 <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
@@ -98,7 +98,7 @@
               <span class="confirm-text-sm">Delete this pattern?</span>
               <button class="btn-cancel-sm" @click="confirmingPatternId = null" :disabled="deletingPatternId !== null">Cancel</button>
               <button class="btn-confirm-delete-sm" @click="handleDeletePattern(p.id, i)" :disabled="deletingPatternId !== null">
-                {{ deletingPatternId === p.id ? '...' : 'Delete' }}
+                {{ deletingPatternId === patUid(p, i) ? '...' : 'Delete' }}
               </button>
             </template>
           </div>
@@ -140,6 +140,11 @@ function formatDate(iso) {
   } catch { return iso }
 }
 
+// Guaranteed-unique card identifiers. ChromaDB ids may be empty for
+// legacy data, so fall back to index to ensure each card is distinct.
+function memUid(m, i) { return m.id || `mem-${i}` }
+function patUid(p, i) { return p.id || `pat-${i}` }
+
 async function loadData() {
   loading.value = true
   error.value = ''
@@ -158,13 +163,14 @@ async function loadData() {
 }
 
 async function handleDelete(docId, index) {
+  const uid = memUid({ id: docId }, index)
   if (!docId) {
     // Fallback: if no id, remove from local state only
     memories.value.splice(index, 1)
     confirmingId.value = null
     return
   }
-  deletingId.value = docId
+  deletingId.value = uid
   try {
     await api.deleteMemory(docId)
     memories.value.splice(index, 1)
@@ -177,12 +183,13 @@ async function handleDelete(docId, index) {
 }
 
 async function handleDeletePattern(patternId, index) {
+  const uid = patUid({ id: patternId }, index)
   if (!patternId) {
     patterns.value.splice(index, 1)
     confirmingPatternId.value = null
     return
   }
-  deletingPatternId.value = patternId
+  deletingPatternId.value = uid
   try {
     await api.deletePattern(patternId)
     patterns.value.splice(index, 1)
