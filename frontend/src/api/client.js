@@ -304,6 +304,17 @@ export async function getSessionMessages(sessionId) {
   return data
 }
 
+// Stream cancellation
+export async function cancelStream(sessionId) {
+  const res = await request(
+    `/chat/stream/cancel?session_id=${encodeURIComponent(sessionId)}`,
+    { method: 'POST' }
+  )
+  const data = await res.json()
+  if (!res.ok) throw new Error(data.detail || 'Cancel failed')
+  return data
+}
+
 // Workspace API
 
 export async function fetchTree(path = '', depth = 2) {

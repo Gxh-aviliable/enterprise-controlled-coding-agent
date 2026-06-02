@@ -46,6 +46,21 @@ _suppress_mode = None
 _suppress_chunk_count = 0
 _SUPPRESS_MAX_CHUNKS = 30  # Safety timeout for summary mode
 
+# Per-session cancellation events.
+# Maps session_id -> asyncio.Event. When the event is set, the SSE generator
+# for that session stops iterating and closes the connection.
+_cancel_events: dict[str, "asyncio.Event"] = {}
+
+
+def _reset_stream_globals():
+    """Reset internal stream-level globals to prevent state leaking between sessions."""
+    global _suppress_internal, _suppress_mode, _suppress_chunk_count
+    _suppress_internal = False
+    _suppress_mode = None
+    _suppress_chunk_count = 0
+    # Also reset the JSON balance on _is_internal_json
+    _is_internal_json._json_balance = 0
+
 
 def _is_internal_json(delta: str) -> bool:
     """Check if a delta looks like internal evaluation output leaking from
@@ -312,6 +327,14 @@ async def chat_stream(
     graph = get_agent_graph()
 
     async def generate():
+        # Reset globals at stream start (defense-in-depth against stale state
+        # from a previously cancelled stream)
+        _reset_stream_globals()
+
+        # Register cancel event for this session
+        cancel_event = asyncio.Event()
+        _cancel_events[session_id] = cancel_event
+
         try:
             # Dual stream modes:
             #   "messages" → token-level deltas from LLM (true streaming)
@@ -325,6 +348,12 @@ async def chat_stream(
                 config=config,
                 stream_mode=["messages", "updates"]
             ):
+                # Check for user-requested cancellation
+                if cancel_event.is_set():
+                    logging.info(f"[stream] Session {session_id} cancelled by user")
+                    yield f"data: {json.dumps({'event': 'cancelled', 'message': 'Generation stopped by user'}, ensure_ascii=False)}\n\n"
+                    return
+
                 # With dual modes, LangGraph yields (mode, data) tuples
                 mode, data = stream_event
 
@@ -399,6 +428,10 @@ async def chat_stream(
         except Exception as e:
             logging.exception("Stream error: %s", e)
             yield f"data: {json.dumps({'error': str(e)}, ensure_ascii=False)}\n\n"
+        finally:
+            # Clean up: remove cancel event and reset suppression globals
+            _cancel_events.pop(session_id, None)
+            _reset_stream_globals()
 
     return StreamingResponse(generate(), media_type="text/event-stream")
 
@@ -432,6 +465,14 @@ async def chat_stream_resume(
     graph = get_agent_graph()
 
     async def generate():
+        # Reset globals at stream start
+        _reset_stream_globals()
+
+        # Register cancel event for this session (reuse same registry keyed by session_id;
+        # if the original stream was cancelled, this overwrites the old event)
+        cancel_event = asyncio.Event()
+        _cancel_events[session_id] = cancel_event
+
         try:
             logging.info(f"[stream/resume] Session {session_id}: approved={approved}, approved_ids={approved_ids}")
 
@@ -440,6 +481,12 @@ async def chat_stream_resume(
                 config=config,
                 stream_mode=["messages", "updates"]
             ):
+                # Check for user-requested cancellation
+                if cancel_event.is_set():
+                    logging.info(f"[stream/resume] Session {session_id} cancelled by user")
+                    yield f"data: {json.dumps({'event': 'cancelled', 'message': 'Generation stopped by user'}, ensure_ascii=False)}\n\n"
+                    return
+
                 mode, data = stream_event
 
                 if mode == "messages":
@@ -481,8 +528,105 @@ async def chat_stream_resume(
         except Exception as e:
             logging.exception("Stream resume error: %s", e)
             yield f"data: {json.dumps({'error': str(e)}, ensure_ascii=False)}\n\n"
+        finally:
+            _cancel_events.pop(session_id, None)
+            _reset_stream_globals()
 
     return StreamingResponse(generate(), media_type="text/event-stream")
+
+
+@router.post("/stream/cancel")
+async def cancel_stream(
+    session_id: str,
+    user_id: int = Depends(get_current_user)
+):
+    """Cancel an in-progress SSE stream for a session.
+
+    Sets the cancel event to stop the SSE generator. Also handles the
+    case where the graph is paused at a tool confirmation interrupt by
+    resuming with a rejection (fire-and-forget), so the graph completes
+    cleanly instead of staying in an interrupted state.
+
+    Args:
+        session_id: Session/thread ID to cancel
+        user_id: Current user ID from JWT
+
+    Returns:
+        Status indicating cancellation was requested
+    """
+    set_current_user_id(user_id)
+
+    # 1. Signal the running SSE generator to stop
+    cancel_event = _cancel_events.get(session_id)
+    if cancel_event:
+        cancel_event.set()
+        logging.info(f"[cancel] Cancel event set for session {session_id}")
+    else:
+        logging.info(f"[cancel] No active stream for session {session_id}")
+
+    # 2. Handle pending interrupts (tool confirmation paused state).
+    #    If the graph is mid-interrupt, resume with rejection to cleanly
+    #    close out the interrupt so the graph reaches END. Fire-and-forget
+    #    so the HTTP response returns immediately.
+    config = {"configurable": {"thread_id": session_id}}
+    graph = get_agent_graph()
+
+    try:
+        state = await graph.aget_state(config)
+
+        has_interrupts = False
+        if state and state.tasks:
+            for task in state.tasks:
+                if task.interrupts:
+                    has_interrupts = True
+                    logging.info(
+                        f"[cancel] Pending interrupt found for session {session_id}, "
+                        f"resuming with rejection"
+                    )
+                    break
+
+        if has_interrupts:
+            # Resume with rejection — fire-and-forget.
+            # The graph will execute tool_confirm_node (reject all),
+            # run save_memory, and end. This cleans up the interrupt state.
+            task = asyncio.create_task(
+                graph.ainvoke(
+                    Command(resume={"approved": False, "approved_ids": []}),
+                    config
+                )
+            )
+            # Suppress "Task exception was never retrieved" warning by
+            # adding a done callback that logs any exception
+            task.add_done_callback(
+                lambda t: logging.warning(f"[cancel] Rejection resume failed: {t.exception()}")
+                if t.exception() else None
+            )
+            logging.info(f"[cancel] Fire-and-forget rejection resume started for {session_id}")
+        else:
+            # No interrupt — belt-and-suspenders: clear transient state fields
+            # in the checkpoint. init_context_node does this on the next message
+            # anyway, but this keeps the checkpoint clean immediately.
+            try:
+                await graph.aupdate_state(
+                    config,
+                    {
+                        "pending_tool_calls": [],
+                        "should_end": True,
+                        "tool_results": {},
+                    }
+                )
+                logging.info(f"[cancel] Checkpoint cleaned for session {session_id}")
+            except Exception as e:
+                logging.warning(f"[cancel] aupdate_state failed (non-fatal): {e}")
+
+    except Exception as e:
+        logging.warning(f"[cancel] State check failed (non-fatal): {e}")
+
+    return {
+        "status": "cancelled",
+        "session_id": session_id,
+        "message": "Stream cancellation requested"
+    }
 
 
 # Session management routes

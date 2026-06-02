@@ -9,7 +9,18 @@
           </svg>
           {{ activeId ? activeId.slice(0, 8) : 'New conversation' }}
         </span>
-        <span v-if="streaming" class="status-badge streaming">
+        <button
+          v-if="streaming && !pendingConfirm"
+          class="btn-stop-generation"
+          @click="stopGeneration"
+          title="Stop generation"
+        >
+          <svg width="12" height="12" viewBox="0 0 24 24" fill="currentColor">
+            <rect x="4" y="4" width="16" height="16" rx="2"/>
+          </svg>
+          Stop
+        </button>
+        <span v-else-if="streaming && pendingConfirm" class="status-badge streaming">
           <span class="pulse-dot"></span>
           Generating
         </span>
@@ -163,7 +174,7 @@
 </template>
 
 <script setup>
-import { ref, watch, nextTick } from 'vue'
+import { ref, watch, nextTick, onMounted, onUnmounted } from 'vue'
 import * as api from '../api/client.js'
 import ToolCallCard from './ToolCallCard.vue'
 
@@ -225,6 +236,49 @@ function getAbortSignal() {
   }
   abortController.value = new AbortController()
   return abortController.value.signal
+}
+
+async function stopGeneration() {
+  const sid = activeId.value
+  if (!sid) return
+
+  // 1. Abort the SSE fetch immediately (stops receiving tokens)
+  if (abortController.value) {
+    abortController.value.abort()
+    abortController.value = null
+  }
+
+  // 2. Preserve partial content in the streaming message
+  if (streamMsgRef.value) {
+    streamMsgRef.value.streaming = false
+    if (streamMsgRef.value.content) {
+      streamMsgRef.value.content += '\n\n*[Generation stopped by user]*'
+    } else {
+      streamMsgRef.value.content = '*[Generation stopped before any response was received]*'
+    }
+  }
+
+  // 3. Reset streaming state
+  streaming.value = false
+  currentTool.value = ''
+  streamMsgRef.value = null
+
+  // 4. Mark any running tool cards as cancelled
+  for (const m of messages.value) {
+    if (m.role === 'tool_call' && m.toolStatus === 'running') {
+      m.toolStatus = 'error'
+      m.toolError = 'Stopped by user'
+    }
+  }
+
+  // 5. Send cancel request to backend (fire-and-forget)
+  try {
+    await api.cancelStream(sid)
+  } catch (e) {
+    console.warn('[stop] Backend cancel request failed (non-fatal):', e)
+  }
+
+  scrollBottom()
 }
 
 function scrollBottom() {
@@ -492,6 +546,11 @@ watch(() => props.sessionId, async (newId) => {
       abortController.value.abort()
       abortController.value = null
     }
+    // Cancel the backend stream for the old session (fire-and-forget)
+    const oldId = activeId.value
+    if (oldId) {
+      api.cancelStream(oldId).catch(() => {})
+    }
     activeId.value = newId
     streaming.value = false
     currentTool.value = ''
@@ -517,6 +576,29 @@ watch(() => props.sessionId, async (newId) => {
       messages.value = []
     }
   }
+})
+
+// Best-effort cancellation on tab close / refresh.
+// Uses sendBeacon because the browser may cancel in-flight fetch requests
+// during page unload. Not all browsers send Authorization headers with
+// sendBeacon, so this is best-effort — the 24h TTL on Redis handles
+// cleanup if the beacon fails.
+const _handleBeforeUnload = () => {
+  if (activeId.value && streaming.value) {
+    const BASE = import.meta.env.VITE_API_BASE || '/api'
+    // sendBeacon with no body — session_id is in the query param
+    navigator.sendBeacon(
+      `${BASE}/chat/stream/cancel?session_id=${encodeURIComponent(activeId.value)}`
+    )
+  }
+}
+
+onMounted(() => {
+  window.addEventListener('beforeunload', _handleBeforeUnload)
+})
+
+onUnmounted(() => {
+  window.removeEventListener('beforeunload', _handleBeforeUnload)
 })
 </script>
 
@@ -614,6 +696,28 @@ watch(() => props.sessionId, async (newId) => {
 .btn-header:hover {
   background: var(--bg-hover);
   color: var(--text-primary);
+}
+
+/* Stop generation button */
+.btn-stop-generation {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  font-size: var(--text-xs);
+  font-weight: 600;
+  padding: 4px 12px;
+  border-radius: 20px;
+  border: 1px solid #fca5a5;
+  background: #fef2f2;
+  color: #dc2626;
+  cursor: pointer;
+  transition: all var(--transition);
+  font-family: var(--font-ui);
+}
+
+.btn-stop-generation:hover {
+  background: #fee2e2;
+  border-color: #f87171;
 }
 
 /* Messages */
