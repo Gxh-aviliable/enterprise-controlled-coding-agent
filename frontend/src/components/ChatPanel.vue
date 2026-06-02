@@ -9,18 +9,7 @@
           </svg>
           {{ activeId ? activeId.slice(0, 8) : 'New conversation' }}
         </span>
-        <button
-          v-if="streaming && !pendingConfirm"
-          class="btn-stop-generation"
-          @click="stopGeneration"
-          title="Stop generation"
-        >
-          <svg width="12" height="12" viewBox="0 0 24 24" fill="currentColor">
-            <rect x="4" y="4" width="16" height="16" rx="2"/>
-          </svg>
-          Stop
-        </button>
-        <span v-else-if="streaming && pendingConfirm" class="status-badge streaming">
+        <span v-if="streaming" class="status-badge streaming">
           <span class="pulse-dot"></span>
           Generating
         </span>
@@ -154,7 +143,20 @@
           rows="1"
           @input="autoResize"
         ></textarea>
+        <!-- Stop button (shown during generation, hidden during tool confirmation) -->
         <button
+          v-if="streaming && !pendingConfirm"
+          @click="stopGeneration"
+          class="btn-send btn-stop"
+          title="Stop generation"
+        >
+          <svg width="18" height="18" viewBox="0 0 24 24" fill="currentColor">
+            <rect x="6" y="6" width="12" height="12" rx="1.5"/>
+          </svg>
+        </button>
+        <!-- Send button (shown when idle or during tool confirmation) -->
+        <button
+          v-else
           @click="send"
           :disabled="streaming || pendingConfirm || !input.trim()"
           class="btn-send"
@@ -698,26 +700,15 @@ onUnmounted(() => {
   color: var(--text-primary);
 }
 
-/* Stop generation button */
-.btn-stop-generation {
-  display: flex;
-  align-items: center;
-  gap: 5px;
-  font-size: var(--text-xs);
-  font-weight: 600;
-  padding: 4px 12px;
-  border-radius: 20px;
-  border: 1px solid #fca5a5;
-  background: #fef2f2;
-  color: #dc2626;
-  cursor: pointer;
-  transition: all var(--transition);
-  font-family: var(--font-ui);
+/* Stop button — same shape as send, red background */
+.btn-send.btn-stop {
+  background: #ef4444;
+  color: white;
 }
 
-.btn-stop-generation:hover {
-  background: #fee2e2;
-  border-color: #f87171;
+.btn-send.btn-stop:hover {
+  background: #dc2626;
+  transform: translateY(-1px);
 }
 
 /* Messages */
