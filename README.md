@@ -1,25 +1,91 @@
-# Mini Claude Code — Enterprise Agent System
+# Mini Claude Code — Enterprise Controlled Engineering Agent
 
-企业级多用户 AI Agent 系统，基于 LangGraph + FastAPI + Vue 3 构建。
+面向企业内网部署的受控工程 Agent 平台。它不是要和 Claude Code、Codex、Cursor 在个人本机体验上正面竞争，而是把 AI 编程能力放进企业可治理的服务器环境中：代码不出内网，Agent 只在受控 workspace 中操作，敏感工具可审批，文件访问可隔离，长期项目知识可沉淀。
+
+## 产品定位
+
+企业内部往往不希望开发者在个人电脑上安装高权限 Agent，或把私有代码直接交给外部 SaaS。这个项目的目标是提供一个可部署在公司内网的工程 Agent 工作台：
+
+- 开发者通过浏览器使用 Agent，不需要在个人电脑授予高权限。
+- Agent 在服务器上的隔离 workspace 中读写代码、运行命令、查看文件、总结任务。
+- 平台负责用户认证、权限边界、工具确认、会话管理、项目记忆和审计基础。
+- 企业可以接入 DeepSeek、Qwen、GLM、OpenAI-compatible 或私有模型 endpoint。
+
+一句话：
+
+```text
+一个部署在企业内网的安全工程 Agent 平台，让开发者在浏览器里让 Agent 受控地阅读、修改、测试和总结代码。
+```
+
+## 适用场景
+
+- 企业内网代码助手：在公司服务器上统一部署 Agent，不把代码散落到个人本机插件。
+- 受控代码修改：限制 Agent 只能访问当前用户或项目 workspace。
+- 内部项目知识沉淀：保存项目约定、架构决策、问题排查记录和任务摘要。
+- 安全工具执行：对 shell、文件写入、删除、子 Agent 等敏感操作进行确认和策略控制。
+- 多用户工程工作台：每个用户独立 workspace，文件树、会话、长期记忆按用户隔离。
+- 私有模型适配：支持多种 LLM provider 和企业自建 OpenAI-compatible 服务。
+
+## 核心能力
+
+### 1. 受控工程 Workspace
+
+- 用户 workspace 隔离：`/workspaces/user_<id>` 或自定义服务器路径。
+- 所有文件 API 和 Agent 文件工具都通过 workspace 路径解析，防止路径穿越。
+- 支持文件树、文件阅读、上传下载、移动、删除和目录创建。
+- 支持本地 VS Code / Web VSCode 打开当前用户 workspace。
+- 自动为用户 workspace 初始化安全的 `.vscode/settings.json`，避免编辑器插件误读全局配置。
+
+### 2. 有状态 Code Agent
+
+- 基于 LangGraph StateGraph 构建有状态工程 Agent。
+- RedisSaver 按 `session_id/thread_id` 持久化会话状态。
+- SSE 逐 token 流式响应，支持中断、取消和恢复。
+- 支持文件读写、shell、任务管理、上下文压缩、子 Agent、团队协作等工具。
+- 支持 Todo 跟踪和后台任务，适合多步骤工程任务。
+
+### 3. 企业安全与治理基础
+
+- JWT 认证，邮箱登录，刷新 token。
+- 忘记密码流程，开发模式下验证码写入后端日志，可配置 SMTP 邮箱发送。
+- 敏感工具人工确认：shell、写文件、编辑文件、任务创建、子 Agent 等可走确认流。
+- Shell 命令黑名单和破坏性操作检测。
+- 前端 Markdown 渲染使用 DOMPurify 做 XSS 清理。
+- 会话和文件访问按用户隔离。
+
+### 4. 企业项目记忆
+
+当前长期记忆基于 ChromaDB，支持任务摘要、用户模式和语义检索。后续定位会从普通聊天记忆升级为企业工程记忆：
+
+- 用户偏好：编辑器、开发习惯、确认偏好。
+- 项目事实：启动方式、目录约定、架构决策、常见故障。
+- 任务摘要：完成了什么修改、涉及哪些文件、验证结果。
+- 检索增强：Agent 可用 `search_memory` 查询过去任务和项目知识。
+
+### 5. 多模型与内网部署
+
+- 支持 Anthropic、DeepSeek、GLM、OpenAI、MiMo 等 provider。
+- 支持 `LLM_BASE_URL` 配置企业内网或私有模型 endpoint。
+- Chroma embedding 使用本地 sentence-transformers，可脱离外部 embedding API。
+- MySQL / Redis / Chroma 可部署在内网环境。
 
 ## 技术栈
 
 | 层 | 技术 |
 |---|------|
-| Agent 引擎 | LangGraph StateGraph + LangChain（有状态工作流、Checkpointer 持久化） |
-| API | FastAPI（异步）+ SSE 逐 token 流式响应 + JWT 认证 |
-| 前端 | Vue 3 + Vite + highlight.js + marked + DOMPurify |
-| 短期记忆 | Redis（会话状态、分布式锁、LangGraph RedisSaver checkpointer） |
-| 长期记忆 | Chroma 向量数据库（语义搜索、重要性评估、衰减清理） |
-| 数据库 | MySQL（用户认证、会话管理） |
-| LLM | DeepSeek / Anthropic / GLM / OpenAI / MiMo — 5 个 Provider |
-| 可观测性 | LangSmith tracing（可选） |
+| Agent 引擎 | LangGraph StateGraph + LangChain |
+| API | FastAPI + SSE + JWT |
+| 前端 | Vue 3 + Vite + marked + DOMPurify + highlight.js |
+| 会话状态 | Redis + LangGraph RedisSaver |
+| 长期记忆 | ChromaDB + sentence-transformers |
+| 认证/会话 | MySQL + SQLAlchemy async |
+| 模型接入 | DeepSeek / Anthropic / GLM / OpenAI / MiMo / OpenAI-compatible |
 | 部署 | Docker Compose |
 
 ## 快速启动
 
 ```bash
-# 1. 克隆项目（默认 develop 分支）
+# 1. 克隆项目
 git clone https://github.com/Gxh-aviliable/my_mini_claude_code.git
 cd my_mini_claude_code
 git checkout develop
@@ -33,220 +99,148 @@ cd frontend && npm install && cd ..
 
 # 4. 配置环境变量
 cp .env.example .env
-# 编辑 .env：填入 LLM_API_KEY、JWT_SECRET_KEY
+# 编辑 .env：填入 LLM_API_KEY、JWT_SECRET_KEY、数据库密码等
 
-# 5. 启动后端（端口 8000）
+# 5. 启动后端
 uv run uvicorn enterprise_agent.api.main:app --reload
 
-# 6. 启动前端（端口 3000，新终端）
+# 6. 启动前端
 cd frontend && npm run dev
 
-# 访问: http://localhost:3000
+# 访问 http://localhost:3000
 ```
 
-## 项目结构
-
-```
-my_mini_claude_code/
-├── enterprise_agent/              # Python 后端包
-│   ├── api/                       # FastAPI 路由 + 中间件
-│   │   ├── main.py                # 应用入口、lifespan、CORS、health 检查
-│   │   ├── middleware/auth.py     # JWT Bearer 认证依赖
-│   │   ├── routes/
-│   │   │   ├── auth.py            # /auth/* (register, login, refresh)
-│   │   │   ├── chat.py            # /chat/* (stream/resume/confirm) + /sessions/* (CRUD + 消息历史)
-│   │   │   └── workspace.py       # /workspace/* (文件树、读写、上传下载)
-│   │   └── schemas/               # Pydantic 请求/响应模型
-│   ├── core/agent/                # LangGraph Agent 核心
-│   │   ├── graph.py               # StateGraph + AsyncRedisSaver checkpointer
-│   │   ├── state.py               # AgentState TypedDict
-│   │   ├── nodes.py               # 图节点 (llm_call, tool_executor, compress, etc.)
-│   │   ├── context.py             # 上下文压缩 (TranscriptManager, TokenEstimator)
-│   │   ├── llm_factory.py         # 多 LLM Provider 工厂
-│   │   └── tools/                 # Agent 工具集
-│   │       ├── __init__.py        # ALL_TOOLS 注册 + 权限过滤
-│   │       ├── shell.py           # bash 命令（安全黑名单）
-│   │       ├── file_ops.py        # 文件读写
-│   │       ├── workspace.py       # 工作区路径解析 (ContextVar 隔离)
-│   │       ├── skills.py          # SkillLoader 多租户 Skill 系统
-│   │       ├── team.py            # 多 Agent 协作 (spawn_teammate)
-│   │       ├── subagent.py        # task() 通用子 Agent
-│   │       ├── background.py      # 后台任务管理
-│   │       └── todo.py            # Todo 管理
-│   ├── memory/                    # 三层记忆
-│   │   ├── short_term.py          # Redis 短期记忆 (24h TTL)
-│   │   ├── long_term.py           # Chroma 向量长期记忆
-│   │   ├── accumulator.py         # 记忆累积器 (20 轮 flush)
-│   │   ├── importance.py          # LLM 重要性评分
-│   │   └── decay.py               # 记忆衰减清理
-│   ├── db/                        # 数据库连接
-│   │   ├── mysql.py               # SQLAlchemy async engine
-│   │   ├── redis.py               # Redis 异步客户端
-│   │   └── chroma.py              # Chroma PersistentClient + embedding
-│   ├── models/                    # ORM 模型
-│   │   ├── session.py             # Session (id, user_id, title, status)
-│   │   └── user.py                # User (id, username, email, password_hash)
-│   └── config/settings.py         # Pydantic Settings（所有配置项）
-│
-├── frontend/                      # Vue 3 + Vite 前端
-│   ├── src/
-│   │   ├── App.vue                # 根组件（CSS 变量、暗色/亮色主题）
-│   │   ├── api/client.js          # fetch API 客户端（SSE、token 刷新锁）
-│   │   ├── stores/auth.js         # 认证状态（reactive）
-│   │   ├── composables/
-│   │   │   └── useToast.js        # Toast 通知 composable
-│   │   └── components/
-│   │       ├── LoginForm.vue       # 登录/注册
-│   │       ├── Sidebar.vue         # 侧边栏（会话列表 + 文件树）
-│   │       ├── ChatPanel.vue       # 聊天面板（SSE 流式、Markdown、Tool 确认）
-│   │       ├── FileTree.vue        # 文件树
-│   │       ├── TreeNode.vue        # 递归树节点（展开/折叠/右键菜单）
-│   │       ├── FileViewer.vue      # 文件内容查看器（语法高亮、下载）
-│   │       ├── ToolCallCard.vue    # 工具调用可视化卡片
-│   │       ├── ThemeToggle.vue     # 暗色/亮色主题切换
-│   │       ├── Toast.vue           # Toast 通知
-│   │       └── FileManager.vue     # 文件管理器（备用）
-│   └── vite.config.js             # Vite 配置（代理 /api → :8000）
-│
-├── shared_skills/                 # 全局 Skill（所有用户可见）
-│   ├── python/SKILL.md
-│   ├── langgraph/SKILL.md
-│   ├── fastapi/SKILL.md
-│   └── agent-interviewer/SKILL.md
-│
-├── tests/                         # pytest 测试（17 个 skill 测试，核心 Agent 测试）
-├── docker/                        # Dockerfile + docker-compose.yml
-└── CLAUDE.md                      # Claude Code 项目文档
-```
-
-## API 接口
-
-### 认证
-| 方法 | 路径 | 说明 |
-|------|------|------|
-| POST | `/auth/register` | 用户注册 |
-| POST | `/auth/login` | 登录获取 JWT |
-| POST | `/auth/refresh` | 刷新 Token |
-
-### 对话
-| 方法 | 路径 | 说明 |
-|------|------|------|
-| POST | `/chat/completions` | 非流式对话 |
-| POST | `/chat/stream` | 流式对话（SSE，逐 token） |
-| POST | `/chat/stream/resume` | 中断后恢复流式 |
-| POST | `/chat/confirm` | 工具确认回调 |
-
-### 会话管理
-| 方法 | 路径 | 说明 |
-|------|------|------|
-| GET | `/sessions` | 列出用户会话 |
-| POST | `/sessions` | 创建新会话（自动提取标题） |
-| GET | `/sessions/{id}/messages` | 加载会话历史消息 |
-| DELETE | `/sessions/{id}` | 删除会话 |
-
-### 工作区
-| 方法 | 路径 | 说明 |
-|------|------|------|
-| GET | `/workspace/tree` | 获取文件树 |
-| GET | `/workspace/read` | 读取文件内容 |
-| GET | `/workspace/download` | 下载单个文件 |
-| GET | `/workspace/download-zip` | 批量下载 zip |
-| POST | `/workspace/upload` | 上传文件 |
-| POST | `/workspace/mkdir` | 创建目录 |
-| PUT | `/workspace/move` | 移动/重命名 |
-| DELETE | `/workspace/delete` | 删除文件或目录 |
-
-### 系统
-| 方法 | 路径 | 说明 |
-|------|------|------|
-| GET | `/health` | 健康检查（检测 MySQL + Redis 连通性） |
-
-## 环境变量 (.env)
+## 关键配置
 
 ```bash
 # LLM
 LLM_PROVIDER=deepseek
-LLM_API_KEY=sk-xxx
+LLM_API_KEY=your-api-key
 LLM_BASE_URL=https://api.deepseek.com/anthropic
 MODEL_ID=deepseek-v4-pro
 
-# 数据库
-MYSQL_HOST=localhost
-MYSQL_USER=agent_user
-MYSQL_PASSWORD=
+# Auth
+JWT_SECRET_KEY=your-secret-key-change-in-production
 
-# JWT
-JWT_SECRET_KEY=your-secret-key-change-me
-
-# 可选
-DEBUG=true
-CORS_ORIGINS=http://localhost:3000
+# Workspace
 WORKSPACE_BASE=/workspaces
-LANGSMITH_API_KEY=     # 开启 LangSmith tracing
+FILE_OPEN_MODE=local-vscode
+VSCODE_WEB_BASE_URL=
+VSCODE_WEB_URL_TEMPLATE=
+VSCODE_WORKSPACE_PATH=/srv/workspaces
+
+# Password reset email (optional)
+SMTP_HOST=
+SMTP_PORT=465
+SMTP_USERNAME=
+SMTP_PASSWORD=
+SMTP_FROM_EMAIL=
+SMTP_USE_SSL=true
 ```
 
-## 核心特性
+## 项目结构
 
-### 1. LangGraph 有状态 Agent
-- StateGraph + `add_messages` reducer
-- `AsyncRedisSaver` checkpointer 自动持久化（TTL 24h）
-- 逐 token SSE 流式（`stream_mode=["messages", "updates"]`）
-- 人工确认中断/恢复（`interrupt()` + `Command(resume=...)`）
-- Token 阈值自动压缩（CJK 字符独立估算）
-
-### 2. 三层记忆
-- **Redis 短期**: 会话状态、分布式锁、checkpointer（TTL 24h）
-- **Chroma 长期**: 向量语义存储、重要性评估、衰减清理
-- **上下文压缩**: 自动摘要 + Transcript 备份
-
-### 3. 企业级 Skill 多租户
-- 全局 Skill（`shared_skills/`，所有用户可见）
-- 用户 Skill（`user_{id}/.skills/`，个人 DIY，覆盖全局同名）
-- System prompt 自动注入可用 Skill 列表
-- `list_skills()` / `load_skill()` / `reload_skills()` 工具
-
-### 4. 前端
-- DeepSeek 风格浅色主题 + 暗色模式切换
-- Markdown 渲染（`marked` + `DOMPurify`）+ 代码语法高亮（`highlight.js`）
-- 工具调用可视化卡片（折叠/展开，状态指示，耗时显示）
-- IDE 布局：侧边栏（会话 + 文件树）+ 右侧内容区（聊天 / 文件预览）
-- Toast 通知系统
-- Session 消息历史加载 + 自动标题提取
-
-### 5. 安全
-- JWT 认证 + Token 轮换（刷新锁防并发风暴）
-- Shell 命令黑名单 + 破坏性操作正则检测
-- 敏感工具人工确认（`ENABLE_TOOL_CONFIRMATION`）
-- XSS 防护（`DOMPurify` 白名单净化）
-- CORS 精确配置（禁止 `*` + `credentials`）
-
-### 6. 多 Agent 协作
-- `spawn_teammate()` 创建协作 Agent
-- `task(agent_type="Explore")` 委派子任务
-- `background_run()` 后台任务管理
-
-## Git 分支策略
-
-```
-main        ← 稳定版本（打 tag 发布）
-develop     ← 日常开发（默认工作分支）
-feature/*   ← 大功能分支
+```text
+my_mini_claude_code/
+├── enterprise_agent/
+│   ├── api/                       # FastAPI 路由、中间件、schemas
+│   ├── auth/                      # JWT、密码、邮件验证码
+│   ├── core/agent/                # LangGraph Agent 核心
+│   │   ├── graph.py               # StateGraph + RedisSaver
+│   │   ├── nodes.py               # LLM、工具执行、记忆保存、压缩节点
+│   │   ├── state.py               # AgentState
+│   │   └── tools/                 # 文件、shell、workspace、skills、team、memory 等工具
+│   ├── memory/                    # Chroma 长期记忆、重要性评分、衰减清理
+│   ├── db/                        # MySQL / Redis / Chroma 连接
+│   ├── models/                    # User、Session ORM 模型
+│   └── config/settings.py         # 环境变量配置
+├── frontend/                      # Vue 3 工程工作台
+├── shared_skills/                 # 企业共享技能
+├── tests/                         # pytest 测试
+├── docker/                        # Docker Compose
+└── docs/                          # 架构、计划和审计文档
 ```
 
-详见 [CLAUDE.md](CLAUDE.md)。
+## API 概览
+
+### 认证
+
+| 方法 | 路径 | 说明 |
+|------|------|------|
+| POST | `/auth/register` | 注册用户 |
+| POST | `/auth/login` | 邮箱登录 |
+| POST | `/auth/refresh` | 刷新 token |
+| POST | `/auth/forgot-password` | 请求邮箱验证码 |
+| POST | `/auth/reset-password` | 验证码重置密码 |
+
+### 对话与会话
+
+| 方法 | 路径 | 说明 |
+|------|------|------|
+| POST | `/chat/completions` | 非流式对话 |
+| POST | `/chat/stream` | SSE 流式对话 |
+| POST | `/chat/stream/resume` | 工具确认后恢复 |
+| POST | `/chat/stream/cancel` | 取消生成 |
+| GET | `/sessions/` | 列出有历史消息的会话 |
+| POST | `/sessions/` | 创建会话 |
+| GET | `/sessions/{id}/messages` | 读取会话历史 |
+| DELETE | `/sessions/{id}` | 删除会话 |
+
+### Workspace
+
+| 方法 | 路径 | 说明 |
+|------|------|------|
+| GET | `/workspace/tree` | 文件树 |
+| GET | `/workspace/read` | 读取文件 |
+| GET | `/workspace/open-url` | 打开当前用户 workspace 的 VSCode URL |
+| GET | `/workspace/download` | 下载文件 |
+| GET | `/workspace/download-zip` | 批量下载 |
+| POST | `/workspace/upload` | 上传文件 |
+| POST | `/workspace/mkdir` | 创建目录 |
+| PUT | `/workspace/move` | 移动/重命名 |
+| DELETE | `/workspace/delete` | 删除 |
+
+### Memory
+
+| 方法 | 路径 | 说明 |
+|------|------|------|
+| GET | `/memory/conversations` | 查看长期任务摘要 |
+| DELETE | `/memory/conversations/{doc_id}` | 删除记忆 |
+| GET | `/memory/patterns` | 查看用户模式 |
+| DELETE | `/memory/patterns/{pattern_id}` | 删除用户模式 |
+
+## 与 Claude Code / Codex 的差异
+
+这个项目不试图替代成熟的个人本机 Coding Agent。它的差异化是企业治理场景：
+
+| 个人 Coding Agent | 本项目定位 |
+|---|---|
+| 本机运行，权限依赖个人环境 | 服务器内网运行，权限由平台治理 |
+| 偏个人效率工具 | 偏企业受控工程工作台 |
+| 代码和工具权限分散在个人电脑 | workspace、工具、会话集中管理 |
+| 记忆偏个人上下文 | 记忆偏项目事实、团队约定、任务结果 |
+| 审计能力依赖外部平台 | 可沉淀企业内部审计与操作记录 |
+
+## 后续路线
+
+- 记忆重构：从普通会话摘要升级为 `用户画像 / 项目事实 / 任务结果` 三类工程记忆。
+- 权限策略：按角色、项目、工具类型控制 Agent 能力。
+- 审计日志：记录命令、文件变更、审批结果、任务摘要。
+- Git 集成：分支创建、diff 展示、commit、PR、代码评审。
+- CI/CD 集成：允许 Agent 在受控环境触发测试、构建、静态检查。
+- 企业知识库：接入内部文档、规范、接口文档和故障手册。
 
 ## 测试
 
 ```bash
-uv run pytest                              # 全部测试
-uv run pytest tests/core/tools/ -v         # 工具测试
-uv run pytest tests/core/tools/test_skills.py -v  # Skill 测试（17 个）
-uv run pytest --cov=enterprise_agent       # 带覆盖率
+uv run pytest
+uv run ruff check enterprise_agent tests
+cd frontend && npm run build
 ```
 
-## 当前版本: v0.2.0
+## 当前状态
 
-上次提交: `d746c42` — FileViewer scroll fix
+项目仍处于面试/原型向企业工程平台演进阶段。核心 Agent、认证、workspace、记忆、文件管理、VSCode 打开、忘记密码开发模式和多用户隔离已经具备基础实现，后续重点是权限策略、审计和工程记忆质量。
 
 ## License
 

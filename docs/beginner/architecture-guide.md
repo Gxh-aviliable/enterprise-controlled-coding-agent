@@ -1,6 +1,17 @@
-# Enterprise Agent System 架构详解
+# Enterprise Controlled Engineering Agent 架构详解
 
-本文档详细介绍了从 `mini_claude_code.py` 重构到企业级 Agent 系统的完整架构。
+本文档详细介绍了从 `mini_claude_code.py` 演进到“企业内网部署的受控工程 Agent 平台”的完整架构。
+
+## 0. 产品边界
+
+本项目偏向 **Code Agent / Engineering Agent**，但重点不是和 Claude Code、Codex、Cursor 争夺个人本机编码体验，而是服务企业内部的受控部署场景：
+
+- Agent 运行在公司服务器或内网环境中，而不是散落在个人电脑。
+- 文件、Shell、VSCode 打开和长期记忆都围绕用户 workspace 隔离。
+- 敏感工具执行可以通过 human-in-the-loop 确认。
+- 后续可以扩展审计日志、权限策略、Git/CI 集成和项目知识库。
+
+因此，架构优先级是：安全边界、可治理性、多用户隔离、工程任务闭环、项目知识沉淀。
 
 ---
 
@@ -8,7 +19,7 @@
 
 ```
 ┌──────────────────────────────────────────────────────────────────────────────┐
-│                           Enterprise Agent System                             │
+│                  Enterprise Controlled Engineering Agent                       │
 │                                                                              │
 │  ┌─────────────────────────────────────────────────────────────────────┐    │
 │  │                         API Layer (FastAPI)                          │    │

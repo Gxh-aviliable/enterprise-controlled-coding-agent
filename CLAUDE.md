@@ -1,6 +1,18 @@
-# Mini Claude Code — Enterprise Agent System
+# Mini Claude Code — Enterprise Controlled Engineering Agent
 
-基于 LangGraph + FastAPI + Vue 3 构建的多用户 AI Agent 系统。
+面向企业内网部署的受控工程 Agent 平台。项目的核心定位不是通用聊天 Agent，也不是个人本机 Coding Agent 的替代品，而是把 AI 编程能力部署在企业服务器侧，通过用户认证、workspace 隔离、工具确认、会话管理和项目记忆，为企业内部研发团队提供可治理的工程 Agent 工作台。
+
+## 产品定位
+
+```text
+企业内网部署 + 受控 workspace + 工具权限治理 + 项目知识沉淀
+```
+
+设计目标：
+- 让开发者通过浏览器使用 Agent，不需要在个人电脑安装高权限工具。
+- 让 Agent 只在当前用户或项目 workspace 中读写文件、运行命令和查看代码。
+- 让企业可以接入内网模型或私有 OpenAI-compatible endpoint。
+- 为后续权限策略、审计日志、Git/CI 集成和企业项目记忆留下清晰边界。
 
 ## Git 分支策略
 
