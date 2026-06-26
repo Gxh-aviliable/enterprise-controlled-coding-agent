@@ -56,6 +56,16 @@ class Settings(BaseSettings):
     ACCESS_TOKEN_EXPIRE_MINUTES: int = 30
     REFRESH_TOKEN_EXPIRE_DAYS: int = 7
 
+    # Password reset email (optional; logs code when SMTP is not configured)
+    SMTP_HOST: str = ""
+    SMTP_PORT: int = 465
+    SMTP_USERNAME: str = ""
+    SMTP_PASSWORD: str = ""
+    SMTP_FROM_EMAIL: str = ""
+    SMTP_USE_SSL: bool = True
+    PASSWORD_RESET_CODE_TTL_SECONDS: int = 600
+    PASSWORD_RESET_CODE_LENGTH: int = 6
+
     # LLM Provider Configuration
     # Supported: "anthropic" | "glm" | "deepseek" | "openai" | "mimo"
     # DeepSeek supports both OpenAI-compatible (/v1) and Anthropic-compatible (/anthropic) endpoints
@@ -117,8 +127,22 @@ class Settings(BaseSettings):
     # Human-in-the-loop confirmation (sensitive tool execution)
     # SSE + interrupt integration now supported via astream(stream_mode="updates")
     ENABLE_TOOL_CONFIRMATION: bool = True  # Enable tool confirmation with SSE interrupt support
-    SENSITIVE_TOOLS_LIST: list[str] = ["bash", "write_file", "edit_file", "task_create", "spawn_teammate", "send_message", "broadcast"]  # Tools requiring confirmation
+    SENSITIVE_TOOLS_LIST: list[str] = [
+        "bash",
+        "write_file",
+        "edit_file",
+        "task_create",
+        "spawn_teammate",
+        "send_message",
+        "broadcast",
+    ]  # Tools requiring confirmation
     CONFIRMATION_TIMEOUT_SECONDS: int = 300  # Timeout for user confirmation (5 minutes)
+
+    # Workspace file opening
+    FILE_OPEN_MODE: str = "local-vscode"  # "local-vscode" or "web-vscode"
+    VSCODE_WEB_BASE_URL: str = ""
+    VSCODE_WEB_URL_TEMPLATE: str = ""
+    VSCODE_WORKSPACE_PATH: str = ""
 
     model_config = {
         "env_file": str(Path(__file__).resolve().parent.parent.parent / ".env"),

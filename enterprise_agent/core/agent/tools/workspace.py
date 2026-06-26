@@ -4,6 +4,7 @@ Provides per-user workspace directories to ensure different users
 have isolated file systems.
 """
 
+import json
 import os
 from contextvars import ContextVar
 from pathlib import Path
@@ -16,6 +17,53 @@ _current_session_id: ContextVar[str] = ContextVar('current_session_id', default=
 
 # Base workspace directory
 WORKSPACE_BASE = Path(os.environ.get("WORKSPACE_BASE", "/workspaces"))
+
+DEFAULT_VSCODE_SETTINGS = {
+    "ruff.enable": False,
+    "ruff.lint.args": [],
+    "ruff.format.args": [],
+    "ruff.configuration": None,
+    "python.analysis.autoSearchPaths": False,
+    "python.analysis.useLibraryCodeForTypes": False,
+    "files.exclude": {
+        "**/.agent_internal": True,
+    },
+}
+
+
+def _ensure_vscode_settings(workspace: Path) -> None:
+    """Create or repair safe default VSCode settings for a user workspace."""
+    settings_path = workspace / ".vscode" / "settings.json"
+    existing: dict = {}
+
+    if settings_path.exists():
+        try:
+            loaded = json.loads(settings_path.read_text(encoding="utf-8"))
+            if isinstance(loaded, dict):
+                existing = loaded
+        except json.JSONDecodeError:
+            existing = {}
+
+    merged = dict(existing)
+    file_excludes = merged.get("files.exclude")
+    if not isinstance(file_excludes, dict):
+        file_excludes = {}
+
+    for key, value in DEFAULT_VSCODE_SETTINGS.items():
+        if key == "files.exclude":
+            continue
+        merged[key] = value
+    merged["files.exclude"] = {
+        **file_excludes,
+        **DEFAULT_VSCODE_SETTINGS["files.exclude"],
+    }
+
+    if merged != existing:
+        settings_path.parent.mkdir(parents=True, exist_ok=True)
+        settings_path.write_text(
+            json.dumps(merged, ensure_ascii=False, indent=2) + "\n",
+            encoding="utf-8",
+        )
 
 
 def set_current_user_id(user_id: int) -> None:
@@ -76,6 +124,7 @@ def get_user_workspace(user_id: int = None) -> Path:
 
     # Create workspace if it doesn't exist
     workspace.mkdir(parents=True, exist_ok=True)
+    _ensure_vscode_settings(workspace)
     return workspace
 
 

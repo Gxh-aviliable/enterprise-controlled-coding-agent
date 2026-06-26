@@ -2,24 +2,22 @@ import logging
 import os
 from contextlib import asynccontextmanager
 
-from sqlalchemy import text
-
-logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(name)s: %(message)s")
-
 from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
+from sqlalchemy import text
 
 from enterprise_agent.api.routes.auth import router as auth_router
 from enterprise_agent.api.routes.chat import router as chat_router
 from enterprise_agent.api.routes.chat import sessions_router
-from enterprise_agent.api.routes.workspace import router as workspace_router
 from enterprise_agent.api.routes.memory import router as memory_router
+from enterprise_agent.api.routes.workspace import router as workspace_router
 from enterprise_agent.config.settings import settings
 from enterprise_agent.db.chroma import init_chroma
 from enterprise_agent.db.mysql import close_db, init_db
 from enterprise_agent.db.redis import close_redis
 
+logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(name)s: %(message)s")
 
 logger = logging.getLogger("enterprise_agent")
 
@@ -57,6 +55,13 @@ async def lifespan(app: FastAPI):
     yield
     # Shutdown
     logger.info("Shutting down...")
+    try:
+        from enterprise_agent.core.agent.nodes import _drain_memory_flush_tasks
+        await _drain_memory_flush_tasks()
+        logger.info("Pending memory flush tasks drained")
+    except Exception as e:
+        logger.warning("Error draining memory flush tasks: %s", e)
+
     cleanup_task.cancel()  # Stop memory cleanup task
 
     # Close Redis checkpointer connection pool
@@ -116,7 +121,6 @@ async def global_exception_handler(request: Request, exc: Exception):
 @app.get("/health")
 async def health_check():
     """Health check endpoint — verifies all dependencies"""
-    import asyncio
     from enterprise_agent.db.mysql import async_session_factory
     from enterprise_agent.db.redis import get_redis
 
@@ -134,7 +138,7 @@ async def health_check():
 
     # Check Redis
     try:
-        redis = get_redis()
+        redis = await get_redis()
         await redis.ping()
         checks["redis"] = "ok"
     except Exception as e:

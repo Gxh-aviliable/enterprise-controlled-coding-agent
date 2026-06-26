@@ -12,7 +12,7 @@ from enterprise_agent.core.agent.tools.workspace import get_user_workspace
 
 BLOCKED_PATTERNS = [
     # Destructive file operations (any path)
-    "rm -rf", "rm -r", "del /f", "del /s", "rmdir /s",
+    "rm -rf /", "rm -rf", "rm -r", "del /f", "del /s", "rmdir /s",
     # Recursive permission changes on root
     "chmod -R 777 /", "chmod -R 777 /*",
     # Privilege escalation
@@ -55,7 +55,7 @@ def validate_command(command: str) -> Optional[str]:
         cmd_lower
     )
     if destructive_on_root and not re.search(r'(?:workspace|/tmp)', cmd_lower):
-        return f"Blocked: potentially destructive operation outside workspace"
+        return "Blocked: potentially destructive operation outside workspace"
 
     # Block base binary name
     try:

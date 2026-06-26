@@ -14,6 +14,13 @@
         <span class="file-name">{{ file?.name || 'Unknown file' }}</span>
         <span v-if="file" class="file-path">{{ file.path }}</span>
       </div>
+      <button class="btn-open" @click="openInVSCode" :disabled="!file" title="Open workspace in VSCode">
+        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5">
+          <path d="M18 13v6a2 2 0 01-2 2H5a2 2 0 01-2-2V8a2 2 0 012-2h6"/>
+          <polyline points="15 3 21 3 21 9"/>
+          <line x1="10" y1="14" x2="21" y2="3"/>
+        </svg>
+      </button>
       <button class="btn-download" @click="downloadFile" :disabled="!file" title="Download">
         <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5">
           <path d="M21 15v4a2 2 0 01-2 2H5a2 2 0 01-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/>
@@ -92,6 +99,16 @@ async function downloadFile() {
   }
 }
 
+async function openInVSCode() {
+  if (!props.file) return
+  try {
+    const result = await api.fetchOpenUrl(props.file.path)
+    window.open(result.url, '_blank', 'noopener,noreferrer')
+  } catch (e) {
+    alert(e.message)
+  }
+}
+
 watch(() => props.file, loadFile, { immediate: true })
 </script>
 
@@ -157,6 +174,7 @@ watch(() => props.file, loadFile, { immediate: true })
   white-space: nowrap;
 }
 
+.btn-open,
 .btn-download {
   display: flex;
   align-items: center;
@@ -171,6 +189,7 @@ watch(() => props.file, loadFile, { immediate: true })
   transition: all var(--transition);
 }
 
+.btn-open:hover,
 .btn-download:hover {
   background: var(--bg-hover);
   color: var(--text-primary);

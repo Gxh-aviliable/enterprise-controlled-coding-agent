@@ -41,8 +41,14 @@
             <circle cx="16" cy="16" r="3" fill="#4f46e5"/>
           </svg>
         </div>
-        <h2>Mini Claude Code</h2>
-        <p>Ask anything — code, analysis, file operations, and more.</p>
+        <template v-if="activeId && emptyHistory">
+          <h2>No saved messages</h2>
+          <p>This conversation was created, but no chat history was saved.</p>
+        </template>
+        <template v-else>
+          <h2>Mini Claude Code</h2>
+          <p>Ask anything — code, analysis, file operations, and more.</p>
+        </template>
       </div>
 
       <div
@@ -224,6 +230,7 @@ const input = ref('')
 const messages = ref([])
 const streaming = ref(false)
 const currentTool = ref('')
+const emptyHistory = ref(false)
 const msgContainer = ref(null)
 const inputEl = ref(null)
 const activeId = ref(props.sessionId)
@@ -318,6 +325,7 @@ async function send() {
   })
 
   messages.value.push({ role: 'user', content })
+  emptyHistory.value = false
   scrollBottom()
 
   let sid = activeId.value
@@ -558,6 +566,7 @@ watch(() => props.sessionId, async (newId) => {
     currentTool.value = ''
     pendingConfirm.value = null
     streamMsgRef.value = null
+    emptyHistory.value = false
 
     // Load existing messages from backend, or start fresh
     if (newId) {
@@ -568,14 +577,17 @@ watch(() => props.sessionId, async (newId) => {
           content: m.content,
           streaming: false
         }))
+        emptyHistory.value = messages.value.length === 0 && data.message_count === 0
         scheduleHighlight()
         scrollBottom()
       } catch (e) {
         console.error('Failed to load session messages:', e)
         messages.value = []
+        emptyHistory.value = true
       }
     } else {
       messages.value = []
+      emptyHistory.value = false
     }
   }
 })

@@ -29,18 +29,22 @@ import json
 import logging
 import os as _os
 import platform
+from contextlib import suppress
 from pathlib import Path
 from typing import Any, Dict, List
 
 from langchain_core.messages import AIMessage, HumanMessage, SystemMessage, ToolMessage
-from langgraph.types import Command, interrupt
+from langgraph.types import interrupt
 
 from enterprise_agent.config.settings import settings
 from enterprise_agent.core.agent.context import get_context_manager
 from enterprise_agent.core.agent.llm_factory import get_llm
 from enterprise_agent.core.agent.state import AgentState
-from enterprise_agent.core.agent.tools import ALL_TOOLS, tool_requires_confirmation, get_sensitive_tool_info
-
+from enterprise_agent.core.agent.tools import (
+    ALL_TOOLS,
+    get_sensitive_tool_info,
+    tool_requires_confirmation,
+)
 
 # System prompts for different agent roles
 MAIN_SYSTEM_PROMPT = """You are an enterprise-grade AI assistant with access to powerful tools.
@@ -60,7 +64,17 @@ MAIN_SYSTEM_PROMPT = """You are an enterprise-grade AI assistant with access to 
 Before acting, check these questions. If YES, use the indicated tool:
 
 1. Simple chat? → respond directly (skip tools)
-2. **User asks about their memory/preferences/history?** → First, check <long_term_memory> in the first message — it contains pre-loaded memories. If it says "(no prior memories found)" or the user wants a complete listing, use the `search_memory` tool to actively query ChromaDB. Use a broad query like "task summary user preference workflow" to list all stored memories. **CRITICAL: ONLY `search_memory` accesses long-term memory.** Do NOT use `task_list` (it lists operational .tasks/ JSON files — NOT user memories), do NOT use `list_transcripts` (it lists compression backup transcripts — NOT user memories), and do NOT explore .tasks/, .transcripts/, .team/ with bash/file tools. These are workspace operational artifacts, completely unrelated to the user's long-term memory. The one and only tool for long-term memory is `search_memory`.
+2. **User asks about their memory/preferences/history?** → First, check <long_term_memory> in the first message.
+   It contains pre-loaded memories.
+   If it says "(no prior memories found)" or the user wants a complete listing, use the `search_memory` tool.
+   Actively query ChromaDB when needed.
+   Use a broad query like "task summary user preference workflow" to list all stored memories.
+   **CRITICAL: ONLY `search_memory` accesses long-term memory.**
+   Do NOT use `task_list` (it lists operational .tasks/ JSON files — NOT user memories), do NOT use `list_transcripts`
+   (it lists compression backup transcripts — NOT user memories).
+   Do NOT explore .tasks/, .transcripts/, .team/ with bash/file tools.
+   These are workspace operational artifacts, completely unrelated to the user's long-term memory.
+   The one and only tool for long-term memory is `search_memory`.
 3. Domain knowledge needed? → check Available Skills above first; use `load_skill(name)` if relevant
 4. Independent sub-tasks? → `spawn_teammate()` (parallel agents)
 5. Search large codebase? → `task(agent_type="Explore")`
@@ -73,7 +87,11 @@ Before acting, check these questions. If YES, use the indicated tool:
 - Use Windows commands: `dir`, `cd /d`, `python` (NOT `ls`, `pwd`, `python3`)
 - Track multi-step work with `todo_update`
 - Be concise and direct in responses
-- When asked about user's memory/preferences/profile: check <long_term_memory> block first, then use `search_memory` tool to actively query ChromaDB if needed. The ONLY tool for long-term memory is `search_memory`. Do NOT use `task_list` (operational task tracking), `list_transcripts` (compression backups), or explore .tasks/, .transcripts/, .team/ — those are workspace artifacts, NOT user memory."""
+- When asked about user's memory/preferences/profile: check <long_term_memory> block first.
+  Then use `search_memory` tool to actively query ChromaDB if needed.
+  The ONLY tool for long-term memory is `search_memory`.
+  Do NOT use `task_list` (operational task tracking), `list_transcripts`
+  (compression backups), or explore .tasks/, .transcripts/, .team/ — those are workspace artifacts, NOT user memory."""
 
 
 def _build_environment_info() -> str:
@@ -256,9 +274,9 @@ async def init_context_node(state: AgentState) -> Dict[str, Any]:
     session_id = state.get("session_id", "")
 
     # === Clear TodoManager and BackgroundManager for new sessions ===
-    from enterprise_agent.core.agent.tools.task import clear_todo_manager, get_todo_manager
-    from enterprise_agent.core.agent.tools.background import clear_background_manager
     from enterprise_agent.core.agent.context import get_context_manager
+    from enterprise_agent.core.agent.tools.background import clear_background_manager
+    from enterprise_agent.core.agent.tools.task import clear_todo_manager, get_todo_manager
 
     messages = state.get("messages", [])
     is_new_session = len(messages) == 1
@@ -295,10 +313,9 @@ async def init_context_node(state: AgentState) -> Dict[str, Any]:
         "rounds_without_todo": 0,
         "used_todo_last_round": False,
         "has_open_todos": False,
-        # Memory accumulator state
-        "memory_accumulator": {},  # Fresh accumulator for new session
-        "pending_memory_flush": False,
     }
+    if is_new_session:
+        result["memory_accumulator"] = {}  # Fresh accumulator for new session
 
     # === Chroma 长期记忆检索（仅新会话首条消息）===
     user_id = state.get("user_id")
@@ -325,7 +342,7 @@ async def init_context_node(state: AgentState) -> Dict[str, Any]:
                 # the semantic search should use a broad query to find ALL
                 # stored memories, not just those semantically similar to the
                 # question text "what's in my memory".
-                _META_MEMORY_KEYWORDS = [
+                meta_memory_keywords = [
                     # Chinese
                     "长期记忆", "记忆里", "记得什么", "记住什么", "我的记忆",
                     "我的偏好", "我的信息", "关于我", "存储了什么", "有什么记忆",
@@ -336,7 +353,7 @@ async def init_context_node(state: AgentState) -> Dict[str, Any]:
                     "what do you remember", "any memories",
                 ]
                 is_meta_memory_question = any(
-                    kw in original_content.lower() for kw in _META_MEMORY_KEYWORDS
+                    kw in original_content.lower() for kw in meta_memory_keywords
                 )
 
                 # Use broader query for meta-memory questions
@@ -462,7 +479,11 @@ async def init_context_node(state: AgentState) -> Dict[str, Any]:
                 # 重新估算 token_count（长期记忆已注入）
                 initial_token_count = ctx_mgr.estimate_tokens([new_msg])
                 result["token_count"] = initial_token_count
-                logging.info(f"[init_context] Memory injection: {'found' if context_parts else 'none'}, tokens={initial_token_count}")
+                logging.info(
+                    "[init_context] Memory injection: %s, tokens=%s",
+                    "found" if context_parts else "none",
+                    initial_token_count,
+                )
 
             except Exception:
                 logging.warning("Chroma memory search failed (non-fatal)", exc_info=True)
@@ -517,7 +538,12 @@ async def llm_call_node(state: AgentState) -> Dict[str, Any]:
     # Log: entering LLM call
     msg_count = len(lc_messages)
     total_chars = sum(len(str(m.content)) if hasattr(m, "content") else 0 for m in lc_messages)
-    logging.info(f"[llm_call] {msg_count} messages (~{total_chars} chars, ~{state.get('token_count', 0)} tokens) → invoking LLM...")
+    logging.info(
+        "[llm_call] %s messages (~%s chars, ~%s tokens) → invoking LLM...",
+        msg_count,
+        total_chars,
+        state.get("token_count", 0),
+    )
 
     # LLM call with retry on transient failures
     for attempt in range(MAX_LLM_RETRIES):
@@ -624,7 +650,7 @@ async def tool_executor_node(state: AgentState) -> Dict[str, Any]:
     Side-effect tools (write, bash, etc.) are never retried.
     """
     from enterprise_agent.core.agent.tools.task import get_todo_manager
-    from enterprise_agent.core.agent.tools.workspace import set_current_user_id, set_current_session_id
+    from enterprise_agent.core.agent.tools.workspace import set_current_session_id, set_current_user_id
 
     # Set context variables for tools to access
     session_id = state.get("session_id", "")
@@ -641,7 +667,12 @@ async def tool_executor_node(state: AgentState) -> Dict[str, Any]:
 
     pending = state.get("pending_tool_calls", [])
     tool_call_stats = state.get("tool_call_stats", {}).copy()  # mutable state: copy before modifying
-    logging.info(f"[tool_exec] Session {session_id}: executing {len(pending)} tool(s): {[tc.get('name') for tc in pending]}")
+    logging.info(
+        "[tool_exec] Session %s: executing %s tool(s): %s",
+        session_id,
+        len(pending),
+        [tc.get("name") for tc in pending],
+    )
 
     for tool_call in pending:
         tool_name = tool_call.get("name")
@@ -657,8 +688,6 @@ async def tool_executor_node(state: AgentState) -> Dict[str, Any]:
             continue
 
         tool = tool_map[tool_name]
-        last_error = None
-
         for attempt in range(MAX_TOOL_RETRIES):
             try:
                 # Invoke tool (tools may be sync or async)
@@ -689,7 +718,6 @@ async def tool_executor_node(state: AgentState) -> Dict[str, Any]:
                 logging.info(f"[tool_exec] ✓ {tool_name} ({len(result_str)} chars): {result_preview}...")
                 break
             except Exception as e:
-                last_error = e
                 if attempt < MAX_TOOL_RETRIES - 1 and _should_retry_tool(tool_name, e):
                     delay = 1.0 * (attempt + 1)
                     logging.warning(
@@ -759,6 +787,39 @@ async def _background_flush(acc, accumulator_state, session_id, user_id, message
         )
     except Exception as e:
         logging.warning(f"[save_memory] Background flush failed (non-fatal): {e}", exc_info=True)
+
+
+_memory_flush_tasks: set[asyncio.Task] = set()
+
+
+def _schedule_memory_flush(acc, accumulator_state, session_id, user_id, messages) -> None:
+    """Schedule and track a background memory flush task."""
+    task = asyncio.create_task(
+        _background_flush(acc, accumulator_state, session_id, user_id, messages)
+    )
+    _memory_flush_tasks.add(task)
+    task.add_done_callback(_memory_flush_tasks.discard)
+
+
+async def _drain_memory_flush_tasks(timeout: float = 5.0) -> None:
+    """Wait briefly for pending memory flush tasks during graceful shutdown."""
+    if not _memory_flush_tasks:
+        return
+
+    pending = list(_memory_flush_tasks)
+    try:
+        await asyncio.wait_for(
+            asyncio.gather(*pending, return_exceptions=True),
+            timeout=timeout,
+        )
+    except asyncio.TimeoutError:
+        for task in pending:
+            if not task.done():
+                task.cancel()
+        with suppress(asyncio.CancelledError):
+            await asyncio.gather(*pending, return_exceptions=True)
+    finally:
+        _memory_flush_tasks.difference_update(task for task in pending if task.done())
 
 
 async def save_memory_node(state: AgentState) -> Dict[str, Any]:
@@ -835,9 +896,7 @@ async def save_memory_node(state: AgentState) -> Dict[str, Any]:
         flush_acc_state = copy.deepcopy(accumulator_state)
         # Shallow-copy messages (background task only reads last few)
         flush_messages = list(messages) if messages else []
-        asyncio.create_task(
-            _background_flush(acc, flush_acc_state, session_id, user_id, flush_messages)
-        )
+        _schedule_memory_flush(acc, flush_acc_state, session_id, user_id, flush_messages)
         # Reset accumulator immediately — background task owns the copy
         accumulator_state = acc._new_accumulator()
 
@@ -890,7 +949,11 @@ async def compress_context_node(state: AgentState) -> Dict[str, Any]:
         compressed_msgs = compression_result["compressed_messages"]
         compressed_msgs.append({
             "role": "user",
-            "content": "<system-reminder>Context has been compressed. Continue the task immediately. Take the next concrete action using a tool — do NOT summarize or repeat what was in the compressed context.</system-reminder>"
+            "content": (
+                "<system-reminder>Context has been compressed. Continue the task immediately. "
+                "Take the next concrete action using a tool — do NOT summarize or repeat "
+                "what was in the compressed context.</system-reminder>"
+            ),
         })
 
         return {
@@ -1027,7 +1090,7 @@ async def check_background_node(state: AgentState) -> Dict[str, Any]:
     Drains completed background task results and injects into context.
     """
     from enterprise_agent.core.agent.tools.background import get_background_manager
-    from enterprise_agent.core.agent.tools.workspace import set_current_user_id, set_current_session_id
+    from enterprise_agent.core.agent.tools.workspace import set_current_session_id, set_current_user_id
 
     # Set context variables for tools to access
     session_id = state.get("session_id", "")
@@ -1138,7 +1201,11 @@ async def tool_confirm_node(state: AgentState) -> Dict[str, Any]:
     })
 
     # ========== Only executed AFTER resume (user responded) ==========
-    logging.info(f"[tool_confirm] User response received: approved={user_response.get('approved')}, approved_ids={user_response.get('approved_ids', [])}")
+    logging.info(
+        "[tool_confirm] User response received: approved=%s, approved_ids=%s",
+        user_response.get("approved"),
+        user_response.get("approved_ids", []),
+    )
 
     approved = user_response.get("approved", False)
     approved_ids = user_response.get("approved_ids", [])
@@ -1154,17 +1221,33 @@ async def tool_confirm_node(state: AgentState) -> Dict[str, Any]:
             for tc in sensitive_tools:
                 if tc.get("id") in approved_ids:
                     final_pending.append(tc)
-            logging.info(f"[tool_confirm] Partial approval: {len(final_pending)}/{len(pending)} tools proceeding (non-sensitive: {len(non_sensitive_tools)}, approved sensitive: {len(approved_ids)})")
+            logging.info(
+                "[tool_confirm] Partial approval: %s/%s tools proceeding "
+                "(non-sensitive: %s, approved sensitive: %s)",
+                len(final_pending),
+                len(pending),
+                len(non_sensitive_tools),
+                len(approved_ids),
+            )
         else:
             # Full approval (no specific IDs): add all sensitive tools
             final_pending.extend(sensitive_tools)
-            logging.info(f"[tool_confirm] Full approval: {len(final_pending)} tools proceeding (non-sensitive: {len(non_sensitive_tools)}, all sensitive approved)")
+            logging.info(
+                "[tool_confirm] Full approval: %s tools proceeding "
+                "(non-sensitive: %s, all sensitive approved)",
+                len(final_pending),
+                len(non_sensitive_tools),
+            )
 
         return {"pending_tool_calls": final_pending}
     else:
         # Rejected: clear all pending tools and inform LLM
         # API requirement: every tool_use must have a corresponding tool_result
-        logging.info(f"[tool_confirm] User rejected {len(sensitive_tools)} sensitive tools, clearing all {len(pending)} pending")
+        logging.info(
+            "[tool_confirm] User rejected %s sensitive tools, clearing all %s pending",
+            len(sensitive_tools),
+            len(pending),
+        )
 
         # Build tool_result for ALL pending tools (satisfies API requirement)
         tool_result_messages = []
@@ -1183,7 +1266,10 @@ async def tool_confirm_node(state: AgentState) -> Dict[str, Any]:
             "content": (
                 "<tool_rejected>\n"
                 f"User rejected execution of {len(sensitive_tools)} sensitive tool(s):\n"
-                + "\n".join(f"- {tc['name']}: {get_sensitive_tool_info(tc['name'], tc.get('args', {}))}" for tc in sensitive_tools)
+                + "\n".join(
+                    f"- {tc['name']}: {get_sensitive_tool_info(tc['name'], tc.get('args', {}))}"
+                    for tc in sensitive_tools
+                )
                 + "\nPlease modify your approach or ask user for clarification.\n"
                 "</tool_rejected>"
             )

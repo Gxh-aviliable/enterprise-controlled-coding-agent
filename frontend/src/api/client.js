@@ -80,14 +80,34 @@ export async function register({ username, email, password, full_name }) {
   return data
 }
 
-export async function login({ username, password }) {
+export async function login({ email, password }) {
   const res = await request('/auth/login', {
     method: 'POST',
-    body: JSON.stringify({ username, password })
+    body: JSON.stringify({ email, password })
   })
   const data = await res.json()
   if (!res.ok) throw new Error(data.detail || 'Login failed')
   setTokens(data.access_token, data.refresh_token)
+  return data
+}
+
+export async function forgotPassword({ email }) {
+  const res = await request('/auth/forgot-password', {
+    method: 'POST',
+    body: JSON.stringify({ email })
+  })
+  const data = await res.json()
+  if (!res.ok) throw new Error(data.detail || 'Failed to request reset code')
+  return data
+}
+
+export async function resetPassword({ email, code, new_password }) {
+  const res = await request('/auth/reset-password', {
+    method: 'POST',
+    body: JSON.stringify({ email, code, new_password })
+  })
+  const data = await res.json()
+  if (!res.ok) throw new Error(data.detail || 'Failed to reset password')
   return data
 }
 
@@ -341,6 +361,14 @@ export async function downloadFile(path) {
   })
   if (!res.ok) throw new Error('Download failed')
   return res.blob()
+}
+
+export async function fetchOpenUrl(path) {
+  const params = new URLSearchParams({ path })
+  const res = await request(`/workspace/open-url?${params}`)
+  const data = await res.json()
+  if (!res.ok) throw new Error(data.detail || 'Failed to build open URL')
+  return data
 }
 
 export async function downloadZip(paths, name = 'workspace') {

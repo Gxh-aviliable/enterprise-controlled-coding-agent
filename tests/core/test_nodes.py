@@ -1,17 +1,20 @@
 """Tests for nodes module (LangGraph agent nodes)."""
 
-import pytest
+import asyncio
 
 from enterprise_agent.core.agent.nodes import (
+    IDEMPOTENT_TOOLS,
     MAIN_SYSTEM_PROMPT,
+    RETRYABLE_ERROR_PATTERNS,
     _build_environment_info,
-    _extract_text,
-    _convert_to_langchain_messages,
     _convert_from_langchain_messages,
+    _convert_to_langchain_messages,
+    _drain_memory_flush_tasks,
+    _extract_text,
+    _memory_flush_tasks,
+    _schedule_memory_flush,
     route_after_llm,
     route_after_tool,
-    IDEMPOTENT_TOOLS,
-    RETRYABLE_ERROR_PATTERNS,
 )
 
 
@@ -27,21 +30,21 @@ class TestMainSystemPrompt:
         """Test that prompt has environment_info placeholder."""
         assert "{environment_info}" in MAIN_SYSTEM_PROMPT
 
-    def test_prompt_mentions_capabilities(self):
-        """Test prompt mentions capabilities."""
-        assert "Capabilities" in MAIN_SYSTEM_PROMPT
+    def test_prompt_mentions_tools(self):
+        """Test prompt mentions tool access."""
+        assert "powerful tools" in MAIN_SYSTEM_PROMPT
 
     def test_prompt_has_decision_framework(self):
         """Test prompt has decision framework section."""
         assert "Decision Framework" in MAIN_SYSTEM_PROMPT
 
-    def test_prompt_mentions_parallelism(self):
-        """Test prompt mentions parallelism."""
-        assert "PARALLELISM" in MAIN_SYSTEM_PROMPT
+    def test_prompt_mentions_parallel_tools(self):
+        """Test prompt mentions tools for parallel or delegated work."""
+        assert "spawn_teammate" in MAIN_SYSTEM_PROMPT
 
     def test_prompt_mentions_skills(self):
         """Test prompt mentions skills."""
-        assert "SKILLS" in MAIN_SYSTEM_PROMPT
+        assert "Available Skills" in MAIN_SYSTEM_PROMPT
 
     def test_prompt_is_concise(self):
         """Test prompt is concise after simplification."""
@@ -51,11 +54,14 @@ class TestMainSystemPrompt:
     def test_prompt_can_be_formatted(self):
         """Test prompt can be formatted with environment_info."""
         formatted = MAIN_SYSTEM_PROMPT.format(
-            environment_info="Test Environment"
+            environment_info="Test Environment",
+            available_skills="Test Skills",
         )
         assert "Test Environment" in formatted
+        assert "Test Skills" in formatted
         # Placeholder should be replaced
         assert "{environment_info}" not in formatted
+        assert "{available_skills}" not in formatted
 
 
 class TestBuildEnvironmentInfo:
@@ -185,7 +191,7 @@ class TestRoutingFunctions:
         state = {"pending_tool_calls": [], "round_count": 0, "token_count": 0}
         result = route_after_llm(state)
         assert result == "save_memory"
-        assert state.get("should_end_after_save") == True
+        assert "should_end_after_save" not in state
 
     def test_route_after_llm_returns_tool_call_when_has_tools(self):
         """Test route_after_llm returns 'tool_call' when has tool calls."""
@@ -207,7 +213,7 @@ class TestRoutingFunctions:
         }
         result = route_after_llm(state)
         assert result == "save_memory"
-        assert state.get("should_end_after_save") == True
+        assert "should_end_after_save" not in state
 
     def test_route_after_tool_returns_llm_call(self):
         """Test route_after_tool returns 'llm_call' normally."""
@@ -229,6 +235,34 @@ class TestRoutingFunctions:
         }
         result = route_after_tool(state)
         assert result == "end"
+
+
+class TestMemoryFlushTaskTracking:
+    """Test background memory flush task lifecycle tracking."""
+
+    def test_scheduled_memory_flush_tasks_are_drained(self, monkeypatch):
+        """Scheduled flush tasks should be tracked and drainable on shutdown."""
+        ran = False
+
+        async def fake_background_flush(*args):
+            nonlocal ran
+            await asyncio.sleep(0)
+            ran = True
+
+        monkeypatch.setattr(
+            "enterprise_agent.core.agent.nodes._background_flush",
+            fake_background_flush,
+        )
+
+        async def run():
+            _schedule_memory_flush("acc", {"user_request": "x"}, "session-1", 1, [])
+            assert len(_memory_flush_tasks) == 1
+            await _drain_memory_flush_tasks(timeout=1)
+
+        asyncio.run(run())
+
+        assert ran is True
+        assert len(_memory_flush_tasks) == 0
 
 
 class TestIdempotentTools:

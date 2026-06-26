@@ -6,6 +6,7 @@ Replaces MySQL-based long-term memory with vector-based storage.
 
 import asyncio
 import json
+import logging
 import uuid
 from datetime import datetime, timezone
 from typing import Any, Dict, List
@@ -201,6 +202,59 @@ class ChromaLongTermMemory(MemoryBase):
 
         return messages
 
+    async def list_conversations(
+        self,
+        limit: int = 50,
+        role: str = None,
+        min_importance: float = 0.0,
+    ) -> List[Dict[str, Any]]:
+        """List conversation memories for the current user.
+
+        This is used by management UIs where "show my memories" must be a
+        deterministic listing rather than a semantic nearest-neighbor search.
+        """
+        conditions = []
+        if self.user_id:
+            conditions.append({"user_id": self.user_id})
+        if role:
+            conditions.append({"role": role})
+
+        where_filter = None
+        if len(conditions) == 1:
+            where_filter = conditions[0]
+        elif len(conditions) > 1:
+            where_filter = {"$and": conditions}
+
+        results = await asyncio.to_thread(
+            self.conversations.get,
+            where=where_filter,
+            limit=limit,
+        )
+
+        memories = []
+        if results and results.get("documents"):
+            ids = results.get("ids") or []
+            metadatas = results.get("metadatas") or []
+            for i, doc in enumerate(results["documents"]):
+                meta = metadatas[i] if i < len(metadatas) else {}
+                importance = meta.get("importance", 0.0) or 0.0
+                if importance < min_importance:
+                    continue
+                memories.append({
+                    "id": ids[i] if i < len(ids) else None,
+                    "content": doc,
+                    "metadata": meta,
+                })
+
+        memories.sort(
+            key=lambda m: (
+                m["metadata"].get("importance", 0.0) or 0.0,
+                m["metadata"].get("timestamp", ""),
+            ),
+            reverse=True,
+        )
+        return memories[:limit]
+
     async def store_pattern(
         self,
         pattern_type: str,
@@ -376,7 +430,6 @@ class ChromaLongTermMemory(MemoryBase):
         Returns:
             True if deleted, False if not found or not owned by user
         """
-        import logging
         try:
             # Verify ownership: get the document first
             result = await asyncio.to_thread(
@@ -417,7 +470,6 @@ class ChromaLongTermMemory(MemoryBase):
         Returns:
             True if deleted, False if not found or not owned by user
         """
-        import logging
         try:
             # Verify ownership: get the document first
             result = await asyncio.to_thread(

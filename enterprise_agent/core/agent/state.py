@@ -43,4 +43,3 @@ class AgentState(TypedDict):
 
     # Memory accumulator (task-level storage, not per-round fragments)
     memory_accumulator: Dict[str, Any]  # 跨轮积累的任务内容（user_request, assistant_responses, tool_actions, etc.）
-    pending_memory_flush: bool  # 标记：是否需要将积累内容写入 Chroma

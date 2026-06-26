@@ -11,12 +11,19 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from enterprise_agent.api.middleware.auth import get_current_user
-from enterprise_agent.api.schemas.chat import ChatRequest, ChatResponse, ResumeRequest, SessionCreate, SessionResponse
+from enterprise_agent.api.schemas.chat import (
+    ChatRequest,
+    ChatResponse,
+    ResumeRequest,
+    SessionCreate,
+    SessionResponse,
+)
 from enterprise_agent.config.settings import settings
 from enterprise_agent.core.agent.graph import get_agent_graph
 from enterprise_agent.core.agent.tools.workspace import set_current_user_id
 from enterprise_agent.db.mysql import get_db
 from enterprise_agent.models.session import Session, SessionStatus
+
 
 def _extract_delta(content) -> str:
     """Extract plain text delta from chunk content, which may be str or list of blocks."""
@@ -33,6 +40,11 @@ def _extract_delta(content) -> str:
                 parts.append(block.text)
         return "".join(parts)
     return str(content) if content else ""
+
+
+def _sse_event(payload: dict) -> str:
+    """Serialize one SSE JSON event."""
+    return f"data: {json.dumps(payload, ensure_ascii=False)}\n\n"
 
 
 # Stateful suppression: tracks whether we're currently inside an internal
@@ -212,6 +224,57 @@ def _extract_content_from_message(msg) -> str:
     return str(msg) if msg else ""
 
 
+def _serialize_history_messages(raw_messages) -> list[dict]:
+    """Serialize checkpoint messages into frontend-visible chat messages."""
+    messages = []
+    for msg in raw_messages:
+        if hasattr(msg, "type"):
+            role = msg.type
+            logging.debug(
+                "[history] msg type=%s, content_preview=%s",
+                role,
+                str(msg.content)[:80] if msg.content else "(empty)",
+            )
+            # Skip tool results (raw JSON) and internal system prompts
+            if role in ("tool", "system"):
+                continue
+            content = _extract_content_from_message(msg)
+            if not content:
+                continue  # Skip empty messages (e.g., AI with only tool_calls)
+            if role in ("human", "user"):
+                role = "user"
+            elif role in ("ai", "assistant"):
+                role = "assistant"
+            else:
+                continue  # Unknown role — skip
+            messages.append({"role": role, "content": content})
+        elif isinstance(msg, dict):
+            role = msg.get("role", "")
+            if role in ("tool", "system"):
+                continue
+            content = _extract_content_from_message(msg)
+            if not content:
+                continue
+            messages.append({
+                "role": msg.get("role", "user"),
+                "content": content
+            })
+    return messages
+
+
+async def _load_history_messages(session_id: str, graph=None) -> list[dict]:
+    """Load frontend-visible messages from the LangGraph checkpoint."""
+    graph = graph or get_agent_graph()
+    state = await graph.aget_state({"configurable": {"thread_id": session_id}})
+
+    if not state or not state.values:
+        return []
+
+    raw_messages = state.values.get("messages", [])
+    logging.debug("[history] session=%s, raw message count=%s", session_id, len(raw_messages))
+    return _serialize_history_messages(raw_messages)
+
+
 router = APIRouter(prefix="/chat", tags=["chat"])
 
 
@@ -287,7 +350,7 @@ async def chat_completion(
                         content = "\n".join(text_parts) if text_parts else "(thinking only — no text response)"
                     else:
                         content = raw_content
-                except:
+                except Exception:
                     content = raw_content
             else:
                 content = raw_content
@@ -351,7 +414,7 @@ async def chat_stream(
                 # Check for user-requested cancellation
                 if cancel_event.is_set():
                     logging.info(f"[stream] Session {session_id} cancelled by user")
-                    yield f"data: {json.dumps({'event': 'cancelled', 'message': 'Generation stopped by user'}, ensure_ascii=False)}\n\n"
+                    yield _sse_event({"event": "cancelled", "message": "Generation stopped by user"})
                     return
 
                 # With dual modes, LangGraph yields (mode, data) tuples
@@ -371,7 +434,7 @@ async def chat_stream(
                     if hasattr(msg_chunk, "tool_calls") and msg_chunk.tool_calls:
                         for tc in msg_chunk.tool_calls:
                             if tc.get("name"):
-                                yield f"data: {json.dumps({'event': 'tool_start', 'name': tc['name']}, ensure_ascii=False)}\n\n"
+                                yield _sse_event({"event": "tool_start", "name": tc["name"]})
 
                 # ── Node-level updates for interrupts & tool results ──
                 elif mode == "updates":
@@ -400,7 +463,7 @@ async def chat_stream(
                         if not isinstance(interrupt_data, (dict, list)):
                             interrupt_data = {"raw": str(interrupt_data)}
 
-                        yield f"data: {json.dumps({'event': 'interrupt', 'data': interrupt_data}, ensure_ascii=False)}\n\n"
+                        yield _sse_event({"event": "interrupt", "data": interrupt_data})
                         return
 
                     # Process node outputs
@@ -416,14 +479,14 @@ async def chat_stream(
                                 result_str = str(result)
                                 if len(result_str) > 200:
                                     result_str = result_str[:200] + "..."
-                                yield f"data: {json.dumps({'event': 'tool_result', 'id': tool_id, 'result': result_str}, ensure_ascii=False)}\n\n"
+                                yield _sse_event({"event": "tool_result", "id": tool_id, "result": result_str})
                             # Emit tool_end for each tool so frontend can mark cards as done
                             for tc in pending_tools:
-                                yield f"data: {json.dumps({'event': 'tool_end', 'name': tc.get('name', '')}, ensure_ascii=False)}\n\n"
+                                yield _sse_event({"event": "tool_end", "name": tc.get("name", "")})
 
             yield "data: [DONE]\n\n"
         except GeneratorExit:
-            logging.debug(f"[stream] Generator closed (normal for interrupt/client disconnect)")
+            logging.debug("[stream] Generator closed (normal for interrupt/client disconnect)")
             return
         except Exception as e:
             logging.exception("Stream error: %s", e)
@@ -484,7 +547,7 @@ async def chat_stream_resume(
                 # Check for user-requested cancellation
                 if cancel_event.is_set():
                     logging.info(f"[stream/resume] Session {session_id} cancelled by user")
-                    yield f"data: {json.dumps({'event': 'cancelled', 'message': 'Generation stopped by user'}, ensure_ascii=False)}\n\n"
+                    yield _sse_event({"event": "cancelled", "message": "Generation stopped by user"})
                     return
 
                 mode, data = stream_event
@@ -498,7 +561,7 @@ async def chat_stream_resume(
                     if hasattr(msg_chunk, "tool_calls") and msg_chunk.tool_calls:
                         for tc in msg_chunk.tool_calls:
                             if tc.get("name"):
-                                yield f"data: {json.dumps({'event': 'tool_start', 'name': tc['name']}, ensure_ascii=False)}\n\n"
+                                yield _sse_event({"event": "tool_start", "name": tc["name"]})
 
                 elif mode == "updates":
                     if "__interrupt__" in data:
@@ -518,12 +581,12 @@ async def chat_stream_resume(
 
                         if not isinstance(interrupt_data, (dict, list)):
                             interrupt_data = {"raw": str(interrupt_data)}
-                        yield f"data: {json.dumps({'event': 'interrupt', 'data': interrupt_data}, ensure_ascii=False)}\n\n"
+                        yield _sse_event({"event": "interrupt", "data": interrupt_data})
                         return
 
             yield "data: [DONE]\n\n"
         except GeneratorExit:
-            logging.debug(f"[stream/resume] Generator closed (normal for interrupt/client disconnect)")
+            logging.debug("[stream/resume] Generator closed (normal for interrupt/client disconnect)")
             return
         except Exception as e:
             logging.exception("Stream resume error: %s", e)
@@ -655,16 +718,21 @@ async def list_sessions(
     )
     sessions = result.scalars().all()
 
-    return [
-        SessionResponse(
+    graph = get_agent_graph()
+    responses = []
+    for s in sessions:
+        messages = await _load_history_messages(s.id, graph)
+        if not messages:
+            continue
+        responses.append(SessionResponse(
             id=s.id,
             user_id=s.user_id,
             title=s.title,
             status=s.status.value,
-            created_at=s.created_at
-        )
-        for s in sessions
-    ]
+            created_at=s.created_at,
+            message_count=len(messages),
+        ))
+    return responses
 
 
 @sessions_router.post("/", response_model=SessionResponse)
@@ -764,49 +832,13 @@ async def get_session_messages(
     if not session:
         raise HTTPException(status_code=404, detail="Session not found")
 
-    # Load state from Redis checkpointer
-    config = {"configurable": {"thread_id": session_id}}
-    graph = get_agent_graph()
-    state = await graph.aget_state(config)
-
-    # Extract and serialize messages (skip tool results and system prompts)
-    messages = []
-    if state and state.values:
-        raw_messages = state.values.get("messages", [])
-        logging.debug(f"[history] session={session_id}, raw message count={len(raw_messages)}")
-        for msg in raw_messages:
-            if hasattr(msg, "type"):
-                role = msg.type
-                logging.debug(f"[history] msg type={role}, content_preview={str(msg.content)[:80] if msg.content else '(empty)'}")
-                # Skip tool results (raw JSON) and internal system prompts
-                if role in ("tool", "system"):
-                    continue
-                content = _extract_content_from_message(msg)
-                if not content:
-                    continue  # Skip empty messages (e.g., AI with only tool_calls)
-                if role in ("human", "user"):
-                    role = "user"
-                elif role in ("ai", "assistant"):
-                    role = "assistant"
-                else:
-                    continue  # Unknown role — skip
-                messages.append({"role": role, "content": content})
-            elif isinstance(msg, dict):
-                role = msg.get("role", "")
-                if role in ("tool", "system"):
-                    continue
-                content = _extract_content_from_message(msg)
-                if not content:
-                    continue
-                messages.append({
-                    "role": msg.get("role", "user"),
-                    "content": content
-                })
+    messages = await _load_history_messages(session_id)
 
     logging.debug(f"[history] returning {len(messages)} messages")
     return {
         "session_id": session_id,
         "title": session.title,
+        "message_count": len(messages),
         "messages": messages
     }
 
@@ -832,8 +864,6 @@ async def confirm_tool(
     Returns:
         Status indicating execution resumed
     """
-    from langgraph.types import Command
-
     set_current_user_id(user_id)
 
     config = {"configurable": {"thread_id": session_id}}
@@ -841,7 +871,7 @@ async def confirm_tool(
 
     # Resume execution with user's decision
     # The interrupt() in tool_confirm_node will receive this as user_response
-    result = await graph.invoke(
+    await graph.invoke(
         Command(resume={"approved": approved, "approved_ids": approved_ids or []}),
         config
     )

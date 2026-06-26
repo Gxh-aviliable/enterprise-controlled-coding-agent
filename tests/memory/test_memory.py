@@ -1,12 +1,8 @@
 """Tests for memory modules (long_term, short_term, importance, pattern_extractor)."""
 
-import pytest
+import asyncio
 
-# Skip all memory tests that require chromadb
-pytestmark = pytest.mark.skipif(
-    True,  # Always skip for now since chromadb may not be installed
-    reason="Requires chromadb installation"
-)
+import pytest
 
 
 class TestImportanceEvaluator:
@@ -107,3 +103,20 @@ class TestLongTermMemoryIntegration:
     async def test_search_patterns(self):
         """Test searching user patterns."""
         pass
+
+
+class TestLongTermMemoryErrorHandling:
+    """Unit tests that do not require a real ChromaDB instance."""
+
+    def test_update_access_count_logs_failure_without_reraising(self):
+        """Logging an access-count failure should not introduce a NameError."""
+        from enterprise_agent.memory.long_term import ChromaLongTermMemory
+
+        class BrokenCollection:
+            def get(self, *args, **kwargs):
+                raise RuntimeError("boom")
+
+        memory = ChromaLongTermMemory.__new__(ChromaLongTermMemory)
+        memory.conversations = BrokenCollection()
+
+        asyncio.run(memory.update_access_count("doc-1"))

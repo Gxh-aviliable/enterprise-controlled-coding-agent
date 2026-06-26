@@ -1,7 +1,5 @@
 """Tests for state module (AgentState definition)."""
 
-import pytest
-
 from enterprise_agent.core.agent.state import AgentState
 
 
@@ -31,6 +29,10 @@ class TestAgentStateDefinition:
     def test_state_has_session_id_field(self):
         """Test state has session_id field."""
         assert "session_id" in AgentState.__annotations__
+
+    def test_state_does_not_keep_unused_pending_memory_flush(self):
+        """Memory flushing is managed by the accumulator, not a stale flag."""
+        assert "pending_memory_flush" not in AgentState.__annotations__
 
 
 class TestAgentStateUsage:
@@ -79,7 +81,6 @@ class TestStateFieldTypes:
 
     def test_messages_is_list(self):
         """Test messages annotation is List type."""
-        from typing import List
         ann = AgentState.__annotations__["messages"]
         # Should be List or list type
         assert "List" in str(ann) or "list" in str(ann).lower()

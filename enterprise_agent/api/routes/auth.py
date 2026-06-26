@@ -1,10 +1,20 @@
+import secrets
 from datetime import datetime, timezone
 
 from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from enterprise_agent.api.schemas.auth import TokenRefresh, TokenResponse, UserLogin, UserRegister
+from enterprise_agent.api.schemas.auth import (
+    ForgotPasswordRequest,
+    MessageResponse,
+    ResetPasswordRequest,
+    TokenRefresh,
+    TokenResponse,
+    UserLogin,
+    UserRegister,
+)
+from enterprise_agent.auth.email import send_password_reset_code
 from enterprise_agent.auth.jwt_handler import jwt_handler
 from enterprise_agent.auth.permissions import get_role_permissions
 from enterprise_agent.config.settings import settings
@@ -13,6 +23,27 @@ from enterprise_agent.db.redis import redis_client
 from enterprise_agent.models.user import User
 
 router = APIRouter(prefix="/auth", tags=["auth"])
+
+PASSWORD_RESET_GENERIC_MESSAGE = (
+    "If the email exists, a verification code has been sent."
+)
+
+
+def _normalize_email(email: str) -> str:
+    """Normalize email for lookup and Redis key construction."""
+    return email.strip().lower()
+
+
+def _password_reset_key(email: str) -> str:
+    """Build Redis key for password reset code."""
+    return f"password_reset:{_normalize_email(email)}"
+
+
+def _generate_reset_code() -> str:
+    """Generate a zero-padded numeric reset code."""
+    digits = max(1, settings.PASSWORD_RESET_CODE_LENGTH)
+    upper_bound = 10 ** digits
+    return f"{secrets.randbelow(upper_bound):0{digits}d}"
 
 
 @router.post("/register", response_model=TokenResponse)
@@ -75,7 +106,7 @@ async def login(
     Raises:
         HTTPException: If credentials are invalid
     """
-    result = await db.execute(select(User).where(User.username == login_data.username))
+    result = await db.execute(select(User).where(User.email == _normalize_email(str(login_data.email))))
     user = result.scalar_one_or_none()
 
     if not user or not jwt_handler.verify_password(login_data.password, user.password_hash):
@@ -141,3 +172,55 @@ async def refresh_token(
     permissions = [p.value for p in get_role_permissions(role)]
 
     return jwt_handler.create_tokens(user.id, permissions)
+
+
+@router.post("/forgot-password", response_model=MessageResponse)
+async def forgot_password(
+    request: ForgotPasswordRequest,
+    db: AsyncSession = Depends(get_db),
+):
+    """Start password reset by sending/logging a verification code."""
+    normalized_email = _normalize_email(str(request.email))
+
+    result = await db.execute(
+        select(User).where(User.email == normalized_email, User.is_active == True)  # noqa: E712
+    )
+    user = result.scalar_one_or_none()
+
+    if user:
+        code = _generate_reset_code()
+        await redis_client.setex(
+            _password_reset_key(normalized_email),
+            settings.PASSWORD_RESET_CODE_TTL_SECONDS,
+            code,
+        )
+        await send_password_reset_code(user.email, code)
+
+    return MessageResponse(message=PASSWORD_RESET_GENERIC_MESSAGE)
+
+
+@router.post("/reset-password", response_model=MessageResponse)
+async def reset_password(
+    request: ResetPasswordRequest,
+    db: AsyncSession = Depends(get_db),
+):
+    """Reset password after verifying an emailed code."""
+    normalized_email = _normalize_email(str(request.email))
+    key = _password_reset_key(normalized_email)
+    expected_code = await redis_client.get(key)
+
+    if not expected_code or not secrets.compare_digest(str(expected_code), request.code):
+        raise HTTPException(status_code=400, detail="Invalid or expired verification code")
+
+    result = await db.execute(
+        select(User).where(User.email == normalized_email, User.is_active == True)  # noqa: E712
+    )
+    user = result.scalar_one_or_none()
+    if not user:
+        raise HTTPException(status_code=400, detail="Invalid or expired verification code")
+
+    user.password_hash = jwt_handler.hash_password(request.new_password)
+    await db.commit()
+    await redis_client.delete(key)
+
+    return MessageResponse(message="Password has been reset successfully.")

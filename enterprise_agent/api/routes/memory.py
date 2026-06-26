@@ -5,6 +5,7 @@ memories (task summaries) and learned user behavior patterns.
 """
 
 from fastapi import APIRouter, Depends, HTTPException, Query
+
 from enterprise_agent.api.middleware.auth import get_current_user
 from enterprise_agent.memory.long_term import get_long_term_memory
 
@@ -31,19 +32,16 @@ async def list_conversation_memories(
     """
     memory = get_long_term_memory(user_id)
 
-    # Search with a broad query to get all task summaries
-    results = await memory.search_conversations(
-        query="task summary",
-        n_results=limit,
+    results = await memory.list_conversations(
+        limit=limit,
         role="task_summary",
+        min_importance=min_importance,
     )
 
-    # Filter by importance and format response
+    # Format response
     memories = []
     for item in results:
         importance = item.get("metadata", {}).get("importance", 0)
-        if importance < min_importance:
-            continue
         memories.append({
             "id": item.get("id", ""),
             "content": item.get("content", ""),
@@ -53,9 +51,6 @@ async def list_conversation_memories(
             "rounds": item.get("metadata", {}).get("rounds", 0),
             "has_tool_actions": item.get("metadata", {}).get("has_tool_actions", False),
         })
-
-    # Sort by importance descending
-    memories.sort(key=lambda m: m["importance"], reverse=True)
 
     return {
         "user_id": user_id,

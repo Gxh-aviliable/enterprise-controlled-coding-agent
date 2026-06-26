@@ -13,7 +13,7 @@ class UserRegister(BaseModel):
 
 class UserLogin(BaseModel):
     """User login request"""
-    username: str
+    email: EmailStr
     password: str
 
 
@@ -28,3 +28,20 @@ class TokenResponse(BaseModel):
 class TokenRefresh(BaseModel):
     """Token refresh request"""
     refresh_token: str
+
+
+class ForgotPasswordRequest(BaseModel):
+    """Forgot password verification-code request."""
+    email: EmailStr
+
+
+class ResetPasswordRequest(BaseModel):
+    """Password reset request with emailed verification code."""
+    email: EmailStr
+    code: str = Field(..., min_length=6, max_length=6)
+    new_password: str = Field(..., min_length=8, max_length=100)
+
+
+class MessageResponse(BaseModel):
+    """Generic status message response."""
+    message: str

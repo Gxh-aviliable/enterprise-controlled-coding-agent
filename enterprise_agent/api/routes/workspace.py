@@ -6,21 +6,80 @@ All paths are scoped to the authenticated user's workspace via resolve_path().
 
 import io
 import logging
-import os
 import shutil
 import zipfile
 from pathlib import Path
 from typing import Optional
+from urllib.parse import quote, urlencode
 
 from fastapi import APIRouter, Depends, HTTPException, Query, UploadFile
 from fastapi.responses import FileResponse, StreamingResponse
 
 from enterprise_agent.api.middleware.auth import get_current_user
+from enterprise_agent.config.settings import settings
 from enterprise_agent.core.agent.tools.workspace import get_user_workspace, resolve_path
 
 logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/workspace", tags=["workspace"])
+
+
+def _quote_file_url_path(path: str) -> str:
+    """Quote a filesystem path for vscode://file URLs while keeping separators."""
+    return quote(path.replace("\\", "/"), safe="/:")
+
+
+def _server_workspace_path(root: Path, user_id: int) -> str:
+    """Return the server-side VSCode workspace path scoped to one user."""
+    configured = settings.VSCODE_WORKSPACE_PATH.strip().replace("\\", "/")
+    workspace_name = f"user_{user_id}"
+    if not configured:
+        return root.as_posix()
+
+    if "{" in configured:
+        return configured.format(user_id=user_id, workspace_name=workspace_name).rstrip("/")
+
+    configured = configured.rstrip("/")
+    if configured.endswith(f"/{workspace_name}") or configured == workspace_name:
+        return configured
+    return f"{configured}/{workspace_name}"
+
+
+def _build_open_url(resolved: Path, root: Path, relative_path: str, user_id: int) -> dict:
+    """Build open-in-editor URL for configured mode."""
+    mode = settings.FILE_OPEN_MODE
+    if mode == "local-vscode":
+        workspace_url = f"vscode://file/{_quote_file_url_path(str(root.resolve()))}"
+        file_url = f"vscode://file/{_quote_file_url_path(str(resolved.resolve()))}"
+        return {
+            "mode": mode,
+            "url": workspace_url,
+            "file_url": file_url,
+        }
+
+    if mode == "web-vscode":
+        workspace_path = _server_workspace_path(root, user_id).rstrip("/")
+        server_file_path = f"{workspace_path}/{relative_path.strip('/')}" if relative_path else workspace_path
+
+        if settings.VSCODE_WEB_URL_TEMPLATE:
+            return {
+                "mode": mode,
+                "url": settings.VSCODE_WEB_URL_TEMPLATE.format(
+                    path=server_file_path,
+                    workspace=workspace_path,
+                    relative_path=relative_path,
+                    user_id=user_id,
+                    workspace_name=f"user_{user_id}",
+                ),
+            }
+
+        if not settings.VSCODE_WEB_BASE_URL:
+            raise HTTPException(status_code=500, detail="VSCODE_WEB_BASE_URL is not configured")
+
+        query = urlencode({"folder": workspace_path, "file": server_file_path})
+        return {"mode": mode, "url": f"{settings.VSCODE_WEB_BASE_URL.rstrip('/')}?{query}"}
+
+    raise HTTPException(status_code=500, detail=f"Unsupported FILE_OPEN_MODE: {mode}")
 
 
 def _build_tree(root: Path, current: Path, depth: int, file_type: str) -> Optional[dict]:
@@ -132,6 +191,28 @@ async def read_file(
         "limit": limit,
         "binary": False,
     }
+
+
+@router.get("/open-url")
+async def get_open_url(
+    path: str = Query(..., description="Relative path to file"),
+    user_id: int = Depends(get_current_user),
+):
+    """Return a URL that opens the file in local or web VSCode."""
+    resolved = resolve_path(path, user_id)
+
+    if not resolved.exists():
+        raise HTTPException(status_code=404, detail=f"File not found: {path}")
+    if not resolved.is_file():
+        raise HTTPException(status_code=400, detail=f"Path is not a file: {path}")
+
+    root = get_user_workspace(user_id).resolve()
+    try:
+        relative_path = resolved.resolve().relative_to(root).as_posix()
+    except ValueError:
+        raise HTTPException(status_code=400, detail="Invalid file path")
+
+    return _build_open_url(resolved, root, relative_path, user_id)
 
 
 @router.get("/download")
@@ -281,7 +362,6 @@ async def move_item(
     dst_resolved.parent.mkdir(parents=True, exist_ok=True)
     shutil.move(str(src_resolved), str(dst_resolved))
 
-    workdir = get_user_workspace(user_id).resolve()
     return {
         "from": source,
         "to": dest,

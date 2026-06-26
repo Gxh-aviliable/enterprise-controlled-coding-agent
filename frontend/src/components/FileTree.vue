@@ -53,6 +53,7 @@
         @delete="handleDelete"
         @rename="handleRename"
         @download="handleDownload"
+        @open="handleOpen"
       />
       <div v-if="!treeChildren.length" class="tree-status">Empty workspace — drop files or click 📤 to upload</div>
     </div>
@@ -170,6 +171,15 @@ async function handleDownload(node) {
     a.click(); document.body.removeChild(a); URL.revokeObjectURL(url)
   } catch (err) {
     toast.error('Download failed: ' + (err.message || 'Unknown error'))
+  }
+}
+
+async function handleOpen(node) {
+  try {
+    const result = await api.fetchOpenUrl(node.path)
+    window.open(result.url, '_blank', 'noopener,noreferrer')
+  } catch (err) {
+    toast.error('Open failed: ' + (err.message || 'Unknown error'))
   }
 }
 

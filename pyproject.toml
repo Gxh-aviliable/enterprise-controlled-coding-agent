@@ -19,7 +19,7 @@ dependencies = [
     # Database
     "sqlalchemy[asyncio]>=2.0.0",
     "aiomysql>=0.2.0",
-    "redis[asyncio]>=5.0.0",
+    "redis>=5.0.0",
     # Auth
     "python-jose[cryptography]>=3.3.0",
     "passlib[bcrypt]>=1.7.4",
@@ -62,6 +62,8 @@ select = ["E", "F", "I", "N"]
 
 [dependency-groups]
 dev = [
+    "pytest-asyncio>=0.25.0",
     "pytest-cov>=7.1.0",
     "pytest-mock>=3.15.1",
+    "ruff>=0.1.0",
 ]
