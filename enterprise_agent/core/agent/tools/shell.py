@@ -78,7 +78,7 @@ def bash(command: str) -> str:
     UnicodeEncodeError on Windows (GBK console).
 
     Args:
-        command: Shell command to execute (Windows cmd.exe syntax)
+        command: Shell command to execute using the host OS default shell
 
     Returns:
         JSON with stdout, stderr, exit_code fields for structured parsing

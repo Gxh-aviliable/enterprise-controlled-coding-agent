@@ -84,7 +84,7 @@ Before acting, check these questions. If YES, use the indicated tool:
 
 ## Critical Rules
 - Use ACTUAL tools (spawn_teammate, task, background_run), NOT simulated Python scripts
-- Use Windows commands: `dir`, `cd /d`, `python` (NOT `ls`, `pwd`, `python3`)
+- Use the shell commands described in the Environment block for this host OS
 - Track multi-step work with `todo_update`
 - Be concise and direct in responses
 - When asked about user's memory/preferences/profile: check <long_term_memory> block first.
@@ -101,9 +101,18 @@ def _build_environment_info() -> str:
         workspace = get_user_workspace()
     except Exception:
         workspace = str(Path(_os.getcwd()))
+
+    system = platform.system()
+    if system == "Windows":
+        shell_info = "cmd.exe (Windows) — use commands like `dir`, `cd /d`, `mkdir`, `python`"
+    elif system == "Darwin":
+        shell_info = "POSIX shell (macOS) — use commands like `ls`, `pwd`, `mkdir -p`, `python3`"
+    else:
+        shell_info = "POSIX shell (Linux/Unix) — use commands like `ls`, `pwd`, `mkdir -p`, `python3`"
+
     return (
-        f"- OS: {platform.system()} ({platform.release()})\n"
-        f"- Shell: cmd.exe (Windows) — use Windows commands like `dir`, `cd /d`, `mkdir` (no -p)\n"
+        f"- OS: {system} ({platform.release()})\n"
+        f"- Shell: {shell_info}\n"
         f"- Workspace: {workspace}\n"
         f"- Python: {platform.python_version()}\n"
         f"- Encoding: utf-8 (PYTHONIOENCODING=utf-8 is auto-set for all commands)"

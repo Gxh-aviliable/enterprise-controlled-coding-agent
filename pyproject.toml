@@ -29,6 +29,7 @@ dependencies = [
     "python-dotenv>=1.0.0",
     "langgraph-checkpoint-redis>=0.4.1",
     "bcrypt<4.1",
+    "socksio>=1.0.0",
 ]
 
 [project.optional-dependencies]

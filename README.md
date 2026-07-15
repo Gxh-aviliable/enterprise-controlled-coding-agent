@@ -110,6 +110,32 @@ cd frontend && npm run dev
 # 访问 http://localhost:3000
 ```
 
+## 本地开发与服务器部署
+
+项目支持在 Windows、macOS 和 Linux 上开发，但 Agent 会根据后端实际运行系统提示模型使用对应 shell 命令：
+
+- Windows：`dir`、`cd /d`、`python`
+- macOS / Linux：`ls`、`pwd`、`mkdir -p`、`python3`
+
+macOS 本地调试建议使用项目内 workspace，避免 `/workspaces` 权限问题：
+
+```bash
+WORKSPACE_BASE=./workspaces
+FILE_OPEN_MODE=local-vscode
+VSCODE_WORKSPACE_PATH=./workspaces
+```
+
+Linux 服务器或 Docker 部署建议使用固定服务器路径，并通过 Web VSCode / code-server 打开文件：
+
+```bash
+WORKSPACE_BASE=/workspaces
+FILE_OPEN_MODE=web-vscode
+VSCODE_WEB_BASE_URL=https://code.example.com
+VSCODE_WORKSPACE_PATH=/workspaces
+```
+
+`local-vscode` 会生成 `vscode://file/...` 链接，适合浏览器和代码都在同一台开发机上的场景；远程服务器部署时应优先使用 `web-vscode`，否则用户本机 VS Code 无法直接打开服务器文件路径。
+
 ## 关键配置
 
 ```bash
@@ -123,11 +149,11 @@ MODEL_ID=deepseek-v4-pro
 JWT_SECRET_KEY=your-secret-key-change-in-production
 
 # Workspace
-WORKSPACE_BASE=/workspaces
+WORKSPACE_BASE=./workspaces
 FILE_OPEN_MODE=local-vscode
 VSCODE_WEB_BASE_URL=
 VSCODE_WEB_URL_TEMPLATE=
-VSCODE_WORKSPACE_PATH=/srv/workspaces
+VSCODE_WORKSPACE_PATH=./workspaces
 
 # Password reset email (optional)
 SMTP_HOST=

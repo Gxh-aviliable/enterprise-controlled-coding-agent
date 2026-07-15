@@ -13,7 +13,6 @@ COPY --from=ghcr.io/astral-sh/uv:latest /uv /usr/local/bin/uv
 # Copy project files
 COPY pyproject.toml uv.lock ./
 COPY enterprise_agent ./enterprise_agent
-COPY scripts ./scripts
 
 # Install dependencies with uv
 RUN uv sync --frozen --no-dev

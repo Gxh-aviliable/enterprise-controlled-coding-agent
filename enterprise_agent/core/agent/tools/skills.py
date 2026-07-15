@@ -17,7 +17,7 @@ Priority: user skill overrides global skill with the same name.
 import logging
 import re
 from pathlib import Path
-from typing import Dict, List, Optional
+from typing import Dict
 
 from langchain_core.tools import tool
 
@@ -184,7 +184,7 @@ def get_skill_loader(user_id: int = None) -> SkillLoader:
     Returns:
         SkillLoader instance for the user
     """
-    from enterprise_agent.core.agent.tools.workspace import get_current_user_id, WORKSPACE_BASE
+    from enterprise_agent.core.agent.tools.workspace import get_current_user_id, get_workspace_base
 
     if user_id is None:
         user_id = get_current_user_id()
@@ -192,7 +192,7 @@ def get_skill_loader(user_id: int = None) -> SkillLoader:
     if user_id not in _skill_loaders:
         search_dirs = [
             # User personal skills (highest priority — index 0)
-            WORKSPACE_BASE / f"user_{user_id}" / ".skills",
+            get_workspace_base() / f"user_{user_id}" / ".skills",
             # Shared global skills
             Path(settings.SHARED_SKILLS_DIR),
         ]

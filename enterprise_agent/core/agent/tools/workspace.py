@@ -15,8 +15,10 @@ _current_user_id: ContextVar[int] = ContextVar('current_user_id', default=None)
 # Context variable to store current session_id
 _current_session_id: ContextVar[str] = ContextVar('current_session_id', default=None)
 
-# Base workspace directory
-WORKSPACE_BASE = Path(os.environ.get("WORKSPACE_BASE", "/workspaces"))
+# Base workspace directory. Kept as a module-level value so tests and local
+# tooling can still monkeypatch it, while get_workspace_base() reads env/.env.
+DEFAULT_WORKSPACE_BASE = Path("/workspaces")
+WORKSPACE_BASE = DEFAULT_WORKSPACE_BASE
 
 DEFAULT_VSCODE_SETTINGS = {
     "ruff.enable": False,
@@ -102,6 +104,20 @@ def get_current_session_id() -> str:
     return _current_session_id.get()
 
 
+def get_workspace_base() -> Path:
+    """Return the effective base directory for user workspaces."""
+    env_value = os.environ.get("WORKSPACE_BASE")
+    if env_value:
+        return Path(env_value)
+
+    if WORKSPACE_BASE != DEFAULT_WORKSPACE_BASE:
+        return WORKSPACE_BASE
+
+    from enterprise_agent.config.settings import settings
+
+    return Path(settings.WORKSPACE_BASE)
+
+
 def get_user_workspace(user_id: int = None) -> Path:
     """Get the workspace directory for a user.
 
@@ -116,11 +132,12 @@ def get_user_workspace(user_id: int = None) -> Path:
     if user_id is None:
         user_id = get_current_user_id()
 
+    workspace_base = get_workspace_base()
     if user_id is None:
         # Fallback to a default workspace (for backward compatibility)
-        workspace = WORKSPACE_BASE / "default"
+        workspace = workspace_base / "default"
     else:
-        workspace = WORKSPACE_BASE / f"user_{user_id}"
+        workspace = workspace_base / f"user_{user_id}"
 
     # Create workspace if it doesn't exist
     workspace.mkdir(parents=True, exist_ok=True)
