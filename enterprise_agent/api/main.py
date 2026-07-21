@@ -11,6 +11,7 @@ from enterprise_agent.api.routes.auth import router as auth_router
 from enterprise_agent.api.routes.chat import router as chat_router
 from enterprise_agent.api.routes.chat import sessions_router
 from enterprise_agent.api.routes.memory import router as memory_router
+from enterprise_agent.api.routes.tasks import router as tasks_router
 from enterprise_agent.api.routes.workspace import router as workspace_router
 from enterprise_agent.config.settings import settings
 from enterprise_agent.db.chroma import init_chroma
@@ -26,6 +27,7 @@ logger = logging.getLogger("enterprise_agent")
 async def lifespan(app: FastAPI):
     """Application lifespan - startup and shutdown"""
     # Startup
+    settings.validate_runtime_security()
     # LangSmith tracing (optional — only enables if API key is configured)
     if settings.LANGSMITH_API_KEY:
         os.environ["LANGCHAIN_TRACING_V2"] = "true"
@@ -109,6 +111,7 @@ app.include_router(chat_router)
 app.include_router(sessions_router)
 app.include_router(workspace_router)
 app.include_router(memory_router)
+app.include_router(tasks_router)
 
 
 @app.exception_handler(Exception)
@@ -132,8 +135,9 @@ async def health_check():
         async with async_session_factory() as session:
             await session.execute(text("SELECT 1"))
         checks["mysql"] = "ok"
-    except Exception as e:
-        checks["mysql"] = f"error: {e}"
+    except Exception as exc:
+        logger.warning("MySQL health check failed: %s", type(exc).__name__)
+        checks["mysql"] = "error"
         status = "degraded"
 
     # Check Redis
@@ -141,8 +145,9 @@ async def health_check():
         redis = await get_redis()
         await redis.ping()
         checks["redis"] = "ok"
-    except Exception as e:
-        checks["redis"] = f"error: {e}"
+    except Exception as exc:
+        logger.warning("Redis health check failed: %s", type(exc).__name__)
+        checks["redis"] = "error"
         status = "degraded"
 
     return {

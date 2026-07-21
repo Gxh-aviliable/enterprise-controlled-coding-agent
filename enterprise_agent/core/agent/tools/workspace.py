@@ -32,6 +32,18 @@ DEFAULT_VSCODE_SETTINGS = {
     },
 }
 
+SENSITIVE_AGENT_PATH_PARTS = {".git", ".ssh", ".aws", ".gnupg"}
+SENSITIVE_AGENT_FILENAMES = {
+    ".env",
+    ".netrc",
+    ".npmrc",
+    ".pypirc",
+    "credentials.json",
+    "id_rsa",
+    "id_ed25519",
+}
+SENSITIVE_AGENT_SUFFIXES = {".pem", ".key", ".p12", ".pfx"}
+
 
 def _ensure_vscode_settings(workspace: Path) -> None:
     """Create or repair safe default VSCode settings for a user workspace."""
@@ -116,6 +128,22 @@ def get_workspace_base() -> Path:
     from enterprise_agent.config.settings import settings
 
     return Path(settings.WORKSPACE_BASE)
+
+
+def is_sensitive_agent_path(path: str) -> bool:
+    """Return whether an Agent tool path could expose mutable credentials."""
+    normalized = path.replace("\\", "/").strip()
+    parts = [part.lower() for part in Path(normalized).parts]
+    if any(part in SENSITIVE_AGENT_PATH_PARTS for part in parts):
+        return True
+    if not parts:
+        return False
+    name = parts[-1]
+    if name == ".env.example":
+        return False
+    if name in SENSITIVE_AGENT_FILENAMES or name.startswith(".env."):
+        return True
+    return Path(name).suffix.lower() in SENSITIVE_AGENT_SUFFIXES
 
 
 def get_user_workspace(user_id: int = None) -> Path:

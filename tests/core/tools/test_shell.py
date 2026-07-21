@@ -5,8 +5,8 @@ import json
 import pytest
 
 from enterprise_agent.core.agent.tools.shell import (
-    BLOCKED_PATTERNS,
     BLOCKED_BINARIES,
+    BLOCKED_PATTERNS,
     bash,
     validate_command,
 )
@@ -78,6 +78,43 @@ class TestValidateCommand:
         assert result is not None
         assert "Blocked" in result or "rm" in result
 
+    @pytest.mark.parametrize(
+        "command",
+        [
+            "echo ok; rm file.txt",
+            "echo ok && /usr/bin/rm file.txt",
+            "echo ok | bash",
+            "echo $(cat secret.txt)",
+            "echo `cat secret.txt`",
+            "cat ../../etc/passwd",
+            "cat /etc/passwd",
+            "cat .env",
+            "cat .git/config",
+            "bash -c 'echo hidden'",
+            "python -c 'print(1)'",
+            "git reset --hard HEAD",
+            "git clean -fdx",
+            "python worker.py &",
+            "echo 'unterminated",
+        ],
+    )
+    def test_indirect_escape_vectors_are_blocked(self, command):
+        result = validate_command(command)
+        assert result is not None
+        assert "Blocked" in result
+
+    @pytest.mark.parametrize(
+        "command",
+        [
+            "pwd && python -m pytest -q",
+            "echo safe > result.txt",
+            "PYTHONDONTWRITEBYTECODE=1 python -m compileall -q app.py",
+            "rg TODO src | head -20",
+        ],
+    )
+    def test_reviewable_workspace_relative_commands_pass(self, command):
+        assert validate_command(command) is None
+
 
 class TestBashTool:
     """Test bash tool execution."""
@@ -126,6 +163,22 @@ class TestBashTool:
         assert "stdout" in data
         assert "stderr" in data
         assert "exit_code" in data
+
+    def test_application_secrets_are_not_inherited(self, mock_workspace_env, monkeypatch):
+        from enterprise_agent.core.agent.tools.workspace import get_user_workspace
+
+        monkeypatch.setenv("LLM_API_KEY", "must-not-reach-child")
+        script = get_user_workspace() / "inspect_env.py"
+        script.write_text(
+            "import os\nprint(os.environ.get('LLM_API_KEY', 'missing'))\n",
+            encoding="utf-8",
+        )
+
+        result = json.loads(bash.invoke({"command": "python inspect_env.py"}))
+
+        assert result["exit_code"] == 0
+        assert result["stdout"] == "missing"
+        assert "must-not-reach-child" not in result["stdout"]
 
 
 class TestBlockedPatterns:

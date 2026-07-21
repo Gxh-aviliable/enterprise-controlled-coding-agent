@@ -1,27 +1,22 @@
 """Tests for team module (spawn_teammate, message passing, etc.)."""
 
-import asyncio
-import json
-import tempfile
 from pathlib import Path
 
 import pytest
 
 from enterprise_agent.core.agent.tools.team import (
-    AsyncMessageBus,
     TEAM_DIR_NAME,
     TEAMMATE_SYSTEM_PROMPT_TEMPLATE,
-    TeammateConfig,
-    TeammateManager,
-    TeammateRunner,
-    spawn_teammate,
-    list_teammates,
-    send_message,
-    read_inbox,
-    broadcast,
-    shutdown_request,
-    idle,
     VALID_MSG_TYPES,
+    AsyncMessageBus,
+    TeammateConfig,
+    broadcast,
+    idle,
+    list_teammates,
+    read_inbox,
+    send_message,
+    shutdown_request,
+    spawn_teammate,
 )
 
 

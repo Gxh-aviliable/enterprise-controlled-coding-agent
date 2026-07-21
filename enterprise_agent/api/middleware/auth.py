@@ -3,6 +3,7 @@ from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 from sqlalchemy import select
 
 from enterprise_agent.auth.jwt_handler import jwt_handler
+from enterprise_agent.auth.permissions import get_role_permissions
 from enterprise_agent.db.mysql import async_session_factory
 from enterprise_agent.models.user import User
 
@@ -50,16 +51,12 @@ async def get_current_user(
 async def get_current_user_permissions(
     credentials: HTTPAuthorizationCredentials = Depends(security)
 ) -> list:
-    """Get current user permissions from JWT token.
+    """Get current permissions from the active database role.
 
-    Args:
-        credentials: HTTP Bearer credentials
-
-    Returns:
-        List of permission strings
-
-    Raises:
-        HTTPException: If token is invalid
+    The JWT authenticates the caller, but authorization is derived from the
+    current user row. This makes promotion, demotion, and account disabling
+    effective immediately instead of trusting stale permission claims until
+    the token expires.
     """
     payload = jwt_handler.verify_token(credentials.credentials)
     if not payload:
@@ -68,7 +65,18 @@ async def get_current_user_permissions(
             detail="Invalid token",
             headers={"WWW-Authenticate": "Bearer"},
         )
-    return payload.permissions or []
+    async with async_session_factory() as db:
+        result = await db.execute(select(User).where(User.id == payload.sub))
+        user = result.scalar_one_or_none()
+        if not user or not user.is_active:
+            raise HTTPException(
+                status_code=status.HTTP_401_UNAUTHORIZED,
+                detail="User not found or disabled",
+                headers={"WWW-Authenticate": "Bearer"},
+            )
+
+    role = "admin" if user.is_superuser else "free"
+    return [permission.value for permission in get_role_permissions(role)]
 
 
 def require_permission(required_permission: str):

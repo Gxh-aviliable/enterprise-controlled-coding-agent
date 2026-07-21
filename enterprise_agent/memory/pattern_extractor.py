@@ -9,6 +9,8 @@ import logging
 import re
 from typing import Dict, List
 
+from enterprise_agent.memory.policy import has_durable_pattern_signal
+
 logger = logging.getLogger(__name__)
 
 
@@ -47,9 +49,13 @@ class PatternExtractor:
               }
             ]
         """
-        from enterprise_agent.core.agent.llm_factory import get_llm
+        if not has_durable_pattern_signal(user_msg):
+            logger.debug("Skipped pattern extraction: no durable user preference signal")
+            return []
+
         from langchain_core.messages import HumanMessage
-        from enterprise_agent.config.settings import settings
+
+        from enterprise_agent.core.agent.llm_factory import get_llm
 
         # Format context
         context_str = ""
@@ -72,10 +78,16 @@ Recent context: {context_str if context_str else "None"}
 Extract patterns in these categories:
 1. **Preference**: What the user likes/dislikes (e.g., "喜欢用 TypeScript", "不喜欢 JavaScript")
 2. **Workflow**: User's working habits/methods (e.g., "习惯先写测试再写代码", "先查文档再提问")
-3. **Shortcut**: User's commonly used shortcuts/conventions (e.g., "常用 git commit -m 'fix: ...'", "习惯用别名 ll 代替 ls -l")
+3. **Shortcut**: User's commonly used shortcuts/conventions
+   (e.g., "常用 git commit -m 'fix: ...'", "习惯用别名 ll 代替 ls -l")
 
 Guidelines:
-- Only extract CLEAR patterns (not vague statements)
+- Extract patterns only from the USER'S explicit, durable statements.
+- A task instruction is not a preference. "Write this story as fantasy",
+  "use multi-agent for this task", and other one-off constraints must return [].
+- Never infer a preference from the assistant's response, chosen implementation,
+  tool usage, or a single task topic.
+- Only extract CLEAR patterns that should still apply in a future session.
 - Set confidence based on how explicit the pattern is:
   - 0.9-1.0: Very explicit ("我喜欢...", "我习惯...", "我通常...")
   - 0.7-0.9: Moderately explicit ("最好...", "建议...", implied preference)
@@ -96,9 +108,10 @@ If no clear patterns found, return: []
 
         try:
             llm = get_llm()
-            model = getattr(settings, "IMPORTANCE_EVAL_MODEL", settings.MODEL_ID)
 
-            response = await llm.ainvoke([HumanMessage(content=prompt)])
+            response = await llm.with_config(
+                {"callbacks": [], "tags": ["memory_internal"]}
+            ).ainvoke([HumanMessage(content=prompt)])
             text = response.content
             # Handle potential markdown wrapper
             if "```json" in text:

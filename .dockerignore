@@ -1,0 +1,17 @@
+.git
+.venv
+.env
+.env.*
+.pytest_cache
+.ruff_cache
+**/__pycache__
+**/*.pyc
+
+frontend/node_modules
+frontend/dist
+
+workspaces
+chroma_data
+benchmarks/results
+docs
+tests

@@ -30,6 +30,21 @@ class TestAgentStateDefinition:
         """Test state has session_id field."""
         assert "session_id" in AgentState.__annotations__
 
+    def test_state_has_reliable_execution_fields(self):
+        required = {
+            "trace_id",
+            "current_user_request",
+            "task_status",
+            "execution_phase",
+            "task_token_count",
+            "tool_call_count",
+            "tool_execution_records",
+            "changed_files",
+            "validation_results",
+            "confirmation_deadline",
+        }
+        assert required.issubset(AgentState.__annotations__)
+
     def test_state_does_not_keep_unused_pending_memory_flush(self):
         """Memory flushing is managed by the accumulator, not a stale flag."""
         assert "pending_memory_flush" not in AgentState.__annotations__

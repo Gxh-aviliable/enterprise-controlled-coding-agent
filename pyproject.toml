@@ -12,6 +12,8 @@ dependencies = [
     # Vector database
     "chromadb>=0.4.0",
     "sentence-transformers>=2.0.0",
+    # Pin transitive PyTorch to the CPU index below; Agent embeddings do not need CUDA.
+    "torch>=2.0.0",
     # API
     "fastapi>=0.115.0",
     "uvicorn[standard]>=0.32.0",
@@ -50,6 +52,14 @@ include = ["enterprise_agent*"]
 
 [tool.uv]
 package = true
+
+[tool.uv.sources]
+torch = { index = "pytorch-cpu" }
+
+[[tool.uv.index]]
+name = "pytorch-cpu"
+url = "https://download.pytorch.org/whl/cpu"
+explicit = true
 
 [tool.pytest.ini_options]
 asyncio_mode = "auto"

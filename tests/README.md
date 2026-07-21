@@ -98,9 +98,11 @@ pytest tests/ --cov=enterprise_agent --cov-report=html
 - `test_subagent.py`: 子 Agent 异步执行
 - `test_team.py`: Team 协作异步消息传递
 
-### 需要外部服务的测试 (标记为 `@pytest.mark.skip`)
-- ChromaDB 长期记忆集成测试
-- Redis 状态持久化集成测试
+### 集成边界
+
+- ChromaDB 长期记忆测试使用真实进程内 collection 和确定性离线 embedding，可在默认测试命令中运行。
+- Redis/MySQL 路由和状态逻辑通过替身与隔离 API 测试覆盖；完整服务启动由 `scripts/docker_smoke_test.sh` 验证。
+- 外部 LLM 任务成功率不属于 pytest 口径，统一由版本化 benchmark 报告记录。
 
 ## Fixtures
 

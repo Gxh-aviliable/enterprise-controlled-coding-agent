@@ -11,7 +11,7 @@ import json
 import time
 from datetime import datetime
 from pathlib import Path
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List
 
 from enterprise_agent.config.settings import settings
 from enterprise_agent.core.agent.llm_factory import get_llm
@@ -153,7 +153,6 @@ class ContextManager:
         Returns:
             Estimated token count
         """
-        import unicodedata
 
         total_tokens = 0
         for msg in messages:

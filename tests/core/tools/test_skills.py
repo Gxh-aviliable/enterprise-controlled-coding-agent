@@ -1,14 +1,13 @@
 """Tests for skills module (load_skill, list_skills, reload_skills)."""
 
-import tempfile
 from pathlib import Path
 
 import pytest
 
 from enterprise_agent.core.agent.tools.skills import (
     SkillLoader,
-    load_skill,
     list_skills,
+    load_skill,
     reload_skills,
 )
 

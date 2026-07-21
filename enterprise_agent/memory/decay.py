@@ -99,7 +99,7 @@ async def memory_cleanup_task(
         asyncio.create_task(memory_cleanup_task())
     """
     from enterprise_agent.config.settings import settings
-    from enterprise_agent.memory.long_term import get_long_term_memory, _long_term_memory_cache
+    from enterprise_agent.memory.long_term import _long_term_memory_cache, get_long_term_memory
 
     interval = cleanup_interval_hours or getattr(settings, "MEMORY_CLEANUP_INTERVAL_HOURS", 1)
     threshold = retention_threshold or getattr(settings, "MEMORY_CLEANUP_THRESHOLD", 0.1)

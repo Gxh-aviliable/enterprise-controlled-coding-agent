@@ -1,9 +1,7 @@
 """Tests for file_ops module (read_file, write_file, edit_file)."""
 
-import json
-import os
 from pathlib import Path
-from unittest.mock import patch, MagicMock
+from unittest.mock import patch
 
 import pytest
 
@@ -174,7 +172,7 @@ class TestEditFile:
         test_file.write_text("foo foo foo")
         mock_resolve.return_value = test_file
 
-        result = edit_file.invoke({
+        edit_file.invoke({
             "path": "multiple.txt",
             "old_text": "foo",
             "new_text": "bar"
@@ -199,3 +197,24 @@ class TestPathSecurity:
         mock_resolve.side_effect = ValueError("Path escapes workspace")
         result = read_file.invoke({"path": "/etc/passwd"})
         assert "Error" in result or "escapes" in result.lower()
+
+    @pytest.mark.parametrize(
+        "path",
+        [
+            ".env",
+            ".env.local",
+            ".git/config",
+            ".ssh/id_rsa",
+            "deploy/private.key",
+            "credentials.json",
+        ],
+    )
+    def test_sensitive_credential_paths_are_blocked(self, path):
+        result = read_file.invoke({"path": path})
+        assert "Sensitive credential path" in result
+
+    def test_env_example_remains_available(self, mock_workspace_env):
+        from enterprise_agent.core.agent.tools.workspace import get_user_workspace
+
+        (get_user_workspace() / ".env.example").write_text("SAFE=value\n", encoding="utf-8")
+        assert read_file.invoke({"path": ".env.example"}) == "SAFE=value"

@@ -1,9 +1,42 @@
+import os
+import tempfile
 from typing import Optional
 
 from langchain_core.tools import tool
 
 from enterprise_agent.config.settings import settings
-from enterprise_agent.core.agent.tools.workspace import get_user_workspace, resolve_path
+from enterprise_agent.core.agent.tools.workspace import is_sensitive_agent_path, resolve_path
+
+
+def _validate_agent_file_path(path: str) -> None:
+    if is_sensitive_agent_path(path):
+        raise ValueError(f"Sensitive credential path is not available to Agent tools: {path}")
+
+
+def _atomic_write_text(path, content: str) -> None:
+    """Replace a file atomically so interrupted writes do not leave partial content."""
+    path.parent.mkdir(parents=True, exist_ok=True)
+    previous_mode = path.stat().st_mode if path.exists() else None
+    temp_name = None
+    try:
+        with tempfile.NamedTemporaryFile(
+            mode="w",
+            encoding="utf-8",
+            dir=path.parent,
+            prefix=f".{path.name}.",
+            suffix=".tmp",
+            delete=False,
+        ) as handle:
+            handle.write(content)
+            handle.flush()
+            os.fsync(handle.fileno())
+            temp_name = handle.name
+        if previous_mode is not None:
+            os.chmod(temp_name, previous_mode)
+        os.replace(temp_name, path)
+    finally:
+        if temp_name and os.path.exists(temp_name):
+            os.unlink(temp_name)
 
 
 @tool
@@ -18,6 +51,7 @@ def read_file(path: str, limit: Optional[int] = None) -> str:
         File contents as string
     """
     try:
+        _validate_agent_file_path(path)
         fp = resolve_path(path)
         lines = fp.read_text(encoding="utf-8").splitlines()
         if limit and limit < len(lines):
@@ -39,9 +73,9 @@ def write_file(path: str, content: str) -> str:
         Success message with first N lines preview (trust but verify)
     """
     try:
+        _validate_agent_file_path(path)
         fp = resolve_path(path)
-        fp.parent.mkdir(parents=True, exist_ok=True)
-        fp.write_text(content, encoding="utf-8")
+        _atomic_write_text(fp, content)
 
         # Auto-verify: re-read and show preview
         verified = fp.read_text(encoding="utf-8")
@@ -69,6 +103,7 @@ def edit_file(path: str, old_text: str, new_text: str) -> str:
         Success message with diff preview (trust but verify)
     """
     try:
+        _validate_agent_file_path(path)
         fp = resolve_path(path)
         content = fp.read_text(encoding="utf-8")
         if old_text not in content:
@@ -76,7 +111,7 @@ def edit_file(path: str, old_text: str, new_text: str) -> str:
 
         # Perform edit
         new_content = content.replace(old_text, new_text, 1)
-        fp.write_text(new_content, encoding="utf-8")
+        _atomic_write_text(fp, new_content)
 
         # Auto-verify: re-read and show context around edit
         verified = fp.read_text(encoding="utf-8")

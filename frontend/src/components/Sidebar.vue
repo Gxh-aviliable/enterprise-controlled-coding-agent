@@ -30,6 +30,15 @@
         <span>Files</span>
       </button>
       <button
+        :class="['tab-btn', { active: activeTab === 'trace' }]"
+        @click="activeTab = 'trace'"
+      >
+        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round">
+          <circle cx="5" cy="5" r="2"/><circle cx="19" cy="12" r="2"/><circle cx="5" cy="19" r="2"/><path d="M7 5h4a3 3 0 013 3v1a3 3 0 003 3M7 19h4a3 3 0 003-3v-1a3 3 0 013-3"/>
+        </svg>
+        <span>Trace</span>
+      </button>
+      <button
         :class="['tab-btn', { active: activeTab === 'memory' }]"
         @click="activeTab = 'memory'"
       >
@@ -87,6 +96,9 @@
         @select="handleFileSelect"
       />
     </div>
+
+    <!-- Main-area views still need to reserve sidebar height for the user footer. -->
+    <div class="tab-content" v-show="activeTab === 'trace' || activeTab === 'memory'"></div>
 
     <!-- User footer -->
     <div ref="footerRef" class="sidebar-footer" @click="showUserMenu = !showUserMenu">
@@ -217,8 +229,8 @@ function handleFileSelect(node) {
   display: flex;
   align-items: center;
   justify-content: center;
-  gap: 5px;
-  padding: 7px 8px;
+  gap: 4px;
+  padding: 7px 5px;
   background: transparent;
   border: none;
   color: var(--text-secondary);

@@ -112,17 +112,24 @@ export async function resetPassword({ email, code, new_password }) {
 }
 
 // Chat API
-export async function sendMessage({ session_id, content }) {
+export async function getAgentCapabilities() {
+  const res = await request('/chat/capabilities')
+  const data = await res.json()
+  if (!res.ok) throw new Error(data.detail || 'Failed to load Agent capabilities')
+  return data
+}
+
+export async function sendMessage({ session_id, content, mode = 'single_agent' }) {
   const res = await request('/chat/completions', {
     method: 'POST',
-    body: JSON.stringify({ session_id, content, stream: false })
+    body: JSON.stringify({ session_id, content, stream: false, mode })
   })
   const data = await res.json()
   if (!res.ok) throw new Error(data.detail || 'Chat failed')
   return data
 }
 
-export function streamMessage({ session_id, content, signal, onDelta, onToolStart, onToolEnd, onToolResult, onInterrupt, onError, onDone }) {
+export function streamMessage({ session_id, content, mode = 'single_agent', signal, onDelta, onToolStart, onToolEnd, onToolResult, onInterrupt, onError, onDone }) {
   const token = getToken()
   console.log('[stream] Starting stream, session:', session_id, 'content:', content.slice(0, 50))
 
@@ -133,7 +140,7 @@ export function streamMessage({ session_id, content, signal, onDelta, onToolStar
       'Content-Type': 'application/json',
       'Authorization': `Bearer ${token}`
     },
-    body: JSON.stringify({ session_id, content, stream: true })
+    body: JSON.stringify({ session_id, content, stream: true, mode })
   }).then(async (res) => {
     console.log('[stream] Response status:', res.status)
 
@@ -178,12 +185,12 @@ export function streamMessage({ session_id, content, signal, onDelta, onToolStar
               onDelta(json.delta)
             } else if (json.event === 'tool_start') {
               console.log('[stream] Tool start:', json.name)
-              onToolStart(json.name)
+              onToolStart(json.name, json.id)
             } else if (json.event === 'tool_end') {
               console.log('[stream] Tool end:', json.name)
-              onToolEnd(json.name)
+              onToolEnd(json.name, json)
             } else if (json.event === 'tool_result') {
-              onToolResult?.(json.id, json.result)
+              onToolResult?.(json.id, json.result, json)
             } else if (json.event === 'interrupt') {
               // Interrupt received - tool confirmation required
               console.log('[stream] Interrupt received:', json.data)
@@ -206,6 +213,7 @@ export function streamMessage({ session_id, content, signal, onDelta, onToolStar
     }
     onDone()
   }).catch(err => {
+    if (err.name === 'AbortError') return
     console.error('[stream] Fetch error:', err)
     onError(err.message)
   })
@@ -268,9 +276,11 @@ export function resumeStream({ session_id, approved, approved_ids, signal, onDel
             if (json.delta !== undefined) {
               onDelta(json.delta)
             } else if (json.event === 'tool_start') {
-              onToolStart(json.name)
+              onToolStart(json.name, json.id)
             } else if (json.event === 'tool_end') {
-              onToolEnd(json.name)
+              onToolEnd(json.name, json)
+            } else if (json.event === 'tool_result') {
+              onToolResult?.(json.id, json.result, json)
             } else if (json.event === 'interrupt') {
               // Another interrupt (multiple tool confirmations)
               console.log('[resume] Another interrupt:', json.data)
@@ -287,6 +297,7 @@ export function resumeStream({ session_id, approved, approved_ids, signal, onDel
     }
     onDone()
   }).catch(err => {
+    if (err.name === 'AbortError') return
     console.error('[resume] Fetch error:', err)
     onError(err.message)
   })
@@ -321,6 +332,29 @@ export async function getSessionMessages(sessionId) {
   const res = await request(`/sessions/${sessionId}/messages`)
   const data = await res.json()
   if (!res.ok) throw new Error(data.detail || 'Failed to load messages')
+  return data
+}
+
+// Task trace API
+export async function listTaskRuns(limit = 50) {
+  const params = new URLSearchParams({ limit: String(limit) })
+  const res = await request(`/tasks?${params}`)
+  const data = await res.json()
+  if (!res.ok) throw new Error(data.detail || 'Failed to list task traces')
+  return data
+}
+
+export async function getTaskMetrics() {
+  const res = await request('/tasks/metrics')
+  const data = await res.json()
+  if (!res.ok) throw new Error(data.detail || 'Failed to load task metrics')
+  return data
+}
+
+export async function replayTaskTrace(traceId) {
+  const res = await request(`/tasks/${encodeURIComponent(traceId)}/trace`)
+  const data = await res.json()
+  if (!res.ok) throw new Error(data.detail || 'Failed to replay task trace')
   return data
 }
 

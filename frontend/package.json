@@ -6,16 +6,20 @@
   "scripts": {
     "dev": "vite",
     "build": "vite build",
-    "preview": "vite preview"
+    "preview": "vite preview",
+    "test": "vitest run"
   },
   "dependencies": {
-    "dompurify": "^3.4.7",
+    "dompurify": "^3.4.12",
     "highlight.js": "^11.11.1",
     "marked": "^18.0.4",
     "vue": "^3.4.0"
   },
   "devDependencies": {
-    "@vitejs/plugin-vue": "^5.0.0",
-    "vite": "^5.4.0"
+    "@vitejs/plugin-vue": "^6.0.8",
+    "@vue/test-utils": "^2.4.11",
+    "jsdom": "^29.1.1",
+    "vite": "^8.1.4",
+    "vitest": "^4.1.10"
   }
 }
