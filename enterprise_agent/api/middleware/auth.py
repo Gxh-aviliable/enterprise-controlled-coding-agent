@@ -10,18 +10,19 @@ from enterprise_agent.models.user import User
 security = HTTPBearer()
 
 
-async def get_current_user(
+async def get_current_user_record(
     credentials: HTTPAuthorizationCredentials = Depends(security)
-) -> int:
-    """Get current user ID from JWT token.
+) -> User:
+    """Return the active database user authenticated by the access token.
 
-    Verifies JWT and checks user is_active in database.
+    Authentication comes from the JWT, while authorization-sensitive fields
+    always come from the live database row.
 
     Args:
         credentials: HTTP Bearer credentials
 
     Returns:
-        User ID
+        Active user record
 
     Raises:
         HTTPException: If token is invalid or user is disabled
@@ -44,12 +45,23 @@ async def get_current_user(
                 detail="User not found or disabled",
                 headers={"WWW-Authenticate": "Bearer"},
             )
+        if int(getattr(payload, "ver", 0)) != int(getattr(user, "auth_version", 0) or 0):
+            raise HTTPException(
+                status_code=status.HTTP_401_UNAUTHORIZED,
+                detail="Authentication session has been revoked",
+                headers={"WWW-Authenticate": "Bearer"},
+            )
 
-    return payload.sub
+    return user
+
+
+async def get_current_user(user: User = Depends(get_current_user_record)) -> int:
+    """Return the authenticated user's ID for existing route compatibility."""
+    return user.id
 
 
 async def get_current_user_permissions(
-    credentials: HTTPAuthorizationCredentials = Depends(security)
+    credentials: HTTPAuthorizationCredentials = Depends(security),
 ) -> list:
     """Get current permissions from the active database role.
 
@@ -58,25 +70,25 @@ async def get_current_user_permissions(
     effective immediately instead of trusting stale permission claims until
     the token expires.
     """
-    payload = jwt_handler.verify_token(credentials.credentials)
-    if not payload:
-        raise HTTPException(
-            status_code=status.HTTP_401_UNAUTHORIZED,
-            detail="Invalid token",
-            headers={"WWW-Authenticate": "Bearer"},
-        )
-    async with async_session_factory() as db:
-        result = await db.execute(select(User).where(User.id == payload.sub))
-        user = result.scalar_one_or_none()
-        if not user or not user.is_active:
-            raise HTTPException(
-                status_code=status.HTTP_401_UNAUTHORIZED,
-                detail="User not found or disabled",
-                headers={"WWW-Authenticate": "Bearer"},
-            )
-
+    user = await get_current_user_record(credentials)
     role = "admin" if user.is_superuser else "free"
     return [permission.value for permission in get_role_permissions(role)]
+
+
+def require_admin(required_permission: str):
+    """Require an active superuser with a specific live admin permission."""
+
+    async def check_admin(user: User = Depends(get_current_user_record)) -> User:
+        role = "admin" if user.is_superuser else "free"
+        permissions = [permission.value for permission in get_role_permissions(role)]
+        if not user.is_superuser or required_permission not in permissions:
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail=f"Permission '{required_permission}' required",
+            )
+        return user
+
+    return check_admin
 
 
 def require_permission(required_permission: str):

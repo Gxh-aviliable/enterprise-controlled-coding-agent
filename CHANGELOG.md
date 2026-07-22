@@ -6,6 +6,11 @@ All notable project changes are recorded here. Benchmark and performance claims 
 
 ### Added
 
+- Admin Control Room MVP with live `/auth/me` authorization, user status and session/API-key revocation, quota configuration/usage, metadata-first workspace inspection, audited temporary content grants, cross-user task summaries/cancellation, audit search, and dependency/storage health.
+- Alembic adoption migration that works for both clean databases and legacy `create_all()` installations, including the administrator schema and JWT `auth_version` revocation generation.
+- Runtime product quota enforcement with Redis atomic concurrent leases, MySQL daily task settlement, Trace-derived daily/monthly token checks, structured 429 errors, and release on normal/error/SSE exit paths.
+- Administrator-managed Shared Skill registry with validation/credential scanning, immutable versions, durable materialization, publish/rollback/retire actions, cache refresh, and runtime version/SHA-256 evidence.
+- Vue administrator console with a persistent Access Scope Bar, fleet overview, user/quota operations, guarded workspace preview, Shared Skill editor/version controls, audit ledger, and system health.
 - Internal admin-console development plan covering live authorization, user/quota operations, break-glass workspace access, versioned Shared Skill governance, audit evidence, UI structure, API contracts, data models, and phased acceptance criteria.
 - Architecture baseline, current capability matrix, and risk-ranked portfolio hardening backlog.
 - Dependency-light smoke test covering application imports, graph compilation, workspace isolation, file tools, safe shell execution, and dangerous-command rejection.
@@ -30,6 +35,9 @@ All notable project changes are recorded here. Benchmark and performance claims 
 
 ### Fixed
 
+- Fresh Docker installations no longer run an administrator migration before the referenced core identity tables exist; existing MySQL volumes are adopted without recreating users/sessions.
+- Password reset, account disabling, and explicit administrator revocation now invalidate all older access/refresh token generations instead of waiting for JWT expiry.
+- Admin overview token totals now aggregate the complete retained Trace window instead of only five recent tasks per user.
 - Task-manager cache no longer retains an obsolete workspace when the workspace base changes.
 - Background commands now resolve and create their user workspace before the worker thread starts, avoiding cleanup/context races.
 - Chat invoke/resume/cancel/confirm/pending-confirm routes now verify MySQL session ownership before accessing Redis checkpoints.
@@ -79,6 +87,9 @@ All notable project changes are recorded here. Benchmark and performance claims 
 
 ### Baseline verification
 
+- Administrator milestone (2026-07-22): backend 357 passed; Ruff passed; frontend 20/20 passed; production build passed with a 76.99 kB largest chunk; isolated clean-volume Docker smoke passed.
+- Rebuilt API/frontend images passed against the existing MySQL volume; Alembic reached `20260721_0001`, `users.auth_version` and administrator tables were verified, and all four Compose services were healthy.
+- Live API authorization smoke: users.id=1 administrator overview returned 200 with `metadata_only`; an active non-admin user returned 403. Browser regular-user smoke showed no administrator entry and zero warning/error logs.
 - Backend: 343 passed (2026-07-20); real Chroma v2 write/search, provenance quarantine, cascade deletion, task-boundary/tool recall, Chinese reranking, admission policy, offline-first embedding initialization, and full Ruff checks passed.
 - Offline platform benchmark: 10/10 tasks passed; 80.0% tool-call success, 84.8 ms average task duration, 20.0% intervention rate, and 1 safety interception. This deterministic run uses no LLM and is not an Agent intelligence score.
 - Frontend: production build passed with a 76.99 kB largest JS chunk; npm audit reported zero known vulnerabilities.

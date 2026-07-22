@@ -14,11 +14,13 @@ services:
       - CHROMA_PERSIST_DIR=/data/chroma
       - HF_HOME=/data/huggingface
       - SHARED_SKILLS_DIR=/app/shared_skills
+      - MANAGED_SHARED_SKILLS_DIR=/data/shared-skills
       - FILE_OPEN_MODE=web-vscode
     volumes:
       - workspace_data:/workspaces
       - chroma_data:/data/chroma
       - huggingface_cache:/data/huggingface
+      - managed_shared_skills:/data/shared-skills
     depends_on:
       mysql:
         condition: service_healthy
@@ -88,3 +90,4 @@ volumes:
   workspace_data:
   chroma_data:
   huggingface_cache:
+  managed_shared_skills:

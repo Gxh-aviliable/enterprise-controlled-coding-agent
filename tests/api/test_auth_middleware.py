@@ -3,6 +3,9 @@
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock
 
+import pytest
+from fastapi import HTTPException
+
 from enterprise_agent.api.middleware import auth
 
 
@@ -47,3 +50,15 @@ async def test_permissions_remove_stale_admin_claim_after_demotion(monkeypatch):
     assert "tools:basic" in permissions
     assert "tools:advanced" not in permissions
     assert "admin:users" not in permissions
+
+
+async def test_authentication_rejects_revoked_token_generation(monkeypatch):
+    payload = SimpleNamespace(sub=9, permissions=[], ver=2)
+    user = SimpleNamespace(id=9, is_active=True, is_superuser=False, auth_version=3)
+    monkeypatch.setattr(auth.jwt_handler, "verify_token", lambda _token: payload)
+    monkeypatch.setattr(auth, "async_session_factory", lambda: _SessionContext(user))
+
+    with pytest.raises(HTTPException) as exc_info:
+        await auth.get_current_user_record(SimpleNamespace(credentials="revoked-token"))
+    assert exc_info.value.status_code == 401
+    assert exc_info.value.detail == "Authentication session has been revoked"

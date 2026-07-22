@@ -26,6 +26,8 @@ RUN useradd --create-home --uid 10001 agent && \
 # Copy and install only the local project after the reusable dependency layer.
 COPY enterprise_agent ./enterprise_agent
 COPY shared_skills ./shared_skills
+COPY migrations ./migrations
+COPY alembic.ini ./alembic.ini
 RUN --mount=type=cache,target=/root/.cache/uv \
     uv sync --frozen --no-dev --offline --no-build-isolation --link-mode=copy
 
@@ -35,7 +37,8 @@ ENV PYTHONUNBUFFERED=1 \
     WORKSPACE_BASE=/workspaces \
     CHROMA_PERSIST_DIR=/data/chroma \
     HF_HOME=/data/huggingface \
-    SHARED_SKILLS_DIR=/app/shared_skills
+    SHARED_SKILLS_DIR=/app/shared_skills \
+    MANAGED_SHARED_SKILLS_DIR=/data/shared-skills
 
 USER agent
 
@@ -43,4 +46,4 @@ USER agent
 EXPOSE 8000
 
 # Run
-CMD ["/app/.venv/bin/python", "-m", "uvicorn", "enterprise_agent.api.main:app", "--host", "0.0.0.0", "--port", "8000"]
+CMD ["sh", "-c", "/app/.venv/bin/alembic upgrade head && exec /app/.venv/bin/python -m uvicorn enterprise_agent.api.main:app --host 0.0.0.0 --port 8000"]

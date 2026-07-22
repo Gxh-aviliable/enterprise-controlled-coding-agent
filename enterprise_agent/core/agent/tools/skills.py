@@ -14,6 +14,8 @@ Each SKILL.md has YAML frontmatter:
 Priority: user skill overrides global skill with the same name.
 """
 
+import hashlib
+import json
 import logging
 import re
 from pathlib import Path
@@ -79,6 +81,14 @@ class SkillLoader:
                 len(self.search_dirs) > 1 and search_dir == self.search_dirs[0]
             )
             scope = "personal" if is_user_dir else "global"
+            is_managed_dir = search_dir.resolve() == Path(settings.MANAGED_SHARED_SKILLS_DIR).resolve()
+            manifest_path = skill_file.parent / ".managed.json"
+            manifest = {}
+            if is_managed_dir and manifest_path.exists():
+                try:
+                    manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+                except (OSError, json.JSONDecodeError):
+                    logger.warning("Ignoring invalid managed Skill manifest: %s", manifest_path)
 
             # Override detection: warn if user skill overrides global
             if name in self.skills and scope == "personal":
@@ -89,6 +99,9 @@ class SkillLoader:
                 "body": body,
                 "path": str(skill_file),
                 "scope": scope,
+                "source": "managed" if is_managed_dir else scope,
+                "version": manifest.get("version"),
+                "sha256": manifest.get("sha256") or hashlib.sha256(text.encode("utf-8")).hexdigest(),
             }
         except Exception as e:
             logger.warning("Failed to load skill %s: %s", skill_file, e)
@@ -148,8 +161,10 @@ class SkillLoader:
         scope_note = ""
         if skill["scope"] == "personal":
             scope_note = " (your personal version)"
+        version_attr = f' version="{skill["version"]}"' if skill.get("version") is not None else ""
         return (
-            f'<skill name="{name}" scope="{skill["scope"]}">\n'
+            f'<skill name="{name}" scope="{skill["scope"]}" source="{skill["source"]}"'
+            f'{version_attr} sha256="{skill["sha256"]}">\n'
             f"<!-- {skill['scope']} skill{scope_note} -->\n"
             f'{skill["body"]}\n'
             f"</skill>"
@@ -176,7 +191,8 @@ def get_skill_loader(user_id: int = None) -> SkillLoader:
 
     Returns a SkillLoader that searches:
       1. User's personal .skills directory (highest priority)
-      2. Shared global skills directory
+      2. Administrator-managed shared skills
+      3. Bundled shared skills (lowest priority)
 
     Args:
         user_id: User ID. If None, tries context variable.
@@ -193,6 +209,8 @@ def get_skill_loader(user_id: int = None) -> SkillLoader:
         search_dirs = [
             # User personal skills (highest priority — index 0)
             get_workspace_base() / f"user_{user_id}" / ".skills",
+            # Administrator-managed shared skills
+            Path(settings.MANAGED_SHARED_SKILLS_DIR),
             # Shared global skills
             Path(settings.SHARED_SKILLS_DIR),
         ]
@@ -246,3 +264,10 @@ def reload_skills() -> str:
         Count of skills loaded by scope
     """
     return get_skill_loader().reload()
+
+
+def reload_all_skill_loaders() -> int:
+    """Refresh every cached per-user loader after a managed Skill publish."""
+    for loader in _skill_loaders.values():
+        loader.reload()
+    return len(_skill_loaders)

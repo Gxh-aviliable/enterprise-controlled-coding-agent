@@ -8,6 +8,12 @@ import * as api from '../src/api/client.js'
 vi.mock('../src/api/client.js', () => ({
   listSessions: vi.fn().mockResolvedValue([]),
   deleteSession: vi.fn().mockResolvedValue({}),
+  getMe: vi.fn().mockResolvedValue({
+    id: 1,
+    username: 'tester',
+    is_superuser: false,
+    permissions: []
+  }),
   clearTokens: vi.fn()
 }))
 
@@ -48,12 +54,14 @@ const FileViewerStub = {
 describe('App main view state', () => {
   beforeEach(() => {
     auth.loggedIn = true
+    auth.profile = null
     chatUnmounted.mockClear()
     api.listSessions.mockResolvedValue([])
   })
 
   afterEach(() => {
     auth.loggedIn = false
+    auth.profile = null
   })
 
   it('keeps the chat component and its local state across file navigation', async () => {

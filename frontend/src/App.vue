@@ -14,6 +14,7 @@
       @delete="deleteSession"
       @file-select="onFileSelect"
       @tab-change="onTabChange"
+      @open-admin="openAdminConsole"
     />
 
     <div class="main-area">
@@ -33,6 +34,10 @@
       <TraceViewer
         v-else-if="mainView === 'trace'"
       />
+      <AdminConsole
+        v-else-if="mainView === 'admin'"
+        @close="mainView = 'chat'"
+      />
     </div>
   </div>
   <Toast />
@@ -50,6 +55,7 @@ const ChatPanel = defineAsyncComponent(() => import('./components/ChatPanel.vue'
 const FileViewer = defineAsyncComponent(() => import('./components/FileViewer.vue'))
 const MemoryViewer = defineAsyncComponent(() => import('./components/MemoryViewer.vue'))
 const TraceViewer = defineAsyncComponent(() => import('./components/TraceViewer.vue'))
+const AdminConsole = defineAsyncComponent(() => import('./components/admin/AdminConsole.vue'))
 
 const sessions = ref([])
 const activeSessionId = ref('')
@@ -119,6 +125,12 @@ function onTabChange(tab) {
   else if (tab === 'trace') { mainView.value = 'trace'; selectedFile.value = null }
 }
 
+function openAdminConsole() {
+  if (!auth.isAdmin) return
+  selectedFile.value = null
+  mainView.value = 'admin'
+}
+
 async function deleteSession(id) {
   try {
     await api.deleteSession(id)
@@ -129,8 +141,15 @@ async function deleteSession(id) {
   }
 }
 
-onMounted(() => {
-  if (auth.loggedIn) loadSessions()
+onMounted(async () => {
+  if (auth.loggedIn) {
+    try {
+      await auth.loadProfile()
+      await loadSessions()
+    } catch (e) {
+      console.error('Failed to load current user profile:', e)
+    }
+  }
   checkFrontendVersion()
   versionPollTimer = window.setInterval(checkFrontendVersion, 60_000)
 })

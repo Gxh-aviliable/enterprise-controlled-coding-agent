@@ -1,5 +1,8 @@
 # Mini Claude Code — Enterprise Controlled Engineering Agent
 
+> [!IMPORTANT]
+> 🚨 **2027 秋招冲刺阶段：停止堆功能，优先完成真实 DeepSeek 评测、演示视频和求职版 README。**  每次开发前先阅读：[00-秋招冲刺-必读.md](00-秋招冲刺-必读.md)。
+
 面向企业内网部署的受控工程 Agent 平台。它不是要和 Claude Code、Codex、Cursor 在个人本机体验上正面竞争，而是把 AI 编程能力放进企业可治理的服务器环境中：代码不出内网，Agent 只在受控 workspace 中操作，敏感工具可审批，文件访问可隔离，长期项目知识可沉淀。
 
 ## 产品定位
@@ -105,6 +108,16 @@
 - Chroma embedding 使用本地 sentence-transformers；已有缓存优先离线加载，不会在每次进程启动时检查 Hugging Face。
 - MySQL / Redis / Chroma 可部署在内网环境。
 
+### 7. 管理员控制台
+
+- `/auth/me` 从实时数据库返回身份与权限；管理员入口不依赖 JWT 中的过期角色声明。
+- Admin Control Room 提供运行总览、用户启停、会话/API Key 撤销、用户额度、跨用户脱敏 Trace、任务取消、审计和系统健康。
+- 管理员默认只能看 Workspace 元数据；文件正文需要绑定操作人和目标用户的 5–30 分钟临时 grant，敏感路径始终拒绝。
+- Managed Shared Skill 支持草稿、凭据扫描、不可变版本、发布、回滚和退役；运行时 `load_skill` 输出携带版本与 SHA-256，可进入 Trace。
+- 产品额度在任务入口实际执行：Redis 原子并发占位、MySQL 日任务结算、Trace 周期 token 检查；全局单任务安全上限不可由管理员放宽。
+
+完整边界、API、数据表与待测项见 [`docs/admin-console-development-plan.md`](docs/admin-console-development-plan.md)。
+
 ## 技术栈
 
 | 层 | 技术 |
@@ -130,7 +143,8 @@ flowchart LR
     P --> W["User-isolated workspace"]
     P --> S["Shell / file / task tools"]
     G <--> R[("Redis checkpoints")]
-    API <--> M[("MySQL users and sessions")]
+    API <--> M[("MySQL identity, quota and audit")]
+    A["Admin Control Room"] -->|"live RBAC + reasoned actions"| API
     G <--> C[("Chroma project memory")]
     G --> T["Redacted Trace store"]
     T --> N
@@ -164,7 +178,7 @@ curl http://localhost:3000/api/health
 # 浏览器打开 http://localhost:3000
 ```
 
-API 等待 MySQL/Redis 健康后启动，前端再等待 API 健康；workspace、Chroma 和 Hugging Face 缓存均使用持久卷。首次启动可能需要下载 embedding 模型。
+API 等待 MySQL/Redis 健康后先自动执行 `alembic upgrade head`，再启动服务；前端继续等待 API 健康。workspace、Chroma、Hugging Face 缓存和 Managed Shared Skill 均使用持久卷。首次启动可能需要下载 embedding 模型。
 
 如需在不占用默认端口、不触碰已有容器的情况下复现完整交付验收，可运行隔离 smoke test。它默认使用独立 Compose project 和 `13000/18000/13307/16379` 端口，检查四服务健康状态、API 直连与 Nginx 反代，结束后自动移除测试容器但保留缓存卷：
 
@@ -260,6 +274,7 @@ SMTP_USE_SSL=true
 my_mini_claude_code/
 ├── enterprise_agent/
 │   ├── api/                       # FastAPI 路由、中间件、schemas
+│   ├── admin/                     # 额度、审计与 Managed Skill 治理
 │   ├── auth/                      # JWT、密码、邮件验证码
 │   ├── core/agent/                # LangGraph Agent 核心
 │   │   ├── graph.py               # StateGraph + RedisSaver
@@ -277,6 +292,7 @@ my_mini_claude_code/
 ├── tests/                         # pytest 测试
 ├── benchmarks/                    # 版本化用例、runner 与原始报告
 ├── docker/                        # Docker Compose
+├── migrations/                    # Alembic 可重放数据库迁移
 └── docs/                          # 架构、计划和审计文档
 ```
 
@@ -303,6 +319,7 @@ my_mini_claude_code/
 | POST | `/auth/register` | 注册用户 |
 | POST | `/auth/login` | 邮箱登录 |
 | POST | `/auth/refresh` | 刷新 token |
+| GET | `/auth/me` | 实时用户身份、角色与权限 |
 | POST | `/auth/forgot-password` | 请求邮箱验证码 |
 | POST | `/auth/reset-password` | 验证码重置密码 |
 
@@ -351,6 +368,16 @@ my_mini_claude_code/
 | GET | `/tasks/{trace_id}` | 查看任务状态与聚合计数 |
 | GET | `/tasks/{trace_id}/trace` | 回放脱敏事件时间线 |
 
+### Admin Control Room
+
+| 范围 | 主要路径 | 边界 |
+|------|----------|------|
+| 用户/额度 | `/admin/users*` | 实时管理员权限，写操作要求 reason 并审计 |
+| Workspace | `/admin/users/{id}/workspace/*` | 默认仅元数据；正文需短期 grant；敏感路径封禁 |
+| Shared Skill | `/admin/skills*` | 草稿→校验→版本发布→回滚/退役 |
+| 任务/审计 | `/admin/tasks*`, `/admin/audit-logs` | 跨用户仅脱敏摘要，取消要求 reason |
+| 系统 | `/admin/system/health` | 只返回健康与容量，不返回密钥值 |
+
 ## 与 Claude Code / Codex 的差异
 
 这个项目不试图替代成熟的个人本机 Coding Agent。它的差异化是企业治理场景：
@@ -368,7 +395,7 @@ my_mini_claude_code/
 - 在明确授权的模型 endpoint 运行 single/multi Agent 对照，不用 platform 分数代替模型成绩。
 - 将 Shell 执行迁移到临时 rootless 容器，加入 seccomp/AppArmor、CPU/内存配额与出站网络策略。
 - 将 JSON Trace 和确认超时调度迁移到集中式后端，支持多副本。
-- 引入 Alembic、密钥管理和备份/恢复演练。
+- 密钥管理和备份/恢复演练；Alembic 基线已落地，还需在 CI 验证 downgrade/restore。
 - Git 集成：分支创建、diff 展示、commit、PR、代码评审。
 - CI/CD 集成：允许 Agent 在受控环境触发测试、构建、静态检查。
 - 企业知识库：接入内部文档、规范、接口文档和故障手册。
@@ -385,17 +412,18 @@ uv run python -m benchmarks.run --backend platform --mode single
 HF_HUB_OFFLINE=1 TRANSFORMERS_OFFLINE=1 uv run python -m benchmarks.memory_recall
 ```
 
-2026-07-20 当前验证：
+2026-07-21 当前验证：
 
 | 检查 | 结果 |
 |---|---|
-| 后端 pytest | 343 passed |
-| 前端回归测试 | 16 passed；覆盖历史恢复、Chat → File → Chat、模式传递/升级、能力禁用、HITL 拒绝、工具终态映射、流式生成滚动锁定、长期记忆治理、级联删除及 Recall receipt |
+| 后端 pytest | 357 passed |
+| 前端回归测试 | 20 passed；在原回归基础上增加 Admin Control Room 默认元数据边界、临时 grant 交互和结构化额度错误展示 |
 | 前端生产构建 | 通过；最大 JS chunk 76.99 kB，无大 chunk 警告 |
 | Compose 配置解析 | 通过 |
 | Docker 全栈 smoke | 通过；隔离 project 中 API、Vue/Nginx、MySQL、Redis 全部 healthy，API 直连与 `/api/health` 反代均通过 |
 | Docker 镜像 | API/前端实际构建通过；API 以 UID 10001 运行，`torch 2.13.0+cpu` |
 | 当前本机容器 | API、Vue/Nginx、MySQL、Redis 全部 healthy；入口页 `no-store`，版本清单与哈希 bundle 已实测 |
+| 管理员迁移/鉴权 | 旧 MySQL 卷实际升级到 `20260721_0001`；`auth_version` 与管理表存在；管理员总览 200/普通用户 403 |
 | Trace 浏览器 E2E | 通过；合成账号实际回放 memory retrieval，展示候选/过滤/注入/token/未归因边界，控制台 0 warning/error |
 | Ruff | 全仓通过，0 项 |
 | npm audit | 生产+开发依赖 0 个已知漏洞 |
@@ -432,7 +460,7 @@ Platform 结果来自 [原始 JSON](benchmarks/results/20260715T125211Z-platform
 
 ## 当前状态
 
-项目已完成五阶段 MVP，并建立可靠单 Agent、显式受控 Multi-Agent、可回放 Trace、可复现 platform benchmark 和已通过隔离健康验收的四服务 Docker 交付基线。真实模型 single/multi 对照指标、内核/容器级 Shell 沙箱、多副本集中 Trace、数据库迁移和正式角色管理界面仍为明确待测/待实现项。
+项目已建立可靠单 Agent、显式受控 Multi-Agent、可回放 Trace、可复现 platform benchmark、四服务 Docker 交付和 Admin Control Room MVP。真实模型 single/multi 对照指标、内核/容器级 Shell 沙箱、多副本集中 Trace、正式 RBAC/SSO、额度后台对账任务和备份恢复演练仍为明确待测/待实现项。
 
 ## License
 

@@ -11,6 +11,7 @@ from langgraph.types import Command
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from enterprise_agent.admin.quotas import acquire_task_quota
 from enterprise_agent.api.middleware.auth import get_current_user, get_current_user_permissions
 from enterprise_agent.api.schemas.chat import (
     AgentCapabilities,
@@ -578,43 +579,49 @@ async def chat_completion(
         Chat response
     """
     _validate_request_mode(request.mode, request.content, permissions)
-    session_id = await _resolve_chat_session(request, user_id, db)
-    trace_id = str(uuid.uuid4())
-    _start_task_trace(
-        session_id=session_id,
-        trace_id=trace_id,
-        user_id=user_id,
-        content=request.content,
-        mode=request.mode,
-    )
-
-    # Set user context for workspace isolation
-    set_current_user_id(user_id)
-
-    # Execute agent graph with thread_id for state persistence
-    graph = get_agent_graph()
-    config = {"configurable": {"thread_id": session_id}}
+    if request.session_id:
+        await _require_owned_session(request.session_id, user_id, db)
+    quota_lease = await acquire_task_quota(user_id, db)
     try:
-        result = await asyncio.wait_for(
-            graph.ainvoke(
-                _task_input(
-                    session_id=session_id,
-                    trace_id=trace_id,
-                    user_id=user_id,
-                    permissions=permissions,
-                    content=request.content,
-                    mode=request.mode,
-                ),
-                config=config,
-            ),
-            timeout=settings.AGENT_INVOKE_TIMEOUT_SECONDS
+        session_id = await _resolve_chat_session(request, user_id, db)
+        trace_id = str(uuid.uuid4())
+        _start_task_trace(
+            session_id=session_id,
+            trace_id=trace_id,
+            user_id=user_id,
+            content=request.content,
+            mode=request.mode,
         )
-    except asyncio.TimeoutError:
-        await _safe_mark_task_terminal(graph, config, TaskStatus.FAILED, "Agent invocation timed out")
-        raise HTTPException(status_code=504, detail="Request timed out")
-    except Exception:
-        await _safe_mark_task_terminal(graph, config, TaskStatus.FAILED, "Agent invocation failed")
-        raise
+
+        # Set user context for workspace isolation
+        set_current_user_id(user_id)
+
+        # Execute agent graph with thread_id for state persistence
+        graph = get_agent_graph()
+        config = {"configurable": {"thread_id": session_id}}
+        try:
+            result = await asyncio.wait_for(
+                graph.ainvoke(
+                    _task_input(
+                        session_id=session_id,
+                        trace_id=trace_id,
+                        user_id=user_id,
+                        permissions=permissions,
+                        content=request.content,
+                        mode=request.mode,
+                    ),
+                    config=config,
+                ),
+                timeout=settings.AGENT_INVOKE_TIMEOUT_SECONDS
+            )
+        except asyncio.TimeoutError:
+            await _safe_mark_task_terminal(graph, config, TaskStatus.FAILED, "Agent invocation timed out")
+            raise HTTPException(status_code=504, detail="Request timed out")
+        except Exception:
+            await _safe_mark_task_terminal(graph, config, TaskStatus.FAILED, "Agent invocation failed")
+            raise
+    finally:
+        await quota_lease.release()
 
     # Get last message (guard against empty messages)
     messages = result.get("messages", [])
@@ -690,19 +697,26 @@ async def chat_stream(
         StreamingResponse with SSE events (delta, tool_start, tool_end, interrupt)
     """
     _validate_request_mode(request.mode, request.content, permissions)
-    session_id = await _resolve_chat_session(request, user_id, db)
-    trace_id = str(uuid.uuid4())
-    _start_task_trace(
-        session_id=session_id,
-        trace_id=trace_id,
-        user_id=user_id,
-        content=request.content,
-        mode=request.mode,
-    )
-    set_current_user_id(user_id)
+    if request.session_id:
+        await _require_owned_session(request.session_id, user_id, db)
+    quota_lease = await acquire_task_quota(user_id, db)
+    try:
+        session_id = await _resolve_chat_session(request, user_id, db)
+        trace_id = str(uuid.uuid4())
+        _start_task_trace(
+            session_id=session_id,
+            trace_id=trace_id,
+            user_id=user_id,
+            content=request.content,
+            mode=request.mode,
+        )
+        set_current_user_id(user_id)
 
-    config = {"configurable": {"thread_id": session_id}}
-    graph = get_agent_graph()
+        config = {"configurable": {"thread_id": session_id}}
+        graph = get_agent_graph()
+    except Exception:
+        await quota_lease.release()
+        raise
 
     async def generate():
         stream_filter = InternalStreamFilter()
@@ -815,6 +829,7 @@ async def chat_stream(
         finally:
             # Clean up request-local cancellation state.
             _cancel_events.pop(session_id, None)
+            await quota_lease.release()
 
     return StreamingResponse(generate(), media_type="text/event-stream")
 
@@ -947,13 +962,12 @@ async def chat_stream_resume(
     return StreamingResponse(generate(), media_type="text/event-stream")
 
 
-@router.post("/stream/cancel")
-async def cancel_stream(
+async def request_task_cancellation(
     session_id: str,
-    user_id: int = Depends(get_current_user),
-    db: AsyncSession = Depends(get_db),
+    user_id: int,
+    reason: str = "Cancelled by user",
 ):
-    """Cancel an in-progress SSE stream for a session.
+    """Cancel an in-progress task while cleaning its checkpoint.
 
     Sets the cancel event to stop the SSE generator. Also handles the
     case where the graph is paused at a tool confirmation interrupt by
@@ -967,7 +981,6 @@ async def cancel_stream(
     Returns:
         Status indicating cancellation was requested
     """
-    await _require_owned_session(session_id, user_id, db)
     _cancel_confirmation_timeout(session_id)
     set_current_user_id(user_id)
 
@@ -1030,7 +1043,7 @@ async def cancel_stream(
                 graph,
                 config,
                 TaskStatus.CANCELLED,
-                "Cancelled by user",
+                reason,
             )
             logging.info(f"[cancel] Checkpoint marked cancelled for session {session_id}")
 
@@ -1042,6 +1055,17 @@ async def cancel_stream(
         "session_id": session_id,
         "message": "Stream cancellation requested"
     }
+
+
+@router.post("/stream/cancel")
+async def cancel_stream(
+    session_id: str,
+    user_id: int = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    """Cancel an owned in-progress SSE stream."""
+    await _require_owned_session(session_id, user_id, db)
+    return await request_task_cancellation(session_id, user_id)
 
 
 # Session management routes

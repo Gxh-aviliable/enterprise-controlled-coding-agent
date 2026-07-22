@@ -75,6 +75,7 @@ This is a test skill with some guidelines.
         result = skill_loader.load("test_skill")
         assert "<skill" in result
         assert "Test Skill Content" in result
+        assert 'sha256="' in result
 
     def test_load_nonexistent_skill(self, skill_loader: SkillLoader):
         """Test loading nonexistent skill returns error."""

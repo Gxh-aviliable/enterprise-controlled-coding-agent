@@ -116,7 +116,10 @@
           <span>{{ username }}</span>
         </div>
         <div class="menu-divider"></div>
-        <!-- Future items go here -->
+        <button v-if="auth.isAdmin" class="menu-item" @click="openAdminConsole">
+          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 3l8 4v5c0 5-3.4 8.4-8 9-4.6-.6-8-4-8-9V7l8-4z"/><path d="M9 12l2 2 4-4"/></svg>
+          Admin Control Room
+        </button>
         <button class="menu-item" @click="handleLogout">
           <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round"><path d="M9 21H5a2 2 0 01-2-2V5a2 2 0 012-2h4"/><polyline points="16 17 21 12 16 7"/><line x1="21" y1="12" x2="9" y2="12"/></svg>
           Sign Out
@@ -137,7 +140,7 @@ defineProps({
   activeId: { type: String, default: '' },
   selectedFilePath: { type: String, default: '' }
 })
-const emit = defineEmits(['select', 'delete', 'new-session', 'file-select', 'tab-change'])
+const emit = defineEmits(['select', 'delete', 'new-session', 'file-select', 'tab-change', 'open-admin'])
 
 // User menu
 const showUserMenu = ref(false)
@@ -151,15 +154,14 @@ function onDocumentClick(e) {
 onMounted(() => document.addEventListener('click', onDocumentClick))
 onUnmounted(() => document.removeEventListener('click', onDocumentClick))
 
-// Extract username from JWT (base64 decode the payload)
 const username = computed(() => {
-  const token = localStorage.getItem('access_token')
-  if (!token) return 'User'
-  try {
-    const payload = JSON.parse(atob(token.split('.')[1]))
-    return payload.sub || payload.username || 'User'
-  } catch { return 'User' }
+  return auth.profile?.username || auth.profile?.full_name || 'User'
 })
+
+function openAdminConsole() {
+  showUserMenu.value = false
+  emit('open-admin')
+}
 
 function handleLogout() {
   showUserMenu.value = false
