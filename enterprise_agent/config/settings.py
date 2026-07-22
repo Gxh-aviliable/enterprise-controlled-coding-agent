@@ -102,7 +102,8 @@ class Settings(BaseSettings):
     AGENT_INVOKE_TIMEOUT_SECONDS: int = 600  # Max seconds for a single graph invocation
     MAX_AGENT_ROUNDS: int = 20  # Fail fast instead of allowing long no-progress loops
     MAX_TOOL_CALLS_PER_TASK: int = 25  # Framework-enforced tool-call budget
-    TASK_TOKEN_BUDGET: int = 48000  # Per user task; separate from context compaction threshold
+    TASK_TOKEN_BUDGET: int = 1_000_000  # Per user task; separate from context compaction threshold
+    SESSION_TOKEN_BUDGET: int = 1_000_000  # Cumulative model usage across one chat session
     SUBAGENT_MAX_ROUNDS: int = 30  # Max rounds for subagent execution
     TODO_MAX_ITEMS: int = 20  # Max todo items per session
     TODO_MAX_IN_PROGRESS: int = 1  # Max concurrent in_progress todos

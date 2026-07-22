@@ -46,6 +46,9 @@ class SessionResponse(BaseModel):
     status: str
     created_at: datetime
     message_count: Optional[int] = 0
+    history_status: Optional[
+        Literal["durable", "checkpoint", "expired", "partial", "empty"]
+    ] = "empty"
 
 
 class ResumeRequest(BaseModel):

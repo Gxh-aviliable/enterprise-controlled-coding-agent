@@ -6,6 +6,9 @@ All notable project changes are recorded here. Benchmark and performance claims 
 
 ### Added
 
+- Secret-free benchmark reproducibility manifests recording Git commit/branch/dirty state, suite and lockfile hashes, selected cases, runtime, Agent limits, model identity, sanitized endpoint, and effective inference-default policy.
+- Recoverable `delete_paths(paths, reason)` Agent tool with exact-path HITL, protected workspace/system paths, wildcard and overlap rejection, symlink-safe moves, rollback on partial failure, and per-operation recovery manifests under `.agent/trash/`.
+- Persistent `session_token_count` enforcement with a configurable 1,000,000-token cumulative session budget, separate from per-task usage and context compaction.
 - Admin Control Room MVP with live `/auth/me` authorization, user status and session/API-key revocation, quota configuration/usage, metadata-first workspace inspection, audited temporary content grants, cross-user task summaries/cancellation, audit search, and dependency/storage health.
 - Alembic adoption migration that works for both clean databases and legacy `create_all()` installations, including the administrator schema and JWT `auth_version` revocation generation.
 - Runtime product quota enforcement with Redis atomic concurrent leases, MySQL daily task settlement, Trace-derived daily/monthly token checks, structured 429 errors, and release on normal/error/SSE exit paths.
@@ -35,6 +38,10 @@ All notable project changes are recorded here. Benchmark and performance claims 
 
 ### Fixed
 
+- POSIX foreground/background commands now use an explicit Bash executable instead of the host's implicit `/bin/sh`; the Agent no longer receives the tenant's absolute workspace path, and policy failures provide actionable relative-path, captured-output, or `delete_paths` remediation without weakening existing blocks.
+- Chat input now distinguishes IME candidate confirmation from an intentional send: composition state, Safari's post-`compositionend` Enter ordering, and legacy key-code 229 are guarded while ordinary Enter-to-send and Shift+Enter remain intact.
+- Conversation refresh no longer hides every MySQL session whose 24-hour Redis checkpoint expired. User-visible messages now persist in MySQL `chat_messages`; startup migrates readable legacy checkpoints, list/history APIs expose explicit durability/gap status, and streaming, cancellation, failure, timeout, and HITL resume paths update one idempotent assistant record.
+- Direct Python/Node workspace-script execution is no longer classified as safe Shell work; deletion must use the dedicated confirmed tool instead of attempting `rm`, inline code, or generated cleanup-script bypasses.
 - Fresh Docker installations no longer run an administrator migration before the referenced core identity tables exist; existing MySQL volumes are adopted without recreating users/sessions.
 - Password reset, account disabling, and explicit administrator revocation now invalidate all older access/refresh token generations instead of waiting for JWT expiry.
 - Admin overview token totals now aggregate the complete retained Trace window instead of only five recent tasks per user.
@@ -87,8 +94,8 @@ All notable project changes are recorded here. Benchmark and performance claims 
 
 ### Baseline verification
 
-- Administrator milestone (2026-07-22): backend 357 passed; Ruff passed; frontend 20/20 passed; production build passed with a 76.99 kB largest chunk; isolated clean-volume Docker smoke passed.
-- Rebuilt API/frontend images passed against the existing MySQL volume; Alembic reached `20260721_0001`, `users.auth_version` and administrator tables were verified, and all four Compose services were healthy.
+- Current milestone (2026-07-22): backend 372 passed; Ruff passed; frontend 23/23 passed; production build passed with a 76.99 kB largest chunk; isolated clean-volume Docker smoke passed.
+- Rebuilt API/frontend images passed against the existing MySQL volume; Alembic reached `20260722_0002`, 13 readable Redis messages migrated to MySQL, all 12 non-deleted user-1 sessions were returned after refresh (1 durable, 11 honestly expired), and all four Compose services were healthy.
 - Live API authorization smoke: users.id=1 administrator overview returned 200 with `metadata_only`; an active non-admin user returned 403. Browser regular-user smoke showed no administrator entry and zero warning/error logs.
 - Backend: 343 passed (2026-07-20); real Chroma v2 write/search, provenance quarantine, cascade deletion, task-boundary/tool recall, Chinese reranking, admission policy, offline-first embedding initialization, and full Ruff checks passed.
 - Offline platform benchmark: 10/10 tasks passed; 80.0% tool-call success, 84.8 ms average task duration, 20.0% intervention rate, and 1 safety interception. This deterministic run uses no LLM and is not an Agent intelligence score.

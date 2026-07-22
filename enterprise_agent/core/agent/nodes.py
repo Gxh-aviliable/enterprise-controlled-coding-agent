@@ -27,7 +27,6 @@ RedisSaver checkpointer — no manual message loading/saving needed.
 import asyncio
 import json
 import logging
-import os as _os
 import platform
 import time
 from contextlib import suppress
@@ -87,56 +86,44 @@ Before acting, check these questions. If YES, use the indicated tool:
 
 1. Simple chat? → respond directly (skip tools)
 2. **User asks about their memory/preferences/history?** → First, check <long_term_memory> in the first message.
-   It contains pre-loaded memories.
-   If it says "(no prior memories found)" or the user wants a complete listing, use the `search_memory` tool.
-   Actively query ChromaDB when needed.
-   Use a broad query like "task summary user preference workflow" to list all stored memories.
+   If empty, incomplete, or the user wants a full listing, use `search_memory`.
    **CRITICAL: ONLY `search_memory` accesses long-term memory.**
-   Do NOT use `task_list` (it lists operational .tasks/ JSON files — NOT user memories), do NOT use `list_transcripts`
-   (it lists compression backup transcripts — NOT user memories).
-   Do NOT explore .tasks/, .transcripts/, .team/ with bash/file tools.
-   These are workspace operational artifacts, completely unrelated to the user's long-term memory.
-   The one and only tool for long-term memory is `search_memory`.
+   `task_list`, `list_transcripts`, .tasks/, .transcripts/, and .team/ are operational artifacts, not memory.
 3. Domain knowledge needed? → check Available Skills above first; use `load_skill(name)` if relevant
 4. Follow the Execution Mode block exactly. Never simulate unavailable Agent collaboration.
 5. Search code with read-only file/shell tools before considering delegation.
 6. Long-running command? → `background_run()` then `check_background()`
-7. Complex implementation? → `task(agent_type="general-purpose")`
-8. Context too long? → use `compress`
+7. Delete paths? → `delete_paths(paths, reason)` with exact relative paths
+8. Complex implementation? → `task(agent_type="general-purpose")`
+9. Context too long? → use `compress`
 
 ## Critical Rules
 - Use only tools present in the bound tool schema; never simulate unavailable tools
 - `task_create` only creates an operational tracking record; it never starts another Agent
 - Use the shell commands described in the Environment block for this host OS
+- Shell starts at workspace root: use relative paths; never repeat its server path or hide/merge output
+- On `policy_blocked`, follow its remediation once; on `nonzero_exit`, inspect the real stderr/config
 - Track multi-step work with `todo_update`
+- Delete only via `delete_paths`; never bypass it with shell/scripts. Stop on protected paths.
 - Be concise and direct in responses
-- When asked about user's memory/preferences/profile: check <long_term_memory> block first.
-  Then use `search_memory` tool to actively query ChromaDB if needed.
-  The ONLY tool for long-term memory is `search_memory`.
-  Do NOT use `task_list` (operational task tracking), `list_transcripts`
-  (compression backups), or explore .tasks/, .transcripts/, .team/ — those are workspace artifacts, NOT user memory."""
+- Memory questions use <long_term_memory>, then `search_memory`; never inspect operational artifacts."""
 
 
 def _build_environment_info() -> str:
     """Build environment info block for system prompt."""
-    from enterprise_agent.core.agent.tools.workspace import get_user_workspace
-    try:
-        workspace = get_user_workspace()
-    except Exception:
-        workspace = str(Path(_os.getcwd()))
-
     system = platform.system()
     if system == "Windows":
-        shell_info = "cmd.exe (Windows) — use commands like `dir`, `cd /d`, `mkdir`, `python`"
+        shell_info = "cmd.exe (Windows) — use commands like `dir`, `cd subdir`, `mkdir`, `python`"
     elif system == "Darwin":
-        shell_info = "POSIX shell (macOS) — use commands like `ls`, `pwd`, `mkdir -p`, `python3`"
+        shell_info = "Bash (macOS) — use commands like `ls`, `pwd`, `mkdir -p`, `python3`"
     else:
-        shell_info = "POSIX shell (Linux/Unix) — use commands like `ls`, `pwd`, `mkdir -p`, `python3`"
+        shell_info = "Bash (Linux/Unix) — use commands like `ls`, `pwd`, `mkdir -p`, `python3`"
 
     return (
         f"- OS: {system} ({platform.release()})\n"
         f"- Shell: {shell_info}\n"
-        f"- Workspace: {workspace}\n"
+        "- Workspace: current shell directory (`.`); the server path is intentionally hidden\n"
+        "- Path/output policy: relative paths only; do not use `/workspaces/...`, `..`, `/dev/null`, or `2>&1`\n"
         f"- Python: {platform.python_version()}\n"
         f"- Encoding: utf-8 (PYTHONIOENCODING=utf-8 is auto-set for all commands)"
     )
@@ -646,6 +633,9 @@ async def init_context_node(state: AgentState) -> Dict[str, Any]:
     result = {
         "token_count": initial_token_count,  # Estimated from actual messages, not 0
         "task_token_count": 0,
+        "session_token_count": (
+            0 if is_new_session else max(0, int(state.get("session_token_count", 0) or 0))
+        ),
         "pending_tool_calls": [],
         "tool_results": {},
         "tool_call_stats": {},
@@ -939,10 +929,23 @@ async def llm_call_node(state: AgentState) -> Dict[str, Any]:
     MAIN_SYSTEM_PROMPT stays the sole SystemMessage. Long-term recall is held
     in an ephemeral state field rather than persisted in chat history.
     """
-    if state.get("task_token_count", 0) >= settings.TASK_TOKEN_BUDGET:
+    task_tokens_used = max(0, int(state.get("task_token_count", 0) or 0))
+    session_tokens_used = max(0, int(state.get("session_token_count", 0) or 0))
+    budget_scope = None
+    budget_used = 0
+    budget_limit = 0
+    if session_tokens_used >= settings.SESSION_TOKEN_BUDGET:
+        budget_scope = "Session"
+        budget_used = session_tokens_used
+        budget_limit = settings.SESSION_TOKEN_BUDGET
+    elif task_tokens_used >= settings.TASK_TOKEN_BUDGET:
+        budget_scope = "Task"
+        budget_used = task_tokens_used
+        budget_limit = settings.TASK_TOKEN_BUDGET
+
+    if budget_scope:
         failure_reason = (
-            f"Task token budget exhausted ({state.get('task_token_count', 0)} / "
-            f"{settings.TASK_TOKEN_BUDGET})."
+            f"{budget_scope} token budget exhausted ({budget_used} / {budget_limit})."
         )
         _record_trace(
             state,
@@ -950,8 +953,9 @@ async def llm_call_node(state: AgentState) -> Dict[str, Any]:
             name="token_budget_exhausted",
             status="error",
             data={
-                "used": state.get("task_token_count", 0),
-                "limit": settings.TASK_TOKEN_BUDGET,
+                "scope": budget_scope.lower(),
+                "used": budget_used,
+                "limit": budget_limit,
             },
         )
         return {
@@ -1059,17 +1063,20 @@ async def llm_call_node(state: AgentState) -> Dict[str, Any]:
     # Track token usage
     token_count = state.get("token_count", 0)
     task_token_count = state.get("task_token_count", 0)
+    session_token_count = state.get("session_token_count", 0)
     usage = getattr(response, "usage_metadata", {})
     if usage:
         usage_tokens = usage.get("total_tokens", 0)
         token_count += usage_tokens
         task_token_count += usage_tokens
+        session_token_count += usage_tokens
     else:
         # Estimate if not provided
         ctx_mgr = get_context_manager()
         estimated_tokens = ctx_mgr.estimate_tokens([response])
         token_count += estimated_tokens
         task_token_count += estimated_tokens
+        session_token_count += estimated_tokens
 
     # Convert response back to dict format
     response_dict = _convert_from_langchain_messages([response])[0]
@@ -1105,6 +1112,7 @@ async def llm_call_node(state: AgentState) -> Dict[str, Any]:
         "pending_tool_calls": tool_calls,
         "token_count": token_count,
         "task_token_count": task_token_count,
+        "session_token_count": session_token_count,
         "round_count": round_count,
         "should_end_after_save": should_end_after_save,  # Signal to route_after_tool
         "execution_phase": (
@@ -1432,6 +1440,10 @@ async def tool_executor_node(state: AgentState) -> Dict[str, Any]:
             changed_path = str(tool_input.get("path", ""))
             if changed_path:
                 changed_files.add(changed_path)
+        if final_record.ok and tool_name == "delete_paths":
+            changed_files.update(
+                str(path) for path in tool_input.get("paths", []) if str(path)
+            )
         if tool_name == "bash" and _is_validation_command(str(tool_input.get("command", ""))):
             validation_results.append({
                 "command": str(tool_input.get("command", "")),

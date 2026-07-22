@@ -34,6 +34,7 @@ def test_sensitive_policy_is_derived_from_contracts():
     assert tool_requires_confirmation("background_run") is True
     assert tool_requires_confirmation("task") is True
     assert tool_requires_confirmation("delegate_task") is True
+    assert tool_requires_confirmation("delete_paths") is True
     assert tool_requires_confirmation("read_file") is False
 
 
@@ -42,6 +43,8 @@ def test_shell_confirmation_is_argument_sensitive():
     assert tool_requires_confirmation("bash", {"command": "pytest -q"}) is False
     assert tool_requires_confirmation("bash", {"command": "git status"}) is False
     assert tool_requires_confirmation("bash", {"command": "git commit -m test"}) is True
+    assert tool_requires_confirmation("bash", {"command": "python3 cleanup.py"}) is True
+    assert tool_requires_confirmation("bash", {"command": "python3 -m pytest -q"}) is False
     # Dangerous commands cannot be approved; the executor policy blocks them.
     assert tool_requires_confirmation("bash", {"command": "rm -rf /"}) is False
 
@@ -68,7 +71,7 @@ def test_jwt_permission_names_map_to_executable_tools():
         for tool in get_tools_for_permissions(["tools:advanced"], enable_multi_agent=True)
     }
 
-    assert {"read_file", "write_file", "task_list"}.issubset(basic)
+    assert {"read_file", "write_file", "delete_paths", "task_list"}.issubset(basic)
     assert shell == {"bash", "background_run", "check_background"}
     assert {"task", "delegate_task", "spawn_teammate", "broadcast"}.issubset(advanced)
     assert "bash" not in basic
@@ -77,6 +80,9 @@ def test_jwt_permission_names_map_to_executable_tools():
 def test_shell_risk_is_argument_sensitive():
     assert resolve_tool_risk("bash", {"command": "pwd"}) == RiskLevel.SAFE
     assert resolve_tool_risk("bash", {"command": "git commit -m test"}) == RiskLevel.REVIEW
+    assert resolve_tool_risk("bash", {"command": "python3 cleanup.py"}) == RiskLevel.REVIEW
+    assert resolve_tool_risk("bash", {"command": "node cleanup.js"}) == RiskLevel.REVIEW
+    assert resolve_tool_risk("delete_paths", {"paths": ["generated"]}) == RiskLevel.DANGEROUS
     assert resolve_tool_risk("bash", {"command": "rm -rf /"}) == RiskLevel.DANGEROUS
 
 

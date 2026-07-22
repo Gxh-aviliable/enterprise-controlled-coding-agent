@@ -36,6 +36,7 @@
 - 用户 workspace 隔离：`/workspaces/user_<id>` 或自定义服务器路径。
 - 所有文件 API 和 Agent 文件工具都通过 workspace 路径解析，防止路径穿越。
 - 支持文件树、文件阅读、上传下载、移动、删除和目录创建。
+- Agent 删除统一使用 `delete_paths(paths, reason)`：只接受精确相对路径，经 HITL 批准后移动到受保护回收区并生成恢复 manifest；通配符、重叠路径、凭据和 Agent 系统目录会被拒绝。
 - 支持本地 VS Code / Web VSCode 打开当前用户 workspace。
 - 自动为用户 workspace 初始化安全的 `.vscode/settings.json`，避免编辑器插件误读全局配置。
 
@@ -43,12 +44,13 @@
 
 - 基于 LangGraph StateGraph 构建有状态工程 Agent。
 - 每个用户任务遵循 `解析 → 规划 → 执行 → 检查点 → 验证 → 总结`，并使用 `pending/running/waiting_confirmation/succeeded/failed/cancelled` 状态机。
-- RedisSaver 按 `session_id/thread_id` 持久化会话状态。
+- RedisSaver 按 `session_id/thread_id` 保存短期 Agent 执行检查点；MySQL `chat_messages` 独立持久化用户可见的对话正文，刷新或 Redis TTL 到期不会再让会话从列表消失。
 - SSE 逐 token 流式响应，支持中断、取消和恢复。
 - 工具统一声明输入 schema、风险级别、超时、重试、幂等性和结果规范；当前数据库角色权限在模型绑定与执行时双重过滤。
 - 支持文件读写、shell、任务管理、上下文压缩和真实子 Agent 委派；默认选择单 Agent，Multi-Agent 只能由显式请求模式启用。
 - 支持 Todo 跟踪和后台任务，适合多步骤工程任务。
 - 修改代码后若没有成功测试/构建/检查记录，验证门会要求补充验证；超过预算则以失败状态结束而不是伪报成功。
+- 单任务与会话累计模型调用预算默认均为 1,000,000 token；会话累计值跨请求保存在 LangGraph checkpoint 中，上下文仍会按独立阈值压缩。
 - 未注册工具和越权工具会返回结构化 `unknown_tool` / `permission_denied` 记录，不再让确认节点异常退出；失败/取消时未完成 Todo 和本任务创建的持久任务会同步收敛到终态。
 
 #### Single / Multi-Agent 模式
@@ -68,8 +70,11 @@
 - JWT 认证，邮箱登录，刷新 token。
 - 忘记密码流程，开发模式下验证码写入后端日志，可配置 SMTP 邮箱发送。
 - 参数级 HITL：`pwd`、`ls`、`pytest`、`git status` 等安全 Shell 自动执行；Git 变更、依赖安装和复合命令仍需确认；策略判定为危险的命令不能通过确认放行，而是直接拦截并写入 Trace。
-- 写文件、编辑文件、任务创建和子 Agent 等副作用工具继续走确认流；确认超时会自动拒绝并恢复任务。
+- 写文件、编辑文件、专用删除、任务创建和子 Agent 等副作用工具继续走确认流；确认超时会自动拒绝并恢复任务。
+- 删除授权绑定到本批次明确路径；`rm` 仍被 Shell 策略拦截，直接执行 Python/Node 工作区脚本至少降级为 review，系统提示禁止用脚本绕过 `delete_paths`。
 - Shell 复合命令逐段解析，拦截绝对/越界/敏感路径、命令替换、嵌套 shell、内联代码、破坏性 Git 和下载/外传命令。
+- macOS/Linux 的前台与后台命令统一由显式 Bash 执行，不再依赖可能指向 `dash` 的宿主机默认 `/bin/sh`；Windows 保持 `cmd.exe` 兼容。
+- Shell 策略拒绝会返回 `policy_blocked` 和可执行修复建议；模型应改用相对路径、移除 `/dev/null`/`2>&1`，或切换到 `delete_paths`，而不是尝试等价绕过。
 - Shell/后台子进程不继承模型、JWT 或数据库密钥；Agent 文件工具拒绝 `.env`/`.git`/私钥类路径，写入采用原子替换。
 - 前端 Markdown 渲染使用 DOMPurify 做 XSS 清理。
 - 会话和文件访问按用户隔离。
@@ -125,9 +130,9 @@
 | Agent 引擎 | LangGraph StateGraph + LangChain |
 | API | FastAPI + SSE + JWT |
 | 前端 | Vue 3 + Vite + marked + DOMPurify + highlight.js |
-| 会话状态 | Redis + LangGraph RedisSaver |
+| Agent 执行检查点 | Redis + LangGraph RedisSaver |
 | 长期记忆 | ChromaDB + sentence-transformers |
-| 认证/会话 | MySQL + SQLAlchemy async |
+| 认证/会话/聊天正文 | MySQL + SQLAlchemy async + Alembic |
 | Trace/指标 | 用户 workspace 原子 JSON + FastAPI 回放 API |
 | 模型接入 | DeepSeek / Anthropic / GLM / OpenAI / MiMo / OpenAI-compatible |
 | 部署 | Docker Compose |
@@ -143,7 +148,7 @@ flowchart LR
     P --> W["User-isolated workspace"]
     P --> S["Shell / file / task tools"]
     G <--> R[("Redis checkpoints")]
-    API <--> M[("MySQL identity, quota and audit")]
+    API <--> M[("MySQL identity, sessions, chat transcript, quota and audit")]
     A["Admin Control Room"] -->|"live RBAC + reasoned actions"| API
     G <--> C[("Chroma project memory")]
     G --> T["Redacted Trace store"]
@@ -172,6 +177,7 @@ uv run python scripts/smoke_test.py
 ```bash
 cp .env.example .env
 # 替换 JWT_SECRET_KEY（至少 32 字符）、LLM_API_KEY 和模型配置
+# TASK_TOKEN_BUDGET 与 SESSION_TOKEN_BUDGET 默认均为 1000000
 docker compose -f docker/docker-compose.yml up --build -d
 docker compose -f docker/docker-compose.yml ps
 curl http://localhost:3000/api/health
@@ -216,10 +222,16 @@ curl http://localhost:8000/health
 
 ## 本地开发与服务器部署
 
-项目支持在 Windows、macOS 和 Linux 上开发，但 Agent 会根据后端实际运行系统提示模型使用对应 shell 命令：
+项目支持在 Windows、macOS 和 Linux 上开发，但 Agent 会根据后端实际运行系统选择确定的命令解释器：
 
-- Windows：`dir`、`cd /d`、`python`
-- macOS / Linux：`ls`、`pwd`、`mkdir -p`、`python3`
+- Windows：`cmd.exe`，使用 `dir`、`cd subdir`、`python`
+- macOS / Linux：显式 Bash，使用 `ls`、`pwd`、`mkdir -p`、`python3`
+
+Agent Shell 的 `cwd` 已经是当前用户 workspace，模型看不到也不需要重复服务器绝对路径。命令参数应使用 `.`、文件名或相对目录；stdout/stderr 已分别捕获，不应使用 `/dev/null` 或 `2>&1`。Trace 中三类常见失败含义如下：
+
+- `policy_blocked`：命令触碰安全边界，按返回的 remediation 改写，不能由 Approve All 绕过。
+- `nonzero_exit`：命令已经真实执行，但程序因参数、依赖、测试或项目配置返回非零码，应检查 stderr 后修复根因。
+- `tool_timeout`：执行超过工具超时，需要缩小命令或使用受控后台任务，而不是盲目重复。
 
 macOS 本地调试建议使用项目内 workspace，避免 `/workspaces` 权限问题：
 
@@ -331,9 +343,9 @@ my_mini_claude_code/
 | POST | `/chat/stream` | SSE 流式对话 |
 | POST | `/chat/stream/resume` | 工具确认后恢复 |
 | POST | `/chat/stream/cancel` | 取消生成 |
-| GET | `/sessions/` | 列出有历史消息的会话 |
+| GET | `/sessions/` | 列出全部未删除会话，并返回 `durable/checkpoint/expired/partial/empty` 历史状态 |
 | POST | `/sessions/` | 创建会话 |
-| GET | `/sessions/{id}/messages` | 读取会话历史 |
+| GET | `/sessions/{id}/messages` | 优先从 MySQL 读取持久历史，旧会话兼容 Redis 回退 |
 | DELETE | `/sessions/{id}` | 删除会话 |
 
 ### Workspace
@@ -412,18 +424,18 @@ uv run python -m benchmarks.run --backend platform --mode single
 HF_HUB_OFFLINE=1 TRANSFORMERS_OFFLINE=1 uv run python -m benchmarks.memory_recall
 ```
 
-2026-07-21 当前验证：
+2026-07-22 当前验证：
 
 | 检查 | 结果 |
 |---|---|
-| 后端 pytest | 357 passed |
-| 前端回归测试 | 20 passed；在原回归基础上增加 Admin Control Room 默认元数据边界、临时 grant 交互和结构化额度错误展示 |
+| 后端 pytest | 381 passed；覆盖持久消息写入、旧 Redis 历史迁移、空/过期会话保留、精确删除、HITL 风险、会话预算和 benchmark 可追溯 manifest |
+| 前端回归测试 | 23 passed；覆盖中文/日文等 IME 候选确认 Enter 不误发送、历史过期/部分缺口提示，以及 Admin Control Room 与聊天工作台回归 |
 | 前端生产构建 | 通过；最大 JS chunk 76.99 kB，无大 chunk 警告 |
 | Compose 配置解析 | 通过 |
 | Docker 全栈 smoke | 通过；隔离 project 中 API、Vue/Nginx、MySQL、Redis 全部 healthy，API 直连与 `/api/health` 反代均通过 |
 | Docker 镜像 | API/前端实际构建通过；API 以 UID 10001 运行，`torch 2.13.0+cpu` |
 | 当前本机容器 | API、Vue/Nginx、MySQL、Redis 全部 healthy；入口页 `no-store`，版本清单与哈希 bundle 已实测 |
-| 管理员迁移/鉴权 | 旧 MySQL 卷实际升级到 `20260721_0001`；`auth_version` 与管理表存在；管理员总览 200/普通用户 403 |
+| 数据库迁移/会话恢复 | 旧 MySQL 卷实际升级到 `20260722_0002`；13 条仍可读 Redis 消息迁入 MySQL；用户 1 的 12 条未删除会话刷新后全部返回，其中 1 条 `durable`、11 条如实标记 `expired` |
 | Trace 浏览器 E2E | 通过；合成账号实际回放 memory retrieval，展示候选/过滤/注入/token/未归因边界，控制台 0 warning/error |
 | Ruff | 全仓通过，0 项 |
 | npm audit | 生产+开发依赖 0 个已知漏洞 |
@@ -439,6 +451,8 @@ HF_HUB_OFFLINE=1 TRANSFORMERS_OFFLINE=1 uv run python -m benchmarks.memory_recal
 | LLM multi Agent（3 个适合委派的用例） | **TBD** | **TBD** | **TBD** | **TBD** | **TBD** | **TBD** |
 
 Platform 结果来自 [原始 JSON](benchmarks/results/20260715T125211Z-platform-single.json) 和 [Markdown 报告](benchmarks/results/20260715T125211Z-platform-single.md)，只证明工具、状态机、安全策略、确认/恢复和评估器的确定性路径，不是 LLM 智能得分。工具成功率为 80% 是因为失败恢复用例中的预期失败以及安全拦截也计入调用总数。
+
+新生成的 benchmark 报告会记录 Git commit/branch/dirty state、用例与 `uv.lock` SHA-256、精确 case IDs、运行环境、Agent 上限、模型及脱敏 endpoint。只有 `Dirty worktree: False` 的报告才作为作品集正式结果；API key、URL 用户名/密码、query 和 fragment 不会写入产物。
 
 长期记忆另有一组不调用聊天模型的本地 embedding 评测：
 

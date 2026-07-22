@@ -67,6 +67,7 @@
           v-for="s in sessions"
           :key="s.id"
           :class="['session-item', { active: activeId === s.id }]"
+          :title="s.history_status === 'expired' ? 'Conversation metadata exists; legacy message history expired' : ''"
           @click="$emit('select', s.id)"
         >
           <div class="session-icon">
@@ -75,6 +76,11 @@
             </svg>
           </div>
           <div class="session-title">{{ s.title || s.id.slice(0, 8) }}</div>
+          <span
+            v-if="s.history_status === 'expired' || s.history_status === 'partial'"
+            :class="['history-state', s.history_status]"
+            :aria-label="s.history_status === 'expired' ? 'History expired' : 'History partially available'"
+          >!</span>
           <button
             class="btn-delete"
             @click.stop="$emit('delete', s.id)"
@@ -361,6 +367,25 @@ function handleFileSelect(node) {
   color: var(--text-primary);
   font-size: var(--text-base);
   font-weight: 400;
+}
+
+.history-state {
+  width: 16px;
+  height: 16px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+  border-radius: 50%;
+  font-size: 10px;
+  font-weight: 700;
+  color: #92400e;
+  background: #fef3c7;
+}
+
+.history-state.partial {
+  color: #1d4ed8;
+  background: #dbeafe;
 }
 
 .btn-delete {

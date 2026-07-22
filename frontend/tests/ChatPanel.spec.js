@@ -15,6 +15,7 @@ vi.mock('../src/api/client.js', () => ({
 const savedHistory = {
   session_id: 'session-existing',
   message_count: 2,
+  history_status: 'durable',
   messages: [
     { role: 'user', content: '你好啊' },
     { role: 'assistant', content: '你好，有什么可以帮你？' }
@@ -60,6 +61,27 @@ describe('ChatPanel session history restoration', () => {
     wrapper.unmount()
   })
 
+  it('does not send when Enter is confirming an IME composition', async () => {
+    const wrapper = mountChatPanel()
+    await flushPromises()
+    const textarea = wrapper.find('textarea')
+
+    await textarea.setValue('中文 mini')
+    await textarea.trigger('compositionstart')
+    await textarea.trigger('keydown', { key: 'Enter' })
+    expect(api.streamMessage).not.toHaveBeenCalled()
+
+    await textarea.trigger('compositionend')
+    await textarea.trigger('keydown', { key: 'Enter' })
+    expect(api.streamMessage).not.toHaveBeenCalled()
+
+    await new Promise(resolve => setTimeout(resolve, 0))
+    await textarea.trigger('keydown', { key: 'Enter' })
+    expect(api.streamMessage).toHaveBeenCalledTimes(1)
+    expect(api.streamMessage.mock.calls[0][0]).toMatchObject({ content: '中文 mini' })
+    wrapper.unmount()
+  })
+
   it('restores the same session if the panel is destroyed and mounted again', async () => {
     const firstPanel = mountChatPanel()
     await flushPromises()
@@ -73,6 +95,36 @@ describe('ChatPanel session history restoration', () => {
     expect(restoredPanel.text()).toContain('你好，有什么可以帮你？')
 
     restoredPanel.unmount()
+  })
+
+  it('explains when a legacy Redis-only history has expired', async () => {
+    api.getSessionMessages.mockResolvedValueOnce({
+      session_id: 'session-existing',
+      message_count: 0,
+      history_status: 'expired',
+      messages: []
+    })
+
+    const wrapper = mountChatPanel()
+    await flushPromises()
+
+    expect(wrapper.text()).toContain('History expired')
+    expect(wrapper.text()).toContain('Redis-only messages have expired')
+    wrapper.unmount()
+  })
+
+  it('shows a visible gap notice while keeping newer durable messages', async () => {
+    api.getSessionMessages.mockResolvedValueOnce({
+      ...savedHistory,
+      history_status: 'partial'
+    })
+
+    const wrapper = mountChatPanel()
+    await flushPromises()
+
+    expect(wrapper.text()).toContain('Earlier Redis-only messages expired')
+    expect(wrapper.text()).toContain('你好啊')
+    wrapper.unmount()
   })
 
   it('sends the explicitly selected Multi-Agent mode', async () => {

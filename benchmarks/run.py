@@ -10,15 +10,20 @@ from __future__ import annotations
 
 import argparse
 import asyncio
+import hashlib
 import json
 import os
+import platform
 import statistics
+import subprocess
+import sys
 import tempfile
 import time
 import uuid
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
+from urllib.parse import urlsplit
 
 from langgraph.checkpoint.memory import InMemorySaver
 from langgraph.types import Command
@@ -41,6 +46,113 @@ ROOT = Path(__file__).resolve().parents[1]
 
 SUITE_PATH = ROOT / "benchmarks" / "v1" / "cases.json"
 RESULTS_DIR = ROOT / "benchmarks" / "results"
+
+
+def _git_value(*args: str) -> str | None:
+    """Read reproducibility metadata without making Git a runtime dependency."""
+    try:
+        result = subprocess.run(
+            ["git", "-C", str(ROOT), *args],
+            check=True,
+            capture_output=True,
+            text=True,
+            timeout=5,
+        )
+    except (FileNotFoundError, subprocess.SubprocessError):
+        return None
+    return result.stdout.strip() or None
+
+
+def _git_worktree_dirty() -> bool | None:
+    """Return False for a clean tree and None only when Git cannot be queried."""
+    try:
+        result = subprocess.run(
+            ["git", "-C", str(ROOT), "status", "--porcelain", "--untracked-files=normal"],
+            check=True,
+            capture_output=True,
+            text=True,
+            timeout=5,
+        )
+    except (FileNotFoundError, subprocess.SubprocessError):
+        return None
+    return bool(result.stdout.strip())
+
+
+def _sanitized_endpoint(url: str | None) -> dict[str, Any] | None:
+    """Keep endpoint identity while dropping credentials, query strings, and fragments."""
+    if not url:
+        return None
+    parsed = urlsplit(url)
+    return {
+        "scheme": parsed.scheme or None,
+        "host": parsed.hostname,
+        "port": parsed.port,
+        "path": parsed.path.rstrip("/") or "/",
+    }
+
+
+def build_run_metadata(
+    *,
+    backend: str,
+    mode: str,
+    suite: dict[str, Any],
+    selected_cases: list[dict[str, Any]],
+    started_at: datetime,
+    finished_at: datetime,
+) -> dict[str, Any]:
+    """Build a secret-free manifest that can identify and reproduce one run."""
+    provider = settings.LLM_PROVIDER.lower() if backend == "agent" else None
+    base_url = settings.get_effective_base_url() if backend == "agent" else None
+    deepseek = provider == "deepseek"
+    return {
+        "code": {
+            "commit": _git_value("rev-parse", "HEAD"),
+            "branch": _git_value("rev-parse", "--abbrev-ref", "HEAD"),
+            "dirty": _git_worktree_dirty(),
+        },
+        "suite": {
+            "id": suite["suite_id"],
+            "schema_version": suite["schema_version"],
+            "path": str(SUITE_PATH.relative_to(ROOT)),
+            "sha256": hashlib.sha256(SUITE_PATH.read_bytes()).hexdigest(),
+            "selected_case_ids": [case["id"] for case in selected_cases],
+        },
+        "execution": {
+            "backend": backend,
+            "mode": mode,
+            "started_at": started_at.isoformat(),
+            "finished_at": finished_at.isoformat(),
+            "duration_ms": int((finished_at - started_at).total_seconds() * 1000),
+            "python": platform.python_version(),
+            "platform": platform.platform(),
+        },
+        "model": None if backend != "agent" else {
+            "provider": provider,
+            "model_id": settings.get_effective_model_id(),
+            "endpoint": _sanitized_endpoint(base_url),
+            "api_key_configured": bool(settings.get_effective_api_key()),
+            "parameters": {
+                "temperature": "provider_default",
+                "max_output_tokens": "provider_default",
+                "request_timeout_seconds": 300 if deepseek else "sdk_default",
+                "sdk_max_retries": 0 if deepseek else "sdk_default",
+            },
+        },
+        "agent_limits": {
+            "max_rounds": settings.MAX_AGENT_ROUNDS,
+            "max_tool_calls": settings.MAX_TOOL_CALLS_PER_TASK,
+            "task_token_budget": settings.TASK_TOKEN_BUDGET,
+            "session_token_budget": settings.SESSION_TOKEN_BUDGET,
+            "command_timeout_seconds": settings.COMMAND_TIMEOUT_SECONDS,
+            "invoke_timeout_seconds": settings.AGENT_INVOKE_TIMEOUT_SECONDS,
+            "verification_max_attempts": settings.VERIFICATION_MAX_ATTEMPTS,
+        },
+        "dependencies": {
+            "lockfile": "uv.lock",
+            "uv_lock_sha256": hashlib.sha256((ROOT / "uv.lock").read_bytes()).hexdigest(),
+            "python_executable": Path(sys.executable).name,
+        },
+    }
 
 
 def load_suite(path: Path = SUITE_PATH) -> dict[str, Any]:
@@ -408,6 +520,11 @@ def summarize_results(results: list[dict[str, Any]]) -> dict[str, Any]:
 
 def render_markdown(report: dict[str, Any]) -> str:
     summary = report["summary"]
+    metadata = report["run_metadata"]
+    code = metadata["code"]
+    suite = metadata["suite"]
+    execution = metadata["execution"]
+    model = metadata["model"]
     lines = [
         f"# Benchmark Report — {report['suite_id']}",
         "",
@@ -416,7 +533,33 @@ def render_markdown(report: dict[str, Any]) -> str:
         f"- Generated: `{report['generated_at']}`",
         f"- Model: `{report.get('model_id') or 'not used'}`",
         "",
+        "## Reproducibility manifest",
+        "",
+        f"- Code commit: `{code['commit'] or 'unavailable'}`",
+        f"- Git branch: `{code['branch'] or 'unavailable'}`",
+        f"- Dirty worktree: `{code['dirty']}`",
+        f"- Suite SHA-256: `{suite['sha256']}`",
+        f"- Selected cases: `{', '.join(suite['selected_case_ids'])}`",
+        f"- Runtime: Python `{execution['python']}` on `{execution['platform']}`",
+        f"- Run duration: `{execution['duration_ms']} ms`",
     ]
+    if model:
+        endpoint = model.get("endpoint") or {}
+        endpoint_identity = "provider default"
+        if endpoint:
+            port = f":{endpoint['port']}" if endpoint.get("port") else ""
+            endpoint_identity = (
+                f"{endpoint.get('scheme')}://{endpoint.get('host')}"
+                f"{port}{endpoint.get('path') or ''}"
+            )
+        lines.extend([
+            f"- Provider/model: `{model['provider']}` / `{model['model_id']}`",
+            f"- Endpoint (credentials removed): `{endpoint_identity}`",
+            f"- Inference parameters: `{json.dumps(model['parameters'], sort_keys=True)}`",
+        ])
+    lines.extend([
+        "",
+    ])
     if report["backend"] == "platform":
         lines.extend([
             "> This offline platform/harness baseline proves deterministic tool, policy, "
@@ -476,6 +619,7 @@ async def run_suite(
     write_artifacts: bool = True,
     case_ids: set[str] | None = None,
 ) -> dict[str, Any]:
+    started_at = datetime.now(timezone.utc)
     suite = load_suite()
     cases = suite["cases"]
     if mode == "multi":
@@ -521,13 +665,22 @@ async def run_suite(
         set_current_session_id(None)
         clear_task_managers()
 
+    finished_at = datetime.now(timezone.utc)
     report = {
         "schema_version": "1.0",
         "suite_id": suite["suite_id"],
         "backend": backend,
         "mode": mode,
         "generated_at": datetime.now(timezone.utc).isoformat(),
-        "model_id": settings.MODEL_ID if backend == "agent" else None,
+        "model_id": settings.get_effective_model_id() if backend == "agent" else None,
+        "run_metadata": build_run_metadata(
+            backend=backend,
+            mode=mode,
+            suite=suite,
+            selected_cases=cases,
+            started_at=started_at,
+            finished_at=finished_at,
+        ),
         "summary": summarize_results(results),
         "results": results,
     }

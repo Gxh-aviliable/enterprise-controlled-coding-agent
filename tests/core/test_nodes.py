@@ -84,6 +84,15 @@ class TestBuildEnvironmentInfo:
         """Test contains workspace information."""
         result = _build_environment_info()
         assert "Workspace:" in result
+        assert "current shell directory (`.`)" in result
+        assert "- Workspace: /" not in result
+
+    def test_shell_policy_is_actionable(self):
+        result = _build_environment_info()
+
+        assert "relative paths only" in result
+        assert "/dev/null" in result
+        assert "2>&1" in result
 
     def test_contains_python_info(self):
         """Test contains Python version."""

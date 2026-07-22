@@ -16,7 +16,7 @@ flowchart LR
     LG --> TOOLS[File, shell, task, skill and agent tools]
     TOOLS --> WS[Per-user workspace]
     LG --> REDIS[(Redis checkpoints)]
-    API --> MYSQL[(MySQL users and sessions)]
+    API --> MYSQL[(MySQL users, sessions and durable chat messages)]
     LG --> CHROMA[(Chroma long-term memory)]
 ```
 
@@ -30,8 +30,8 @@ flowchart LR
 | Agent nodes | Context injection, model retry, tool execution, compaction, memory flush, HITL | `enterprise_agent/core/agent/nodes.py` |
 | Tool registry | Tool discovery and coarse sensitive/safe classification | `enterprise_agent/core/agent/tools/__init__.py` |
 | Workspace layer | Context-bound user directory and traversal prevention | `enterprise_agent/core/agent/tools/workspace.py` |
-| MySQL | Users, API keys and conversation session metadata | `enterprise_agent/models/` |
-| Redis | LangGraph checkpoints plus short-term memory helpers | `enterprise_agent/db/redis.py` |
+| MySQL | Users, API keys, session metadata and durable user-visible chat transcript | `enterprise_agent/models/` |
+| Redis | Short-lived LangGraph execution checkpoints plus short-term memory helpers | `enterprise_agent/db/redis.py` |
 | Chroma | Conversation summaries and user-pattern semantic retrieval | `enterprise_agent/memory/` |
 | Trace store | Redacted task/node/model/tool events and metric aggregation | `enterprise_agent/observability/` |
 
@@ -80,7 +80,7 @@ These phases and the six-state task lifecycle are implemented. Their model-backe
 
 ## 4. Tool and workspace boundary
 
-All file tools resolve paths through `resolve_path()`, which canonicalizes the target and rejects paths outside the current user workspace. Shell commands execute with the workspace as `cwd`, an output limit, and a timeout.
+All file tools resolve paths through `resolve_path()`, which canonicalizes the target and rejects paths outside the current user workspace. Shell commands execute with the workspace as `cwd`, an output limit, and a timeout. Foreground and background execution share one interpreter selector: explicit Bash on POSIX and `cmd.exe` on Windows. The prompt exposes `.` rather than the tenant's absolute server path.
 
 Current properties and limitations:
 
@@ -88,15 +88,17 @@ Current properties and limitations:
 - Current database-role permissions filter both model-bound tools and executor dispatch; JWT claims authenticate identity but are not the authorization source of truth.
 - Unknown tools never reach risk resolution or execution. They are returned to the model and Trace as `unknown_tool`; known but unauthorized tools become `blocked/permission_denied`.
 - Shell/background confirmation is resolved from concrete arguments: safe inspection/test/build calls skip HITL, review-level calls interrupt for the current batch, and dangerous calls bypass the approval UI because executor policy must block them.
-- Shell safety is blacklist-based. A workspace `cwd` is not a process sandbox and does not by itself prevent absolute-path reads, network access, or child-process escape.
+- Policy rejections return `policy_blocked` plus a safe remediation. Absolute paths point back to the existing workspace `cwd`, output suppression/FD merging points to captured streams, and `rm` points to recoverable `delete_paths`; non-zero program exits remain distinct `nonzero_exit` evidence.
+- Shell safety is a parsed user-space policy, not a kernel sandbox. A workspace `cwd` and command validator do not provide the isolation of a rootless container, seccomp/AppArmor, resource limits, or an outbound-network policy; those remain explicit hardening work.
 
 ## 5. State and persistence
 
-There are currently three different state concepts:
+There are currently four different state concepts:
 
 | State | Current implementation | Gap |
 |---|---|---|
 | Conversation session | MySQL `SessionStatus`: `active`, `archived`, `deleted` | This is lifecycle metadata, not task execution status |
+| Conversation transcript | MySQL `ChatMessage`, ordered by per-session record ID | Durable user/assistant history; legacy Redis-only gaps remain explicitly marked |
 | Agent checkpoint | `AgentState` persisted by RedisSaver | Six-state lifecycle, execution phase, mode, budgets, tool records and task-linked artifacts |
 | Operational task board | JSON files under `<workspace>/.tasks/` | Supports pending/in-progress/completed/failed/cancelled; distributed storage remains future work |
 
@@ -127,7 +129,8 @@ The `delegate_task` path is a bounded real subagent call. Natural-language Multi
 
 ```mermaid
 flowchart LR
-    MSG[Conversation messages] --> CP[RedisSaver checkpoint]
+    MSG[Conversation messages] --> SQL[(MySQL durable transcript)]
+    MSG --> CP[RedisSaver execution checkpoint]
     MSG --> ACC[Task memory accumulator]
     ACC --> FINAL[Authoritative task finalization]
     FINAL --> GATE{Memory admission policy}
@@ -141,7 +144,10 @@ flowchart LR
     LEGACY[Legacy records] --> UI[Memory Ledger only]
 ```
 
-Redis checkpoints and compression summaries are working/recovery memory and are never
+User-visible conversation messages are stored in MySQL. Redis checkpoints remain
+24-hour working/recovery state; readable legacy transcripts are migrated at startup,
+and an expired legacy-only session stays visible with an explicit history status.
+Redis checkpoints and compression summaries are never
 automatically copied into Chroma. Chroma schema v2 stores admitted `task_outcome`
 or explicit `user_note` records plus evidence-backed preferences. Existing schema-v1
 records are classified as `legacy`: they remain visible/deletable but are excluded
@@ -190,7 +196,7 @@ Current delivery controls:
 
 Known deployment gaps:
 
-- Database schema creation uses `create_all`; there is no migration tool/version history.
+- Alembic is authoritative for deployed schema evolution; `create_all` remains only as a local-development compatibility fallback. Automated backup/restore drills are still pending.
 - The isolated four-service Compose smoke test passed on alternate host ports without touching existing local containers; API direct health and the Nginx `/api/health` proxy both reported MySQL/Redis ready.
 - Health proves MySQL/Redis readiness, not model endpoint validity or a successful model call.
 

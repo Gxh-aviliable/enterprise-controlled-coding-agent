@@ -16,7 +16,11 @@ from typing import Dict, Optional
 from langchain_core.tools import tool
 
 from enterprise_agent.config.settings import settings
-from enterprise_agent.core.agent.tools.shell import _safe_subprocess_environment, validate_command
+from enterprise_agent.core.agent.tools.shell import (
+    _safe_subprocess_environment,
+    _shell_execution_kwargs,
+    validate_command,
+)
 from enterprise_agent.core.agent.tools.workspace import get_user_workspace
 
 
@@ -97,12 +101,12 @@ class BackgroundManager:
             )
             process = subprocess.Popen(
                 command,
-                shell=True,
                 cwd=workdir,
                 env=_safe_subprocess_environment(workdir),
                 stdout=subprocess.PIPE,
                 stderr=subprocess.PIPE,
                 text=True,
+                **_shell_execution_kwargs(),
                 **process_group_args,
             )
             with self._lock:

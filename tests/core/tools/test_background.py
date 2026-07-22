@@ -1,5 +1,9 @@
 """Tests for background module (background_run, check_background)."""
 
+import os
+
+import pytest
+
 from enterprise_agent.core.agent.tools.background import (
     BackgroundManager,
     background_run,
@@ -89,6 +93,18 @@ class TestBackgroundTaskCompletion:
         """Test notifications queue exists."""
         manager = BackgroundManager()
         assert manager.notifications is not None
+
+    @pytest.mark.skipif(os.name == "nt", reason="POSIX runtime uses explicit Bash")
+    def test_posix_background_commands_use_bash(self, mock_workspace_env):
+        manager = BackgroundManager()
+        manager.run("echo {background,bash}")
+        task_id = next(iter(manager.tasks))
+        thread = manager._threads[task_id]
+
+        thread.join(timeout=2)
+
+        assert manager.tasks[task_id]["status"] == "completed"
+        assert manager.tasks[task_id]["result"] == "background bash"
 
     def test_drain_notifications_empty(self):
         """Test draining empty notifications."""

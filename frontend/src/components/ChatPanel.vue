@@ -43,13 +43,20 @@
           </svg>
         </div>
         <template v-if="activeId && emptyHistory">
-          <h2>No saved messages</h2>
-          <p>This conversation was created, but no chat history was saved.</p>
+          <h2>{{ historyStatus === 'expired' ? 'History expired' : 'No saved messages' }}</h2>
+          <p v-if="historyStatus === 'expired'">
+            This legacy conversation still exists, but its Redis-only messages have expired.
+          </p>
+          <p v-else>This conversation was created, but no chat history was saved.</p>
         </template>
         <template v-else>
           <h2>Mini Claude Code</h2>
           <p>Ask anything — code, analysis, file operations, and more.</p>
         </template>
+      </div>
+
+      <div v-if="historyStatus === 'partial'" class="history-gap-notice" role="status">
+        Earlier Redis-only messages expired before durable history was enabled. New messages are saved in MySQL.
       </div>
 
       <div
@@ -211,7 +218,9 @@
         <textarea
           ref="inputEl"
           v-model="input"
-          @keydown.enter.exact="send"
+          @keydown="handleInputKeydown"
+          @compositionstart="handleCompositionStart"
+          @compositionend="handleCompositionEnd"
           placeholder="Send a message... (Enter to send, Shift+Enter for new line)"
           :disabled="streaming || !!pendingConfirm || !!pendingModeRequest"
           rows="1"
@@ -296,9 +305,13 @@ const emit = defineEmits(['session-created'])
 
 const input = ref('')
 const messages = ref([])
+const composingInput = ref(false)
+let compositionJustEnded = false
+let compositionEndTimer = null
 const streaming = ref(false)
 const currentTool = ref('')
 const emptyHistory = ref(false)
+const historyStatus = ref('empty')
 const autoFollow = ref(true)
 const msgContainer = ref(null)
 const inputEl = ref(null)
@@ -446,6 +459,41 @@ async function send() {
   await submitContent(content)
 }
 
+function handleCompositionStart() {
+  composingInput.value = true
+  compositionJustEnded = false
+  if (compositionEndTimer) {
+    window.clearTimeout(compositionEndTimer)
+    compositionEndTimer = null
+  }
+}
+
+function handleCompositionEnd() {
+  composingInput.value = false
+  // Safari can emit compositionend immediately before the Enter keydown that
+  // confirmed the IME candidate. Keep one event-loop guard for that key only.
+  compositionJustEnded = true
+  compositionEndTimer = window.setTimeout(() => {
+    compositionJustEnded = false
+    compositionEndTimer = null
+  }, 0)
+}
+
+function handleInputKeydown(event) {
+  if (event.key !== 'Enter' || event.shiftKey) return
+  if (
+    event.isComposing ||
+    composingInput.value ||
+    compositionJustEnded ||
+    event.keyCode === 229 ||
+    event.which === 229
+  ) {
+    return
+  }
+  event.preventDefault()
+  send()
+}
+
 function cancelModeSwitch() {
   pendingModeRequest.value = ''
 }
@@ -468,6 +516,7 @@ async function submitContent(content) {
 
   messages.value.push({ role: 'user', content })
   emptyHistory.value = false
+  if (historyStatus.value !== 'partial') historyStatus.value = 'durable'
   scrollBottom(true)
 
   let sid = activeId.value
@@ -736,6 +785,7 @@ async function loadSessionMessages(sessionId) {
   if (!sessionId) {
     messages.value = []
     emptyHistory.value = false
+    historyStatus.value = 'empty'
     autoFollow.value = true
     return
   }
@@ -750,6 +800,7 @@ async function loadSessionMessages(sessionId) {
       content: m.content,
       streaming: false
     }))
+    historyStatus.value = data.history_status || (messages.value.length ? 'checkpoint' : 'empty')
     emptyHistory.value = messages.value.length === 0 && data.message_count === 0
     scheduleHighlight()
     scrollBottom(true)
@@ -759,6 +810,7 @@ async function loadSessionMessages(sessionId) {
     console.error('Failed to load session messages:', e)
     messages.value = []
     emptyHistory.value = true
+    historyStatus.value = 'empty'
   }
 }
 
@@ -781,6 +833,7 @@ watch(() => props.sessionId, async (newId) => {
     pendingModeRequest.value = ''
     streamMsgRef.value = null
     emptyHistory.value = false
+    historyStatus.value = 'empty'
     autoFollow.value = true
 
     // Load existing messages from backend, or start fresh.
@@ -827,6 +880,7 @@ onUnmounted(() => {
   // Invalidate any history response that may still be in flight.
   historyLoadRequestId += 1
   window.removeEventListener('beforeunload', _handleBeforeUnload)
+  if (compositionEndTimer) window.clearTimeout(compositionEndTimer)
 })
 </script>
 
@@ -1067,6 +1121,18 @@ onUnmounted(() => {
   font-size: var(--text-base);
   color: var(--text-tertiary);
   margin: 0;
+}
+
+.history-gap-notice {
+  max-width: 760px;
+  margin: 0 auto 18px;
+  padding: 10px 14px;
+  border: 1px solid #f5d48a;
+  border-radius: var(--radius-md);
+  background: #fffbeb;
+  color: #92400e;
+  font-size: 13px;
+  line-height: 1.5;
 }
 
 /* Message row */

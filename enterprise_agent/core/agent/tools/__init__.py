@@ -2,7 +2,7 @@
 
 Imports and registers all available tools for use with LangGraph.
 Tools are organized by module:
-- file_ops: read_file, write_file, edit_file
+- file_ops: read_file, write_file, edit_file, delete_paths
 - shell: bash
 - task: todo_update, task_create, task_get, task_update, task_list, claim_task
 - subagent: task (subagent delegation)
@@ -38,6 +38,7 @@ from enterprise_agent.core.agent.tools.contracts import (
     validate_tool_contracts,
 )
 from enterprise_agent.core.agent.tools.file_ops import (
+    delete_paths,
     edit_file,
     read_file,
     write_file,
@@ -141,6 +142,16 @@ def get_sensitive_tool_info(tool_name: str, tool_args: dict) -> str:
         old = tool_args.get("old_text", "")[:30]
         new = tool_args.get("new_text", "")[:30]
         return f"Edit file: `{path}` (replace `{old}` with `{new}`)"
+    elif tool_name == "delete_paths":
+        paths = [str(path) for path in tool_args.get("paths", [])]
+        shown = ", ".join(f"`{path}`" for path in paths[:10])
+        if len(paths) > 10:
+            shown += f", ... ({len(paths) - 10} more)"
+        reason = str(tool_args.get("reason", ""))[:100]
+        return (
+            f"Move {len(paths)} exact path(s) to protected recovery trash: "
+            f"{shown}. Reason: {reason}"
+        )
     elif tool_name == "task_create":
         desc = tool_args.get("description", "")
         return f"Create background task: {desc[:50]}..."
@@ -169,6 +180,7 @@ ALL_TOOLS = [
     read_file,
     write_file,
     edit_file,
+    delete_paths,
 
     # Shell
     bash,
@@ -242,7 +254,7 @@ def get_tools_for_permissions(
     permission_map = {
         # JWT role permissions used by enterprise_agent.auth.permissions.
         "tools:basic": [
-            read_file, write_file, edit_file,
+            read_file, write_file, edit_file, delete_paths,
             todo_update, task_create, task_get, task_update, task_list, claim_task,
             load_skill, list_skills,
             compress, list_transcripts, get_transcript, context_status,
@@ -255,7 +267,7 @@ def get_tools_for_permissions(
             broadcast, shutdown_request, plan_approval, idle,
         ],
         # Legacy category permissions retained for compatibility.
-        "tools:file": [read_file, write_file, edit_file],
+        "tools:file": [read_file, write_file, edit_file, delete_paths],
         "tools:task": [todo_update, task_create, task_get, task_update, task_list, claim_task],
         "tools:subagent": [subagent_task, delegate_task],
         "tools:background": [background_run, check_background],
@@ -272,7 +284,7 @@ def get_tools_for_permissions(
     # If no permissions, return basic tools (file + task + context)
     if not user_permissions:
         return [
-            read_file, write_file, edit_file,
+            read_file, write_file, edit_file, delete_paths,
             todo_update, task_create, task_get, task_update, task_list,
             load_skill, list_skills,
             compress, context_status

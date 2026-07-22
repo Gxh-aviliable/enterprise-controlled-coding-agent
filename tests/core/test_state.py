@@ -37,6 +37,7 @@ class TestAgentStateDefinition:
             "task_status",
             "execution_phase",
             "task_token_count",
+            "session_token_count",
             "tool_call_count",
             "tool_execution_records",
             "changed_files",

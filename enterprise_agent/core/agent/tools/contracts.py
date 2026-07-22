@@ -89,6 +89,10 @@ TOOL_CONTRACTS = {
         "edit_file", risk=RiskLevel.REVIEW, idempotent=False,
         confirmation=True, side_effect="filesystem_write",
     ),
+    "delete_paths": _contract(
+        "delete_paths", risk=RiskLevel.DANGEROUS, idempotent=False,
+        confirmation=True, side_effect="filesystem_delete",
+    ),
     # Process tools
     "bash": _contract(
         "bash", risk=RiskLevel.REVIEW,
@@ -169,6 +173,8 @@ REVIEW_SHELL_TOKENS = {
     "switch", "merge", "rebase", "reset", "clean", "mv", "cp", "mkdir", "touch",
 }
 
+SAFE_PYTHON_MODULES = {"compileall", "pytest", "unittest"}
+
 
 def get_tool_contract(tool_name: str) -> ToolContract:
     try:
@@ -225,7 +231,24 @@ def resolve_tool_risk(tool_name: str, tool_args: dict[str, Any]) -> RiskLevel:
         return RiskLevel.REVIEW
 
     binary = Path(parts[0]).name.lower()
-    lowered_args = {part.lower() for part in parts[1:]}
+    args = parts[1:]
+    lowered_args = {part.lower() for part in args}
+    if binary in {"python", "python3"}:
+        if not args:
+            return RiskLevel.REVIEW
+        if args[0].lower() in {"--version", "-v"} and len(args) == 1:
+            return RiskLevel.SAFE
+        if "-m" in args:
+            module_index = args.index("-m") + 1
+            module = args[module_index].lower() if module_index < len(args) else ""
+            if module not in SAFE_PYTHON_MODULES:
+                return RiskLevel.REVIEW
+        else:
+            # A workspace script can perform arbitrary filesystem operations;
+            # direct interpreter execution must never inherit the SAFE label.
+            return RiskLevel.REVIEW
+    if binary == "node" and lowered_args not in ({"--version"}, {"-v"}):
+        return RiskLevel.REVIEW
     if binary in SAFE_SHELL_BINARIES and not lowered_args.intersection(REVIEW_SHELL_TOKENS):
         return RiskLevel.SAFE
     return RiskLevel.REVIEW

@@ -34,7 +34,7 @@ async def test_model_call_records_summary_tokens_retries_and_duration(monkeypatc
         "get_llm_with_tools",
         lambda _permissions, _execution_mode="single_agent": FakeBoundModel(),
     )
-    await nodes.llm_call_node({
+    result = await nodes.llm_call_node({
         "trace_id": "trace-model",
         "session_id": "session",
         "user_id": 31,
@@ -42,6 +42,7 @@ async def test_model_call_records_summary_tokens_retries_and_duration(monkeypatc
         "task_status": "running",
         "messages": [{"role": "user", "content": "Explain app.py"}],
         "task_token_count": 0,
+        "session_token_count": 20,
         "token_count": 0,
         "round_count": 0,
     })
@@ -50,6 +51,33 @@ async def test_model_call_records_summary_tokens_retries_and_duration(monkeypatc
     model_event = next(event for event in trace["events"] if event["type"] == "model")
     assert model_event["data"]["output_summary"] == "Model result"
     assert trace["metrics"]["total_tokens"] == 15
+    assert result["task_token_count"] == 15
+    assert result["session_token_count"] == 35
+
+
+async def test_session_token_budget_stops_before_another_model_call(monkeypatch, tmp_path):
+    monkeypatch.setenv("WORKSPACE_BASE", str(tmp_path))
+    monkeypatch.setattr(nodes.settings, "SESSION_TOKEN_BUDGET", 100)
+    _start(35, "trace-session-budget")
+
+    result = await nodes.llm_call_node({
+        "trace_id": "trace-session-budget",
+        "session_id": "session",
+        "user_id": 35,
+        "permissions": ["tools:basic"],
+        "task_status": "running",
+        "messages": [{"role": "user", "content": "Continue"}],
+        "task_token_count": 10,
+        "session_token_count": 100,
+        "token_count": 10,
+        "round_count": 1,
+    })
+
+    assert result["task_status"] == "failed"
+    assert result["failure_reason"] == "Session token budget exhausted (100 / 100)."
+    trace = get_trace_store().get_trace(35, "trace-session-budget")
+    budget_event = next(event for event in trace["events"] if event["type"] == "budget")
+    assert budget_event["data"] == {"scope": "session", "used": 100, "limit": 100}
 
 
 async def test_tool_executor_records_permission_failure(monkeypatch, tmp_path):

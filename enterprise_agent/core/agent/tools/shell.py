@@ -52,6 +52,21 @@ INLINE_CODE_FLAGS = {
     "perl": {"-e"},
 }
 
+POSIX_BASH_LOCATIONS = (
+    Path("/bin/bash"),
+    Path("/usr/bin/bash"),
+    Path("/usr/local/bin/bash"),
+    Path("/opt/homebrew/bin/bash"),
+)
+
+
+def _blocked(reason: str, remediation: str | None = None) -> str:
+    """Return a model-readable policy rejection with a safe next action."""
+    message = f"Blocked: {reason}"
+    if remediation:
+        message += f" Remediation: {remediation}"
+    return message
+
 
 def _tokenize_command(command: str) -> tuple[list[str], Optional[str]]:
     """Tokenize POSIX shell control operators while preserving quoted text."""
@@ -98,31 +113,53 @@ def _command_positions(tokens: list[str]) -> set[int]:
 def validate_command(command: str) -> Optional[str]:
     """Fail closed on commands that can escape the reviewable workspace boundary."""
     if not command or not command.strip():
-        return "Blocked: empty command"
+        return _blocked("empty command", "provide one workspace-scoped command")
     if "\n" in command or "\r" in command:
-        return "Blocked: multi-line shell commands are not allowed"
+        return _blocked(
+            "multi-line shell commands are not allowed.",
+            "use one command per tool call, or create a reviewed script with write_file first.",
+        )
     if "$" in command or "`" in command:
-        return "Blocked: shell and command substitution are not allowed"
+        return _blocked(
+            "shell and command substitution are not allowed.",
+            "run the producing command separately and pass an explicit relative value.",
+        )
 
     cmd_lower = command.lower().strip()
 
     # Check blocked patterns (substring match)
     for pattern in BLOCKED_PATTERNS:
         if pattern.lower() in cmd_lower:
-            return f"Blocked: command contains '{pattern}'"
+            return _blocked(f"command contains '{pattern}'.")
 
     tokens, parse_error = _tokenize_command(command)
     if parse_error:
         return parse_error
     if any(token in {"<<", "<<<"} for token in tokens):
-        return "Blocked: here-documents and here-strings are not allowed"
+        return _blocked(
+            "here-documents and here-strings are not allowed.",
+            "create the file with write_file/edit_file, then run it by relative path.",
+        )
+    if any(token.lower() in {"/dev/null", "nul"} for token in tokens):
+        return _blocked(
+            "discarding command output is not allowed.",
+            "remove the null-device redirection; stdout and stderr are captured automatically.",
+        )
+    if any(token in {">&", "<&", "&>"} for token in tokens):
+        return _blocked(
+            "file-descriptor redirection is not allowed.",
+            "remove forms such as '2>&1'; stdout and stderr are returned separately.",
+        )
     known_operators = CONTROL_OPERATORS | REDIRECTION_OPERATORS
     unsupported = [
         token for token in tokens
         if token and all(char in ";&|<>" for char in token) and token not in known_operators
     ]
     if unsupported:
-        return f"Blocked: unsupported shell operator '{unsupported[0]}'"
+        return _blocked(
+            f"unsupported shell operator '{unsupported[0]}'.",
+            "split the operation into reviewable tool calls.",
+        )
 
     positions = _command_positions(tokens)
     if not positions:
@@ -136,30 +173,53 @@ def validate_command(command: str) -> Optional[str]:
         # Dangerous dispatch names are rejected wherever they occur so that
         # constructs such as `find -exec rm` cannot hide a second executable.
         if base_name in BLOCKED_BINARIES:
-            return f"Blocked: '{base_name}' is not allowed"
+            if base_name == "rm":
+                return _blocked(
+                    "'rm' is not allowed.",
+                    "use delete_paths with exact workspace-relative targets and a reason.",
+                )
+            return _blocked(
+                f"'{base_name}' is not allowed.",
+                "choose a workspace-scoped tool that preserves review and audit evidence.",
+            )
 
         if index in positions:
             if token.startswith("/"):
                 executable_parent = Path(token).parent
                 if executable_parent not in TRUSTED_EXECUTABLE_DIRS:
-                    return "Blocked: executable path is outside trusted system directories"
+                    return _blocked(
+                        "executable path is outside trusted system directories.",
+                        "invoke an installed command by name or use a trusted system executable.",
+                    )
             continue
 
         if _is_assignment(token):
             _, value = token.split("=", 1)
             if _is_absolute_or_escape_path(value):
-                return "Blocked: environment assignment contains an outside-workspace path"
+                return _blocked(
+                    "environment assignment contains an outside-workspace path.",
+                    "use a workspace-relative value.",
+                )
             continue
         if _is_absolute_or_escape_path(token):
-            return "Blocked: shell arguments must use workspace-relative paths"
+            return _blocked(
+                "absolute, home-relative, and parent-traversal arguments are not allowed.",
+                "the shell already starts at workspace root; use '.', a filename, or a relative directory.",
+            )
         if is_sensitive_agent_path(token):
-            return "Blocked: sensitive credential paths are not available to Agent shell commands"
+            return _blocked(
+                "sensitive credential paths are not available to Agent shell commands.",
+                "continue without reading Agent, Git, environment, or credential metadata.",
+            )
 
     for position in positions:
         binary = Path(tokens[position]).name.lower()
         flags = set(tokens[position + 1:])
         if binary in INLINE_CODE_FLAGS and flags.intersection(INLINE_CODE_FLAGS[binary]):
-            return f"Blocked: inline code execution via '{binary}' is not allowed"
+            return _blocked(
+                f"inline code execution via '{binary}' is not allowed.",
+                "create a reviewed workspace file first, then execute that relative file.",
+            )
 
     lowered_tokens = [token.lower() for token in tokens]
     for index, token in enumerate(lowered_tokens):
@@ -167,7 +227,10 @@ def validate_command(command: str) -> Optional[str]:
             continue
         git_args = lowered_tokens[index + 1:]
         if "clean" in git_args or ("reset" in git_args and "--hard" in git_args):
-            return "Blocked: destructive git cleanup/reset is not allowed"
+            return _blocked(
+                "destructive git cleanup/reset is not allowed.",
+                "inspect git status and request an explicit, narrower recovery action.",
+            )
 
     return None
 
@@ -198,22 +261,41 @@ def _safe_subprocess_environment(workdir: Path) -> dict[str, str]:
     return allowed
 
 
+def _shell_execution_kwargs() -> dict[str, object]:
+    """Select one deterministic command interpreter for foreground/background runs."""
+    if os.name == "nt":
+        # subprocess uses COMSPEC (normally cmd.exe) when shell=True on Windows.
+        return {"shell": True}
+
+    for candidate in POSIX_BASH_LOCATIONS:
+        if candidate.is_file():
+            return {"shell": True, "executable": str(candidate)}
+    raise RuntimeError(
+        "Bash executable is unavailable; install bash in the API runtime before using shell tools"
+    )
+
+
 @tool
 def bash(command: str) -> str:
-    """Run shell command in workspace.
+    """Run a command in workspace using Bash on POSIX or cmd.exe on Windows.
 
     Commands inherit PYTHONIOENCODING=utf-8 automatically to avoid
     UnicodeEncodeError on Windows (GBK console).
 
     Args:
-        command: Shell command to execute using the host OS default shell
+        command: Workspace-relative shell command to execute
 
     Returns:
         JSON with stdout, stderr, exit_code fields for structured parsing
     """
     error = validate_command(command)
     if error:
-        return json.dumps({"stdout": "", "stderr": error, "exit_code": 1}, ensure_ascii=False)
+        return json.dumps({
+            "stdout": "",
+            "stderr": error,
+            "exit_code": 1,
+            "error_code": "policy_blocked",
+        }, ensure_ascii=False)
 
     try:
         workdir = get_user_workspace()
@@ -223,13 +305,13 @@ def bash(command: str) -> str:
 
         result = subprocess.run(
             command,
-            shell=True,
             cwd=workdir,
             capture_output=True,
             encoding="utf-8",
             errors="replace",
             timeout=settings.COMMAND_TIMEOUT_SECONDS,
             env=env,
+            **_shell_execution_kwargs(),
         )
         stdout = (result.stdout or "").strip()
         stderr = (result.stderr or "").strip()

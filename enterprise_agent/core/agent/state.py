@@ -35,6 +35,7 @@ class AgentState(TypedDict):
     # 上下文管理
     context_summary: Optional[str]
     token_count: int
+    session_token_count: int  # Cumulative model usage across requests in this chat session
     transcript_path: Optional[str]  # Path to saved transcript after compression
 
     # 工具执行

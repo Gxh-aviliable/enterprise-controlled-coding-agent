@@ -21,6 +21,18 @@ from enterprise_agent.api.schemas.chat import (
     SessionCreate,
     SessionResponse,
 )
+from enterprise_agent.api.services.chat_history import (
+    create_assistant_message,
+    find_assistant_message_id,
+    message_counts_by_session,
+    persist_legacy_messages,
+    serialize_message,
+    start_turn,
+    update_assistant_message,
+)
+from enterprise_agent.api.services.chat_history import (
+    list_messages as list_durable_messages,
+)
 from enterprise_agent.config.settings import settings
 from enterprise_agent.core.agent.graph import get_agent_graph
 from enterprise_agent.core.agent.tools.workspace import set_current_user_id
@@ -30,7 +42,7 @@ from enterprise_agent.core.execution.state_machine import (
     TaskStatus,
     transition_task_status,
 )
-from enterprise_agent.db.mysql import get_db
+from enterprise_agent.db.mysql import async_session_factory, get_db
 from enterprise_agent.models.session import Session, SessionStatus
 from enterprise_agent.observability.trace_store import get_trace_store
 
@@ -138,6 +150,24 @@ def _schedule_confirmation_timeout(session_id: str, user_id: int, deadline_raw: 
                 }),
                 config,
             )
+            trace_id = values.get("trace_id")
+            if trace_id:
+                async with async_session_factory() as history_db:
+                    message_id = await find_assistant_message_id(
+                        history_db,
+                        session_id=session_id,
+                        user_id=user_id,
+                        trace_id=trace_id,
+                    )
+                    if message_id is not None:
+                        await update_assistant_message(
+                            history_db,
+                            message_id=message_id,
+                            user_id=user_id,
+                            content="\n\n*[Tool confirmation timed out and was rejected.]*",
+                            status="failed",
+                            append=True,
+                        )
             logging.info("[confirm] Session %s expired and was rejected", session_id)
         except asyncio.CancelledError:
             return
@@ -323,7 +353,7 @@ def _serialize_history_messages(raw_messages) -> list[dict]:
 
 
 async def _load_history_messages(session_id: str, graph=None) -> list[dict]:
-    """Load frontend-visible messages from the LangGraph checkpoint."""
+    """Load legacy frontend-visible messages from the LangGraph checkpoint."""
     graph = graph or get_agent_graph()
     state = await graph.aget_state({"configurable": {"thread_id": session_id}})
 
@@ -333,6 +363,134 @@ async def _load_history_messages(session_id: str, graph=None) -> list[dict]:
     raw_messages = state.values.get("messages", [])
     logging.debug("[history] session=%s, raw message count=%s", session_id, len(raw_messages))
     return _serialize_history_messages(raw_messages)
+
+
+def _checkpoint_history_expired(session: Session) -> bool:
+    """Best-effort classification for legacy sessions without durable messages."""
+    created_at = session.created_at
+    if created_at is None:
+        return False
+    if created_at.tzinfo is None:
+        created_at = created_at.replace(tzinfo=timezone.utc)
+    cutoff = datetime.now(timezone.utc) - timedelta(hours=settings.CHECKPOINT_TTL_HOURS)
+    return created_at <= cutoff
+
+
+def _history_status(
+    session: Session,
+    *,
+    durable_count: int,
+    checkpoint_count: int = 0,
+) -> str:
+    metadata = session.session_metadata or {}
+    if durable_count:
+        return "partial" if metadata.get("history_gap") else "durable"
+    if checkpoint_count:
+        return "checkpoint"
+    return "expired" if _checkpoint_history_expired(session) else "empty"
+
+
+async def _prepare_durable_turn(
+    db: AsyncSession,
+    *,
+    session: Session,
+    user_id: int,
+    graph,
+) -> None:
+    """Migrate readable legacy history or mark an irreversible history gap."""
+    existing = await list_durable_messages(db, session_id=session.id, user_id=user_id)
+    if existing:
+        return
+
+    try:
+        legacy_messages = await _load_history_messages(session.id, graph)
+    except Exception:
+        logging.warning("Failed to inspect legacy history for session %s", session.id, exc_info=True)
+        legacy_messages = []
+
+    if legacy_messages:
+        await persist_legacy_messages(
+            db,
+            session_id=session.id,
+            user_id=user_id,
+            messages=legacy_messages,
+        )
+        return
+
+    if _checkpoint_history_expired(session):
+        session.session_metadata = {
+            **(session.session_metadata or {}),
+            "history_gap": True,
+            "history_gap_reason": "redis_checkpoint_expired",
+            "history_gap_detected_at": datetime.now(timezone.utc).isoformat(),
+        }
+        await db.commit()
+
+
+async def _persist_stream_segment(
+    *,
+    message_id: int,
+    user_id: int,
+    content: str,
+    status: str,
+) -> None:
+    """Persist one completed SSE segment with an independent DB session."""
+    try:
+        async with async_session_factory() as history_db:
+            await update_assistant_message(
+                history_db,
+                message_id=message_id,
+                user_id=user_id,
+                content=content,
+                status=status,
+                append=True,
+            )
+    except Exception:
+        logging.exception("Failed to persist assistant stream segment message_id=%s", message_id)
+
+
+async def migrate_readable_checkpoint_histories() -> int:
+    """Best-effort startup migration for legacy Redis-only conversations."""
+    migrated = 0
+    graph = get_agent_graph()
+    async with async_session_factory() as db:
+        result = await db.execute(
+            select(Session).where(Session.status != SessionStatus.DELETED)
+        )
+        sessions = result.scalars().all()
+        for session in sessions:
+            metadata = session.session_metadata or {}
+            if metadata.get("history_migration_checked") and _checkpoint_history_expired(session):
+                continue
+            existing = await list_durable_messages(
+                db,
+                session_id=session.id,
+                user_id=session.user_id,
+            )
+            if existing:
+                continue
+            try:
+                legacy_messages = await _load_history_messages(session.id, graph)
+                migrated += await persist_legacy_messages(
+                    db,
+                    session_id=session.id,
+                    user_id=session.user_id,
+                    messages=legacy_messages,
+                )
+                if not legacy_messages and _checkpoint_history_expired(session):
+                    session.session_metadata = {
+                        **metadata,
+                        "history_migration_checked": True,
+                        "history_migration_checked_at": datetime.now(timezone.utc).isoformat(),
+                    }
+                    await db.commit()
+            except Exception:
+                logging.warning(
+                    "Failed to migrate legacy checkpoint history for session %s",
+                    session.id,
+                    exc_info=True,
+                )
+    return migrated
 
 
 router = APIRouter(prefix="/chat", tags=["chat"])
@@ -582,9 +740,20 @@ async def chat_completion(
     if request.session_id:
         await _require_owned_session(request.session_id, user_id, db)
     quota_lease = await acquire_task_quota(user_id, db)
+    assistant_message_id = None
     try:
         session_id = await _resolve_chat_session(request, user_id, db)
         trace_id = str(uuid.uuid4())
+        graph = get_agent_graph()
+        session = await _require_owned_session(session_id, user_id, db)
+        await _prepare_durable_turn(db, session=session, user_id=user_id, graph=graph)
+        assistant_message_id = await start_turn(
+            db,
+            session=session,
+            user_id=user_id,
+            trace_id=trace_id,
+            content=request.content,
+        )
         _start_task_trace(
             session_id=session_id,
             trace_id=trace_id,
@@ -597,7 +766,6 @@ async def chat_completion(
         set_current_user_id(user_id)
 
         # Execute agent graph with thread_id for state persistence
-        graph = get_agent_graph()
         config = {"configurable": {"thread_id": session_id}}
         try:
             result = await asyncio.wait_for(
@@ -616,9 +784,24 @@ async def chat_completion(
             )
         except asyncio.TimeoutError:
             await _safe_mark_task_terminal(graph, config, TaskStatus.FAILED, "Agent invocation timed out")
+            await update_assistant_message(
+                db,
+                message_id=assistant_message_id,
+                user_id=user_id,
+                content="",
+                status="failed",
+            )
             raise HTTPException(status_code=504, detail="Request timed out")
         except Exception:
             await _safe_mark_task_terminal(graph, config, TaskStatus.FAILED, "Agent invocation failed")
+            if assistant_message_id is not None:
+                await update_assistant_message(
+                    db,
+                    message_id=assistant_message_id,
+                    user_id=user_id,
+                    content="",
+                    status="failed",
+                )
             raise
     finally:
         await quota_lease.release()
@@ -626,6 +809,13 @@ async def chat_completion(
     # Get last message (guard against empty messages)
     messages = result.get("messages", [])
     if not messages:
+        await update_assistant_message(
+            db,
+            message_id=assistant_message_id,
+            user_id=user_id,
+            content="",
+            status="failed",
+        )
         raise HTTPException(status_code=500, detail="Agent returned no response")
     last_msg = messages[-1]
 
@@ -669,9 +859,19 @@ async def chat_completion(
     else:
         content = str(last_msg)
 
+    await update_assistant_message(
+        db,
+        message_id=assistant_message_id,
+        user_id=user_id,
+        content=content,
+        status="completed",
+        append=False,
+    )
+
     return ChatResponse(
         session_id=session_id,
         trace_id=trace_id,
+        message_id=assistant_message_id,
         role="assistant",
         content=content,
         created_at=datetime.now(timezone.utc)
@@ -703,6 +903,16 @@ async def chat_stream(
     try:
         session_id = await _resolve_chat_session(request, user_id, db)
         trace_id = str(uuid.uuid4())
+        graph = get_agent_graph()
+        session = await _require_owned_session(session_id, user_id, db)
+        await _prepare_durable_turn(db, session=session, user_id=user_id, graph=graph)
+        assistant_message_id = await start_turn(
+            db,
+            session=session,
+            user_id=user_id,
+            trace_id=trace_id,
+            content=request.content,
+        )
         _start_task_trace(
             session_id=session_id,
             trace_id=trace_id,
@@ -713,13 +923,15 @@ async def chat_stream(
         set_current_user_id(user_id)
 
         config = {"configurable": {"thread_id": session_id}}
-        graph = get_agent_graph()
     except Exception:
         await quota_lease.release()
         raise
 
     async def generate():
         stream_filter = InternalStreamFilter()
+        assistant_parts: list[str] = []
+        assistant_status = "interrupted"
+        assistant_suffix = ""
 
         # Register cancel event for this session
         cancel_event = asyncio.Event()
@@ -750,6 +962,7 @@ async def chat_stream(
                 # Check for user-requested cancellation
                 if cancel_event.is_set():
                     logging.info(f"[stream] Session {session_id} cancelled by user")
+                    assistant_status = "cancelled"
                     yield _sse_event({"event": "cancelled", "message": "Generation stopped by user"})
                     return
 
@@ -765,6 +978,7 @@ async def chat_stream(
                         # Filter out internal evaluation JSON (importance, patterns)
                         # that leak from memory evaluator LLM calls inside the graph
                         if delta and not stream_filter.is_internal_json(delta):
+                            assistant_parts.append(delta)
                             yield f"data: {json.dumps({'delta': delta}, ensure_ascii=False)}\n\n"
                     # Check for tool calls in the chunk
                     if hasattr(msg_chunk, "tool_calls") and msg_chunk.tool_calls:
@@ -805,6 +1019,7 @@ async def chat_stream(
 
                         deadline = interrupt_data.get("deadline") if isinstance(interrupt_data, dict) else None
                         _schedule_confirmation_timeout(session_id, user_id, deadline)
+                        assistant_status = "interrupted"
                         yield _sse_event({"event": "interrupt", "data": interrupt_data})
                         return
 
@@ -818,15 +1033,25 @@ async def chat_stream(
                             for event in _tool_sse_events(node_output):
                                 yield _sse_event(event)
 
+            assistant_status = "completed"
             yield "data: [DONE]\n\n"
         except GeneratorExit:
             logging.debug("[stream] Generator closed (normal for interrupt/client disconnect)")
+            assistant_status = "interrupted"
             return
         except Exception as e:
             logging.exception("Stream error: %s", e)
             await _safe_mark_task_terminal(graph, config, TaskStatus.FAILED, str(e)[:500])
+            assistant_status = "failed"
+            assistant_suffix = f"\n\n❌ **Error:** {str(e)[:500]}"
             yield f"data: {json.dumps({'error': str(e)}, ensure_ascii=False)}\n\n"
         finally:
+            await _persist_stream_segment(
+                message_id=assistant_message_id,
+                user_id=user_id,
+                content="".join(assistant_parts) + assistant_suffix,
+                status=assistant_status,
+            )
             # Clean up request-local cancellation state.
             _cancel_events.pop(session_id, None)
             await quota_lease.release()
@@ -866,6 +1091,26 @@ async def chat_stream_resume(
     graph = get_agent_graph()
     snapshot = await graph.aget_state(config)
     values = snapshot.values if snapshot and snapshot.values else {}
+    trace_id = values.get("trace_id")
+    if not trace_id:
+        raise HTTPException(
+            status_code=409,
+            detail="The interrupted task checkpoint has expired and cannot be resumed.",
+        )
+    assistant_message_id = await find_assistant_message_id(
+        db,
+        session_id=session_id,
+        user_id=user_id,
+        trace_id=trace_id,
+    )
+    if assistant_message_id is None:
+        assistant_message_id = await create_assistant_message(
+            db,
+            session_id=session_id,
+            user_id=user_id,
+            trace_id=trace_id,
+            status="interrupted",
+        )
     deadline_raw = values.get("confirmation_deadline")
     confirmation_expired = False
     if deadline_raw:
@@ -883,6 +1128,9 @@ async def chat_stream_resume(
 
     async def generate():
         stream_filter = InternalStreamFilter()
+        assistant_parts: list[str] = []
+        assistant_status = "interrupted"
+        assistant_suffix = ""
 
         # Register cancel event for this session (reuse same registry keyed by session_id;
         # if the original stream was cancelled, this overwrites the old event)
@@ -900,6 +1148,7 @@ async def chat_stream_resume(
                 # Check for user-requested cancellation
                 if cancel_event.is_set():
                     logging.info(f"[stream/resume] Session {session_id} cancelled by user")
+                    assistant_status = "cancelled"
                     yield _sse_event({"event": "cancelled", "message": "Generation stopped by user"})
                     return
 
@@ -910,6 +1159,7 @@ async def chat_stream_resume(
                     if hasattr(msg_chunk, "content") and msg_chunk.content:
                         delta = _extract_delta(msg_chunk.content)
                         if delta and not stream_filter.is_internal_json(delta):
+                            assistant_parts.append(delta)
                             yield f"data: {json.dumps({'delta': delta}, ensure_ascii=False)}\n\n"
                     if hasattr(msg_chunk, "tool_calls") and msg_chunk.tool_calls:
                         for tc in msg_chunk.tool_calls:
@@ -940,6 +1190,7 @@ async def chat_stream_resume(
                             interrupt_data = {"raw": str(interrupt_data)}
                         deadline = interrupt_data.get("deadline") if isinstance(interrupt_data, dict) else None
                         _schedule_confirmation_timeout(session_id, user_id, deadline)
+                        assistant_status = "interrupted"
                         yield _sse_event({"event": "interrupt", "data": interrupt_data})
                         return
 
@@ -948,15 +1199,25 @@ async def chat_stream_resume(
                             for event in _tool_sse_events(node_output):
                                 yield _sse_event(event)
 
+            assistant_status = "completed"
             yield "data: [DONE]\n\n"
         except GeneratorExit:
             logging.debug("[stream/resume] Generator closed (normal for interrupt/client disconnect)")
+            assistant_status = "interrupted"
             return
         except Exception as e:
             logging.exception("Stream resume error: %s", e)
             await _safe_mark_task_terminal(graph, config, TaskStatus.FAILED, str(e)[:500])
+            assistant_status = "failed"
+            assistant_suffix = f"\n\n❌ **Error:** {str(e)[:500]}"
             yield f"data: {json.dumps({'error': str(e)}, ensure_ascii=False)}\n\n"
         finally:
+            await _persist_stream_segment(
+                message_id=assistant_message_id,
+                user_id=user_id,
+                content="".join(assistant_parts) + assistant_suffix,
+                status=assistant_status,
+            )
             _cancel_events.pop(session_id, None)
 
     return StreamingResponse(generate(), media_type="text/event-stream")
@@ -1090,23 +1351,33 @@ async def list_sessions(
         select(Session).where(
             Session.user_id == user_id,
             Session.status != SessionStatus.DELETED
-        )
+        ).order_by(Session.updated_at.desc(), Session.created_at.desc())
     )
     sessions = result.scalars().all()
 
     graph = get_agent_graph()
+    durable_counts = await message_counts_by_session(db, user_id=user_id)
     responses = []
     for s in sessions:
-        messages = await _load_history_messages(s.id, graph)
-        if not messages:
-            continue
+        durable_count = durable_counts.get(s.id, 0)
+        checkpoint_count = 0
+        if durable_count == 0:
+            try:
+                checkpoint_count = len(await _load_history_messages(s.id, graph))
+            except Exception:
+                logging.warning("Failed to inspect checkpoint history for session %s", s.id, exc_info=True)
         responses.append(SessionResponse(
             id=s.id,
             user_id=s.user_id,
             title=s.title,
             status=s.status.value,
             created_at=s.created_at,
-            message_count=len(messages),
+            message_count=durable_count or checkpoint_count,
+            history_status=_history_status(
+                s,
+                durable_count=durable_count,
+                checkpoint_count=checkpoint_count,
+            ),
         ))
     return responses
 
@@ -1185,9 +1456,10 @@ async def get_session_messages(
     user_id: int = Depends(get_current_user),
     db: AsyncSession = Depends(get_db)
 ):
-    """Get chat history for a session.
+    """Get durable chat history for a session.
 
-    Loads messages from the LangGraph RedisSaver checkpointer.
+    MySQL is authoritative. Legacy sessions fall back to the short-lived
+    LangGraph Redis checkpoint until they are migrated by their next turn.
 
     Args:
         session_id: Session/thread ID
@@ -1201,21 +1473,29 @@ async def get_session_messages(
         HTTPException: If session not found
     """
     # Verify session ownership
-    result = await db.execute(
-        select(Session).where(Session.id == session_id, Session.user_id == user_id)
-    )
-    session = result.scalar_one_or_none()
-    if not session:
-        raise HTTPException(status_code=404, detail="Session not found")
-
-    messages = await _load_history_messages(session_id)
+    session = await _require_owned_session(session_id, user_id, db)
+    durable_records = await list_durable_messages(db, session_id=session_id, user_id=user_id)
+    messages = [
+        serialize_message(message)
+        for message in durable_records
+        if message.content
+    ]
+    checkpoint_count = 0
+    if not durable_records:
+        messages = await _load_history_messages(session_id)
+        checkpoint_count = len(messages)
 
     logging.debug(f"[history] returning {len(messages)} messages")
     return {
         "session_id": session_id,
         "title": session.title,
         "message_count": len(messages),
-        "messages": messages
+        "history_status": _history_status(
+            session,
+            durable_count=len(durable_records),
+            checkpoint_count=checkpoint_count,
+        ),
+        "messages": messages,
     }
 
 

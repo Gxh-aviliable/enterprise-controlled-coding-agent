@@ -1,15 +1,33 @@
 """Tests for file_ops module (read_file, write_file, edit_file)."""
 
+import json
 from pathlib import Path
 from unittest.mock import patch
 
 import pytest
 
 from enterprise_agent.core.agent.tools.file_ops import (
+    delete_paths,
     edit_file,
     read_file,
     write_file,
 )
+
+
+@pytest.fixture
+def deletion_workspace(monkeypatch, tmp_path: Path):
+    from enterprise_agent.core.agent.tools.workspace import (
+        get_user_workspace,
+        set_current_session_id,
+        set_current_user_id,
+    )
+
+    monkeypatch.setenv("WORKSPACE_BASE", str(tmp_path))
+    set_current_user_id(77)
+    set_current_session_id("delete-session")
+    yield get_user_workspace()
+    set_current_user_id(None)
+    set_current_session_id(None)
 
 
 class TestReadFile:
@@ -218,3 +236,81 @@ class TestPathSecurity:
 
         (get_user_workspace() / ".env.example").write_text("SAFE=value\n", encoding="utf-8")
         assert read_file.invoke({"path": ".env.example"}) == "SAFE=value"
+
+
+class TestDeletePaths:
+    """Deletion must be exact, recoverable, workspace-scoped, and auditable."""
+
+    def test_moves_exact_paths_to_recovery_trash(self, deletion_workspace: Path):
+        workspace = deletion_workspace
+        (workspace / "obsolete.txt").write_text("old", encoding="utf-8")
+        (workspace / "generated").mkdir()
+        (workspace / "generated" / "result.txt").write_text("result", encoding="utf-8")
+
+        receipt = json.loads(delete_paths.invoke({
+            "paths": ["obsolete.txt", "generated"],
+            "reason": "Remove generated artifacts",
+        }))
+
+        assert receipt["status"] == "moved_to_recovery_trash"
+        assert receipt["paths"] == ["obsolete.txt", "generated"]
+        assert not (workspace / "obsolete.txt").exists()
+        assert not (workspace / "generated").exists()
+        manifest_path = workspace / receipt["recovery_manifest"]
+        manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+        assert manifest["user_id"] == 77
+        assert manifest["session_id"] == "delete-session"
+        assert manifest["reason"] == "Remove generated artifacts"
+        trash_items = manifest_path.parent / "items"
+        assert (trash_items / "obsolete.txt").read_text(encoding="utf-8") == "old"
+        assert (trash_items / "generated" / "result.txt").exists()
+
+    @pytest.mark.parametrize(
+        "path",
+        [
+            ".agent",
+            ".tasks/item.json",
+            ".vscode/settings.json",
+            ".env",
+            "../outside.txt",
+            "/tmp/outside.txt",
+            "generated/*",
+        ],
+    )
+    def test_rejects_protected_ambiguous_or_escaping_paths(self, deletion_workspace: Path, path):
+        result = delete_paths.invoke({"paths": [path], "reason": "Unsafe deletion test"})
+        assert result.startswith("Error:")
+
+    def test_rejects_overlapping_targets(self, deletion_workspace: Path):
+        workspace = deletion_workspace
+        (workspace / "generated").mkdir()
+        (workspace / "generated" / "result.txt").write_text("result", encoding="utf-8")
+
+        result = delete_paths.invoke({
+            "paths": ["generated", "generated/result.txt"],
+            "reason": "Overlapping deletion test",
+        })
+
+        assert "Overlapping delete paths" in result
+        assert (workspace / "generated" / "result.txt").exists()
+
+    def test_moves_symlink_without_touching_external_target(
+        self, deletion_workspace: Path, tmp_path: Path
+    ):
+        workspace = deletion_workspace
+        external = tmp_path / "external.txt"
+        external.write_text("keep", encoding="utf-8")
+        link = workspace / "external-link"
+        try:
+            link.symlink_to(external)
+        except OSError:
+            pytest.skip("Symlinks are unavailable on this platform")
+
+        receipt = json.loads(delete_paths.invoke({
+            "paths": ["external-link"],
+            "reason": "Remove workspace link only",
+        }))
+
+        assert not link.exists()
+        assert external.read_text(encoding="utf-8") == "keep"
+        assert receipt["status"] == "moved_to_recovery_trash"

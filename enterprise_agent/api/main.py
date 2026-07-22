@@ -49,6 +49,14 @@ async def lifespan(app: FastAPI):
     await setup_checkpointer()
     logger.info("Redis checkpointer ready")
 
+    # Preserve any still-readable Redis-only transcripts before their TTL expires.
+    from enterprise_agent.api.routes.chat import migrate_readable_checkpoint_histories
+    try:
+        migrated_messages = await migrate_readable_checkpoint_histories()
+        logger.info("Legacy chat history migration complete (%s messages copied)", migrated_messages)
+    except Exception:
+        logger.warning("Legacy chat history migration failed; Redis fallback remains available", exc_info=True)
+
     # Memory decay cleanup task
     from enterprise_agent.memory.decay import get_or_start_cleanup_task
     cleanup_task = get_or_start_cleanup_task()

@@ -27,6 +27,8 @@ uv run python -m benchmarks.run --backend agent --mode multi
 
 Reports are written as raw JSON plus a human-readable Markdown summary under `benchmarks/results/`. Connection/provider failures are reported as `infrastructure_error` and excluded from task-success-rate denominators instead of being misrepresented as Agent-quality failures.
 
+Every report carries a secret-free reproducibility manifest: Git commit/branch/dirty state, benchmark suite and `uv.lock` SHA-256, exact selected case IDs, Python/platform identity, run timestamps, Agent limits, provider/model, sanitized endpoint, and the effective inference-default policy. A measured portfolio run is valid only when `Dirty worktree` is `False`; API keys, URL credentials, query strings, and fragments are never written to artifacts.
+
 ## V1 coverage
 
 | Area | Cases |

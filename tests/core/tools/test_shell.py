@@ -1,6 +1,7 @@
 """Tests for shell module (bash tool)."""
 
 import json
+import os
 
 import pytest
 
@@ -78,6 +79,34 @@ class TestValidateCommand:
         assert result is not None
         assert "Blocked" in result or "rm" in result
 
+    def test_rm_rejection_points_to_dedicated_delete_tool(self):
+        result = validate_command("rm generated.txt")
+
+        assert result is not None
+        assert "delete_paths" in result
+
+    def test_absolute_workspace_path_has_relative_path_remediation(self):
+        result = validate_command("cd /workspaces/user_1")
+
+        assert result is not None
+        assert "already starts at workspace root" in result
+        assert "relative directory" in result
+
+    @pytest.mark.parametrize("command", ["pytest -q 2>&1", "pytest -q &> output.txt"])
+    def test_fd_redirection_explains_captured_streams(self, command):
+        result = validate_command(command)
+
+        assert result is not None
+        assert "file-descriptor redirection" in result
+        assert "stdout and stderr" in result
+
+    def test_null_device_redirection_explains_captured_output(self):
+        result = validate_command("ls missing 2>/dev/null || echo missing")
+
+        assert result is not None
+        assert "discarding command output" in result
+        assert "captured automatically" in result
+
     @pytest.mark.parametrize(
         "command",
         [
@@ -147,6 +176,15 @@ class TestBashTool:
         data = json.loads(result)
         assert data["exit_code"] == 1
         assert "Blocked" in data["stderr"]
+        assert data["error_code"] == "policy_blocked"
+
+    @pytest.mark.skipif(os.name == "nt", reason="POSIX runtime uses explicit Bash")
+    def test_posix_commands_use_bash_not_default_sh(self, mock_workspace_env):
+        result = bash.invoke({"command": "echo {alpha,beta}"})
+        data = json.loads(result)
+
+        assert data["exit_code"] == 0
+        assert data["stdout"] == "alpha beta"
 
     def test_output_truncation(self, mock_workspace_env):
         """Test that long output is truncated."""
