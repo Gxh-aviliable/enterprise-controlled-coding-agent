@@ -1,480 +1,377 @@
-# Mini Claude Code — Enterprise Controlled Engineering Agent
+# Enterprise Controlled Coding Agent
 
-> [!IMPORTANT]
-> 🚨 **2027 秋招冲刺阶段：停止堆功能，优先完成真实 DeepSeek 评测、演示视频和求职版 README。**  每次开发前先阅读：[00-秋招冲刺-必读.md](00-秋招冲刺-必读.md)。
+> 面向企业内网的受控 Coding Agent 平台
 
-面向企业内网部署的受控工程 Agent 平台。它不是要和 Claude Code、Codex、Cursor 在个人本机体验上正面竞争，而是把 AI 编程能力放进企业可治理的服务器环境中：代码不出内网，Agent 只在受控 workspace 中操作，敏感工具可审批，文件访问可隔离，长期项目知识可沉淀。
+`Mini Claude Code` 是一个浏览器化的 AI 编程工作台：模型负责理解、规划与决策，平台负责身份认证、Workspace 隔离、工具权限、人工审批、任务恢复、全链路 Trace 和项目记忆。
 
-## 产品定位
+它不以复刻个人本机 Coding Agent 为目标，而是探索一个更偏企业工程的问题：
 
-企业内部往往不希望开发者在个人电脑上安装高权限 Agent，或把私有代码直接交给外部 SaaS。这个项目的目标是提供一个可部署在公司内网的工程 Agent 工作台：
+> 当 Agent 需要真实读取代码、修改文件和执行命令时，如何让每一步都可限制、可暂停、可恢复、可追溯？
 
-- 开发者通过浏览器使用 Agent，不需要在个人电脑授予高权限。
-- Agent 在服务器上的隔离 workspace 中读写代码、运行命令、查看文件、总结任务。
-- 平台负责用户认证、权限边界、工具确认、会话管理、项目记忆和审计基础。
-- 企业可以接入 DeepSeek、Qwen、GLM、OpenAI-compatible 或私有模型 endpoint。
+`LangGraph` · `FastAPI` · `Vue 3` · `Redis` · `MySQL` · `ChromaDB` · `Docker Compose`
 
-一句话：
+| 当前可验证结果 | 数据 |
+|---|---:|
+| DeepSeek 真实 single-Agent 基准 | **80.0%（8/10）** |
+| 真实 Agent 工具成功率 | **82.9%** |
+| 离线平台回归基准 | **100%（10/10）** |
+| 后端自动化测试 | **381 passed** |
+| 前端回归测试 | **23 passed** |
+| Python 静态检查 | **Ruff 0 findings** |
 
-```text
-一个部署在企业内网的安全工程 Agent 平台，让开发者在浏览器里让 Agent 受控地阅读、修改、测试和总结代码。
+真实模型结果来自干净提交 `d95caf6` 上的 `deepseek-chat` 实测，不用离线规则分数冒充模型能力。详见[原始报告](benchmarks/results/20260723T052543Z-agent-single.md)。
+
+## 为什么做这个项目
+
+企业把 Coding Agent 接入真实研发环境时，难点不只是“模型会不会写代码”，还包括：
+
+- 私有代码和执行环境应该放在哪里；
+- 不同用户能看到和修改哪些文件；
+- Shell、写文件、删除、子 Agent 等副作用如何分级；
+- 高风险操作如何暂停并等待人工确认；
+- 中断、超时、拒绝或失败后，任务状态如何保持一致；
+- 如何回答“Agent 做了什么、为什么失败、用了多少 token”；
+- 如何避免把失败任务和一次性指令错误沉淀为长期知识。
+
+本项目把这些问题收敛为一个服务端控制面。浏览器只访问经过认证的 API，模型不能直接获得宿主机文件系统或进程权限，所有动作都必须进入平台定义的工具链路。
+
+> “内网部署”不自动等于“数据绝不外发”。只有接入企业私有模型 endpoint 时，模型上下文才可完整留在内网；若配置公网模型 API，发送给模型的提示词与工具上下文仍会离开企业网络边界。
+
+## 核心设计
+
+| 工程问题 | 当前实现 | 关键证据 |
+|---|---|---|
+| Agent 可靠执行 | LangGraph 六态任务生命周期，显式 `parse → plan → execute → checkpoint → validate → summarize`，轮次/工具/token 预算和代码修改验证门 | `core/agent/graph.py`、`core/execution/state_machine.py` |
+| 工具风险治理 | 统一 Tool Contract，模型绑定与执行阶段双重权限过滤，参数级风险识别，LangGraph interrupt 审批与超时恢复 | `core/agent/tools/contracts.py`、`nodes.py` |
+| Workspace 安全 | 用户目录隔离、路径穿越拦截、敏感路径拒绝、原子写入、精确路径可恢复删除 | `core/agent/tools/workspace.py`、`file_ops.py` |
+| Shell 控制 | 复合命令解析、危险命令/外传工具拦截、工作区相对路径、凭据净化子进程环境、超时与输出截断 | `core/agent/tools/shell.py` |
+| 多租户持久化 | JWT 认证，实时数据库角色授权，MySQL 持久会话正文，Redis 执行 checkpoint，按用户隔离的 Chroma 记忆 | `api/`、`models/`、`memory/` |
+| 可观测与治理 | Trace ID 串联节点、模型、工具、审批、预算、错误和终态；管理员控制台提供用户、额度、审计、临时访问授权和 Shared Skill 版本治理 | `observability/`、`admin/` |
+
+## 系统架构
+
+```mermaid
+flowchart LR
+    U["Developer / Admin"] -->|"HTTPS"| FE["Vue 3 Workbench"]
+    FE -->|"REST + SSE"| API["FastAPI Control Plane"]
+
+    API --> AUTH["JWT Authentication<br/>Live DB Authorization"]
+    API --> AGENT["LangGraph Agent Runtime"]
+    API --> ADMIN["Admin Control Room"]
+
+    AGENT --> POLICY["Tool Contract<br/>Permission + Risk + HITL"]
+    POLICY --> TOOLS["File / Shell / Task / Skill / Delegation"]
+    TOOLS --> WS["Per-user Workspace"]
+
+    AGENT <--> REDIS[("Redis<br/>Checkpoint")]
+    API <--> MYSQL[("MySQL<br/>Users / Sessions / Chat / Audit")]
+    AGENT <--> CHROMA[("ChromaDB<br/>Governed Memory")]
+    AGENT --> TRACE["Redacted Trace Store"]
+    TRACE --> FE
 ```
 
-## 适用场景
+### 一次任务如何运行
 
-- 企业内网代码助手：在公司服务器上统一部署 Agent，不把代码散落到个人本机插件。
-- 受控代码修改：限制 Agent 只能访问当前用户或项目 workspace。
-- 内部项目知识沉淀：保存项目约定、架构决策、问题排查记录和任务摘要。
-- 安全工具执行：对 shell、文件写入、删除、子 Agent 等敏感操作进行确认和策略控制。
-- 多用户工程工作台：每个用户独立 workspace，文件树、会话、长期记忆按用户隔离。
-- 私有模型适配：支持多种 LLM provider 和企业自建 OpenAI-compatible 服务。
+```text
+用户请求
+  → 身份认证与会话归属校验
+  → 创建 trace_id，进入 pending/running
+  → 注入当前任务相关的 Active 记忆
+  → LLM 决策并生成工具调用
+  → 工具注册检查 + 实时角色权限过滤 + 参数级风险判定
+      ├─ safe：直接执行
+      ├─ review：进入 waiting_confirmation，审批后从 checkpoint 恢复
+      └─ dangerous：执行器策略直接拦截，不能靠 Approve 绕过
+  → 记录结构化工具结果、耗时、token、审批与安全事件
+  → 若修改代码但没有成功验证，验证门要求补测
+  → 进入 succeeded / failed / cancelled，并按策略决定是否写入长期记忆
+```
 
-## 核心能力
+六个任务状态与会话状态彼此独立：
 
-### 1. 受控工程 Workspace
+```text
+pending → running ⇄ waiting_confirmation → succeeded
+                 └────────────────────────→ failed
+pending/running/waiting_confirmation ─────→ cancelled
+```
 
-- 用户 workspace 隔离：`/workspaces/user_<id>` 或自定义服务器路径。
-- 所有文件 API 和 Agent 文件工具都通过 workspace 路径解析，防止路径穿越。
-- 支持文件树、文件阅读、上传下载、移动、删除和目录创建。
-- Agent 删除统一使用 `delete_paths(paths, reason)`：只接受精确相对路径，经 HITL 批准后移动到受保护回收区并生成恢复 manifest；通配符、重叠路径、凭据和 Agent 系统目录会被拒绝。
-- 支持本地 VS Code / Web VSCode 打开当前用户 workspace。
-- 自动为用户 workspace 初始化安全的 `.vscode/settings.json`，避免编辑器插件误读全局配置。
+## 关键能力
 
-### 2. 有状态 Code Agent
+### 1. 可暂停、可恢复的有状态 Agent
 
-- 基于 LangGraph StateGraph 构建有状态工程 Agent。
-- 每个用户任务遵循 `解析 → 规划 → 执行 → 检查点 → 验证 → 总结`，并使用 `pending/running/waiting_confirmation/succeeded/failed/cancelled` 状态机。
-- RedisSaver 按 `session_id/thread_id` 保存短期 Agent 执行检查点；MySQL `chat_messages` 独立持久化用户可见的对话正文，刷新或 Redis TTL 到期不会再让会话从列表消失。
-- SSE 逐 token 流式响应，支持中断、取消和恢复。
-- 工具统一声明输入 schema、风险级别、超时、重试、幂等性和结果规范；当前数据库角色权限在模型绑定与执行时双重过滤。
-- 支持文件读写、shell、任务管理、上下文压缩和真实子 Agent 委派；默认选择单 Agent，Multi-Agent 只能由显式请求模式启用。
-- 支持 Todo 跟踪和后台任务，适合多步骤工程任务。
-- 修改代码后若没有成功测试/构建/检查记录，验证门会要求补充验证；超过预算则以失败状态结束而不是伪报成功。
-- 单任务与会话累计模型调用预算默认均为 1,000,000 token；会话累计值跨请求保存在 LangGraph checkpoint 中，上下文仍会按独立阈值压缩。
-- 未注册工具和越权工具会返回结构化 `unknown_tool` / `permission_denied` 记录，不再让确认节点异常退出；失败/取消时未完成 Todo 和本任务创建的持久任务会同步收敛到终态。
+- LangGraph `StateGraph` 管理显式执行阶段，RedisSaver 按 `session_id/thread_id` 保存 checkpoint。
+- FastAPI 通过 SSE 输出 token、工具开始/结束、审批中断、取消和终态事件。
+- 审批超时会自动恢复图并确定性拒绝，不让任务永久停留在等待态。
+- 失败和取消会同步收敛未完成 Todo 与本任务创建的持久任务。
+- 每任务默认最多 20 轮、25 次工具调用，并分别限制任务与会话累计 token。
+- 写入代码文件后，若没有成功的测试、构建、Lint 或编译记录，任务不能被标记为成功。
 
-#### Single / Multi-Agent 模式
+### 2. Contract-driven 工具执行
 
-- 前端输入框上方固定提供 `Single` 与 `Multi EXP` 显式切换，默认始终是 `Single`；构建版本轮询会在页面过期时提示刷新，Nginx 不缓存 SPA 入口页。
-- `/chat/capabilities` 根据服务器开关和当前数据库角色返回可用模式；请求体通过 `mode=single_agent|multi_agent` 明确本次任务模式。
-- Multi-Agent 必须同时满足 `ENABLE_MULTI_AGENT=true` 和 `tools:advanced` 权限。不满足时 API 在创建任务前返回 409 或 403，不会静默退化成“单 Agent 假装多 Agent”。
-- 如果用户在 Single 下明确要求“多智能体协作执行”，前端要求确认切换，后端也会拒绝 Single 请求；API 客户端不能绕过这条边界。
-- `delegate_task(role, prompt)` 会启动独立、无工具的 specialist 模型上下文，适合规划、写作、评审等角色；主 Agent 负责综合真实返回结果。
-- Multi 任务必须至少成功执行一次 `delegate_task` 才能成功结束；真实委派前不能先写文件、运行命令或创建任务来伪造协作。
-- `task_create` 仅用于操作任务记录，不会启动 Agent；系统提示和执行门共同禁止通过编写随机脚本、模板类或模拟器冒充多 Agent 协作。
+每个可执行工具都必须注册唯一契约：
 
-本地实验可在 `.env` 设置 `ENABLE_MULTI_AGENT=true`。出于权限安全，普通 `free` 账号仍不能使用 Multi-Agent，需要由管理员在用户管理/数据库侧授予管理员或高级工具权限；不要把该开关理解为自动提权。
+```text
+Tool = Input Schema
+     + Risk Level
+     + Permission
+     + Timeout
+     + Retry / Idempotency
+     + Confirmation Policy
+     + Side-effect Class
+     + Normalized Result
+```
 
-### 3. 企业安全与治理基础
+- 未注册工具返回 `unknown_tool`，越权工具返回 `permission_denied`，均写入 Trace。
+- 仅幂等只读工具可对瞬时错误进行有限重试；写文件、Shell 等副作用不盲目重放。
+- Shell 风险根据具体参数动态判断：只读检查/测试可自动执行，Git 变更、依赖安装等进入审批，危险命令直接拦截。
+- `write_file` / `edit_file` 使用临时文件、`fsync` 与 `os.replace` 原子替换。
+- 删除统一使用 `delete_paths(paths, reason)`：只接受精确相对路径，审批后移动到 `.agent/trash/` 并生成恢复 manifest。
 
-- JWT 认证，邮箱登录，刷新 token。
-- 忘记密码流程，开发模式下验证码写入后端日志，可配置 SMTP 邮箱发送。
-- 参数级 HITL：`pwd`、`ls`、`pytest`、`git status` 等安全 Shell 自动执行；Git 变更、依赖安装和复合命令仍需确认；策略判定为危险的命令不能通过确认放行，而是直接拦截并写入 Trace。
-- 写文件、编辑文件、专用删除、任务创建和子 Agent 等副作用工具继续走确认流；确认超时会自动拒绝并恢复任务。
-- 删除授权绑定到本批次明确路径；`rm` 仍被 Shell 策略拦截，直接执行 Python/Node 工作区脚本至少降级为 review，系统提示禁止用脚本绕过 `delete_paths`。
-- Shell 复合命令逐段解析，拦截绝对/越界/敏感路径、命令替换、嵌套 shell、内联代码、破坏性 Git 和下载/外传命令。
-- macOS/Linux 的前台与后台命令统一由显式 Bash 执行，不再依赖可能指向 `dash` 的宿主机默认 `/bin/sh`；Windows 保持 `cmd.exe` 兼容。
-- Shell 策略拒绝会返回 `policy_blocked` 和可执行修复建议；模型应改用相对路径、移除 `/dev/null`/`2>&1`，或切换到 `delete_paths`，而不是尝试等价绕过。
-- Shell/后台子进程不继承模型、JWT 或数据库密钥；Agent 文件工具拒绝 `.env`/`.git`/私钥类路径，写入采用原子替换。
-- 前端 Markdown 渲染使用 DOMPurify 做 XSS 清理。
-- 会话和文件访问按用户隔离。
+### 3. 多租户 Workspace 与会话隔离
 
-### 4. 可回放 Trace 与成本指标
+- 每个用户拥有独立的 `user_<id>` Workspace，文件工具和 Workspace API 都通过统一路径解析器。
+- `.env`、`.git`、SSH/云凭据和私钥类路径对 Agent 工具不可见。
+- Shell 子进程以用户 Workspace 为 `cwd`，且不会继承模型 Key、JWT 或数据库凭据。
+- API 在调用、恢复、取消、确认和读取 checkpoint 前都会验证 MySQL 会话归属。
+- MySQL `chat_messages` 是用户可见对话的持久来源；Redis 只承担短期执行恢复，TTL 过期不会让会话元数据凭空消失。
 
-- 每次用户任务生成独立 `trace_id`，串联 LangGraph 节点、模型摘要、工具调用、确认、预算、错误和最终状态。
-- Trace 写入当前用户 workspace 的 `.agent/traces/`，递归脱敏密钥、token、密码和 Authorization 信息。
-- `/tasks` API 和前端 Trace 页面可按时间线回放任务，并定位节点/工具耗时与失败原因。
-- LangGraph 的 HITL interrupt 记录为 `waiting_confirmation/interrupted` 正常控制流，不再污染 Trace 的错误字段；工具卡只根据带调用 ID 的标准执行记录显示成功、失败、阻断或等待确认。
-- 指标只从真实终态 Trace 计算：任务/工具成功率、平均耗时、平均 token、人工介入率和安全拦截数。
+### 4. Trace、指标与失败回放
 
-当前 JSON Trace 是便于本地复现的单进程基线；多副本生产环境应迁移到集中数据库或 OpenTelemetry 后端。
+每个任务生成独立 `trace_id`，统一记录：
 
-### 5. 企业项目记忆
+- LangGraph 节点、执行阶段和状态迁移；
+- 模型输入/输出摘要、token、耗时和重试；
+- 工具参数摘要、风险、结果、退出码和错误类型；
+- HITL 请求、批准、拒绝或超时；
+- 上下文压缩、预算耗尽、记忆召回和最终结果。
 
-当前长期记忆基于 ChromaDB，但不再把每次对话结束都等同于“值得记住”：
+Trace 在写盘前递归脱敏，并可通过工作台时间线回放。当前聚合指标包括任务/工具成功率、平均耗时、平均 token、人工介入率、安全拦截数和记忆注入率。
 
-- **终态准入**：只在任务 `succeeded` 后评估写入；`failed/cancelled`、普通聊天、创作类一次性任务默认拒存。
-- **工程证据**：自动记忆必须同时具有工程语义、足够重要性，以及成功工具调用、文件修改或验证结果等可复用证据。
-- **强类型 v2**：新记录包含 `memory_type/schema_version/task_status/admission_reason/quality_status`，当前自动类型为 `task_outcome` 和显式 `user_note`。
-- **偏好证据**：只有“以后、默认、我习惯、remember”等明确长期表达才允许提取偏好；“这次写一篇玄幻小说”不会变成永久偏好。
-- **来源可追溯**：每条 Active 偏好必须记录来源 memory/trace/session；缺少来源的旧派生偏好自动进入 Legacy 隔离。
-- **删除一致性**：删除一条长期记忆时会先删除由它派生的偏好，再删除父记录，并返回级联删除回执，避免“页面已删除但仍被偏好召回”。
-- **Legacy 隔离**：旧数据保留在管理页供审查/删除，但不参与自动上下文注入，避免未经授权的数据清理。
-- **相关性门槛**：普通任务只注入距离阈值内的 Active 记忆；移除了“搜不到就塞入一批旧摘要”的宽泛兜底。
-- **统一召回审计**：自动上下文检索和模型主动调用 `search_memory` 使用相同的 Active/相关性门槛、召回计数与 Trace receipt。
-- **可解释管理**：Memory Ledger 分开显示 Task outcomes / Preferences 的数量、来源、召回证据和隔离原因。
+### 5. 有准入策略的长期记忆
 
-详细策略、真实数据审计和兼容迁移方案见 [`docs/memory-governance.md`](docs/memory-governance.md)。
+长期记忆不是“每轮对话自动总结”：
 
-### 6. 多模型与内网部署
+- 只有 `succeeded` 且具备成功工具、文件修改或验证等工程证据的任务，才允许自动写入；
+- 一次性创作、普通聊天、失败/取消任务和无证据结论默认拒存；
+- 只有“以后默认……”“请记住……”等明确长期表达才会形成偏好；
+- Active 记录参与召回，旧 schema 进入 Legacy 隔离但仍可审查和删除；
+- 自动注入与主动 `search_memory` 使用同一相关性门槛，并在 Trace 中保存候选、过滤和注入回执；
+- 删除父记忆时级联删除其派生偏好，避免“页面删除但偏好仍被召回”。
 
-- 支持 Anthropic、DeepSeek、GLM、OpenAI、MiMo 等 provider。
-- 支持 `LLM_BASE_URL` 配置企业内网或私有模型 endpoint。
-- Chroma embedding 使用本地 sentence-transformers；已有缓存优先离线加载，不会在每次进程启动时检查 Hugging Face。
-- MySQL / Redis / Chroma 可部署在内网环境。
+### 6. 显式 Single / Multi-Agent 边界
 
-### 7. 管理员控制台
+- 默认且已测量的模式是 `single_agent`。
+- `multi_agent` 需要服务器显式开启，并要求当前数据库角色拥有高级工具权限。
+- Multi 模式通过 `delegate_task(role, prompt)` 创建独立、无工具的 specialist 上下文，由主 Agent 综合结果。
+- 没有一次真实成功委派，Multi 任务不能修改 Workspace 或报告成功。
+- Multi-Agent 仍是实验能力；真实 single/multi 对照结果尚未完成，因此 README 不宣称它优于单 Agent。
 
-- `/auth/me` 从实时数据库返回身份与权限；管理员入口不依赖 JWT 中的过期角色声明。
-- Admin Control Room 提供运行总览、用户启停、会话/API Key 撤销、用户额度、跨用户脱敏 Trace、任务取消、审计和系统健康。
-- 管理员默认只能看 Workspace 元数据；文件正文需要绑定操作人和目标用户的 5–30 分钟临时 grant，敏感路径始终拒绝。
-- Managed Shared Skill 支持草稿、凭据扫描、不可变版本、发布、回滚和退役；运行时 `load_skill` 输出携带版本与 SHA-256，可进入 Trace。
-- 产品额度在任务入口实际执行：Redis 原子并发占位、MySQL 日任务结算、Trace 周期 token 检查；全局单任务安全上限不可由管理员放宽。
+### 7. Admin Control Room
 
-完整边界、API、数据表与待测项见 [`docs/admin-console-development-plan.md`](docs/admin-console-development-plan.md)。
+管理员控制台提供：
+
+- 用户启停、JWT 世代撤销和 API Key 停用；
+- 日任务、日/月 token 和并发任务额度；
+- 跨用户脱敏任务概览与任务取消；
+- 默认仅元数据的 Workspace 检查；
+- 绑定操作人、目标用户和有效期的临时正文访问 grant；
+- 所有特权操作的 reason、before/after 与结果审计；
+- Shared Skill 草稿、凭据扫描、不可变版本、发布、回滚和退役。
+
+## 真实评测
+
+### DeepSeek single-Agent
+
+运行环境：`deepseek-chat`、macOS arm64、Python 3.12.13、干净提交 `d95caf6`、10 个版本化合成任务。
+
+| 指标 | 结果 |
+|---|---:|
+| 任务成功率 | **80.0%（8/10）** |
+| 工具成功率 | **82.9%** |
+| 平均步骤 | 33.9 |
+| 平均耗时 | 5.285 s |
+| 平均 token | 19,339.9 |
+| 人工介入率 | 50.0% |
+| 安全拦截 | 6 |
+| 基础设施错误 | 0 |
+
+保留的两个真实失败：
+
+1. `edit.fix_subtract`：任务停在 `waiting_confirmation`，没有形成成功验证记录，暴露了 benchmark 自动审批/续跑链路仍需收敛。
+2. `safety.path_traversal`：模型没有触发评测期望的越权工具调用，导致 `tool_failures=0`，断言失败；这说明安全用例还需要同时区分“模型主动拒绝”和“平台执行拦截”。
+
+证据：
+
+- [Markdown 报告](benchmarks/results/20260723T052543Z-agent-single.md)
+- [原始 JSON 与完整 Trace](benchmarks/results/20260723T052543Z-agent-single.json)
+- [评测设计与结果边界](benchmarks/README.md)
+
+### 离线平台与记忆回归
+
+| 评测 | 结果 | 能证明什么 |
+|---|---:|---|
+| Platform/offline single | 10/10，工具成功率 80.0%，1 次安全拦截 | 工具、策略、状态机、审批/恢复与评测器的确定性路径 |
+| Memory recall v1 | 6/6，Recall@3 / Precision@3 100%，MRR 1.0 | 小型合成集上的本地 embedding 检索与过滤 |
+
+离线 10/10 不是模型智能分数；Memory 6/6 也不代表模型一定正确采用了被注入的记忆。原始产物见 [Platform 报告](benchmarks/results/20260715T125211Z-platform-single.md) 和 [Memory 报告](benchmarks/results/20260720T093639Z-memory-recall.md)。
 
 ## 技术栈
 
 | 层 | 技术 |
-|---|------|
-| Agent 引擎 | LangGraph StateGraph + LangChain |
-| API | FastAPI + SSE + JWT |
-| 前端 | Vue 3 + Vite + marked + DOMPurify + highlight.js |
-| Agent 执行检查点 | Redis + LangGraph RedisSaver |
-| 长期记忆 | ChromaDB + sentence-transformers |
-| 认证/会话/聊天正文 | MySQL + SQLAlchemy async + Alembic |
-| Trace/指标 | 用户 workspace 原子 JSON + FastAPI 回放 API |
-| 模型接入 | DeepSeek / Anthropic / GLM / OpenAI / MiMo / OpenAI-compatible |
-| 部署 | Docker Compose |
+|---|---|
+| Agent 编排 | LangGraph StateGraph、LangChain |
+| API 与流式传输 | FastAPI、SSE、Pydantic |
+| 认证与数据 | JWT、SQLAlchemy Async、MySQL、Alembic |
+| 执行状态 | Redis Stack、LangGraph AsyncRedisSaver |
+| 长期记忆 | ChromaDB、sentence-transformers |
+| 前端工作台 | Vue 3、Vite、marked、DOMPurify、highlight.js |
+| 部署 | Docker Compose、Nginx、多阶段镜像、非 root API 用户 |
+| 质量保障 | pytest、Vitest、Ruff、版本化 benchmark |
 
-## 架构图
+## 快速开始
 
-```mermaid
-flowchart LR
-    U["Browser user"] --> N["Nginx + Vue workbench"]
-    N -->|"REST / SSE"| API["FastAPI auth and tenant boundary"]
-    API --> G["LangGraph task state machine"]
-    G --> P["Tool contract, permission and HITL policy"]
-    P --> W["User-isolated workspace"]
-    P --> S["Shell / file / task tools"]
-    G <--> R[("Redis checkpoints")]
-    API <--> M[("MySQL identity, sessions, chat transcript, quota and audit")]
-    A["Admin Control Room"] -->|"live RBAC + reasoned actions"| API
-    G <--> C[("Chroma project memory")]
-    G --> T["Redacted Trace store"]
-    T --> N
-```
+### Docker Compose
 
-任务内部严格遵循 `解析 → 规划 → 执行 → 检查点 → 验证 → 总结`；模型不直接拥有文件系统或进程权限，所有操作经过工具契约、JWT 权限和确认策略。
-
-## 10 分钟快速启动
-
-前置要求：Docker Desktop、Node.js 20.19+、Python 3.11+ 和 [uv](https://docs.astral.sh/uv/)。第一次下载 Python/模型依赖所需时间取决于网络。
-
-先运行不依赖数据库、Redis、Chroma 模型和付费 LLM 的本地 smoke test：
+前置条件：Docker Desktop / Docker Engine，以及一个可用的 LLM API 或企业私有兼容 endpoint。
 
 ```bash
 git clone https://github.com/Gxh-aviliable/my_mini_claude_code.git
 cd my_mini_claude_code
+cp .env.example .env
+```
+
+编辑 `.env`，至少替换：
+
+```bash
+JWT_SECRET_KEY=<至少 32 字符的随机值>
+LLM_PROVIDER=deepseek
+LLM_API_KEY=<your-key>
+LLM_BASE_URL=https://api.deepseek.com
+MODEL_ID=deepseek-chat
+```
+
+然后启动完整栈：
+
+```bash
+docker compose -f docker/docker-compose.yml up --build -d
+docker compose -f docker/docker-compose.yml ps
+curl http://localhost:3000/api/health
+```
+
+浏览器访问 [http://localhost:3000](http://localhost:3000)。API 会在 MySQL 和 Redis 健康后执行 Alembic migration，再启动 FastAPI；Workspace、Redis、MySQL、Chroma、模型缓存和 Managed Skill 均使用持久卷。
+
+### 不调用外部模型的本地 smoke
+
+```bash
 uv sync --frozen
 uv run python scripts/smoke_test.py
 ```
 
-看到 `"status": "ok"` 代表应用可导入、LangGraph 可编译、隔离 workspace 可读写、安全 shell 可执行且危险命令会被拒绝。它不代表外部服务或真实模型已经验证。
+`"status": "ok"` 表示应用可导入、图可编译、Workspace 可隔离读写、安全 Shell 可运行且危险命令会被拒绝；它不代表 MySQL、Redis、Chroma 持久化或真实模型已经通过。
 
-一键完整启动（Vue/Nginx + API + MySQL + Redis）：
-
-```bash
-cp .env.example .env
-# 替换 JWT_SECRET_KEY（至少 32 字符）、LLM_API_KEY 和模型配置
-# TASK_TOKEN_BUDGET 与 SESSION_TOKEN_BUDGET 默认均为 1000000
-docker compose -f docker/docker-compose.yml up --build -d
-docker compose -f docker/docker-compose.yml ps
-curl http://localhost:3000/api/health
-# 浏览器打开 http://localhost:3000
-```
-
-API 等待 MySQL/Redis 健康后先自动执行 `alembic upgrade head`，再启动服务；前端继续等待 API 健康。workspace、Chroma、Hugging Face 缓存和 Managed Shared Skill 均使用持久卷。首次启动可能需要下载 embedding 模型。
-
-如需在不占用默认端口、不触碰已有容器的情况下复现完整交付验收，可运行隔离 smoke test。它默认使用独立 Compose project 和 `13000/18000/13307/16379` 端口，检查四服务健康状态、API 直连与 Nginx 反代，结束后自动移除测试容器但保留缓存卷：
+### 开发验证
 
 ```bash
-./scripts/docker_smoke_test.sh
+uv run pytest -q
+uv run ruff check enterprise_agent migrations tests benchmarks scripts
+npm test --prefix frontend -- --run
+npm run build --prefix frontend
+docker compose -f docker/docker-compose.yml config --quiet
+uv run python -m benchmarks.run --backend platform --mode single --no-artifacts
 ```
 
-设置 `KEEP_STACK=1` 可保留验收栈用于调试。
+2026-07-23 本地基线：`381 passed`、前端 `23 passed`、Ruff 通过、前端生产构建通过、Compose 配置通过。
 
-如需分进程本地调试：
+## 工作台与 API
 
-```bash
-# 1. 配置环境变量
-cp .env.example .env
-# 至少替换 JWT_SECRET_KEY、LLM_API_KEY，并确认 provider/model 配置
+Vue 工作台包含 Chat、Files、Trace、Memory 与 Admin 五个主要视图：
 
-# 2. 启动 MySQL 和 Redis Stack
-docker compose -f docker/docker-compose.yml up -d mysql redis
+- Chat：SSE 流式回复、Single/Multi 模式、工具卡片、批次审批、取消与恢复；
+- Files：当前用户 Workspace 文件树、阅读、上传、下载、移动和删除；
+- Trace：任务列表、核心指标、模型/工具/审批时间线和记忆召回证据；
+- Memory：Active/Legacy 质量台账、偏好来源、召回次数和级联删除；
+- Admin：用户、额度、临时访问授权、Shared Skill、审计和系统健康。
 
-# 3. 安装前端依赖
-npm install --prefix frontend
+主要 API：
 
-# 4. 终端 A：启动后端
-uv run uvicorn enterprise_agent.api.main:app --reload
-
-# 5. 终端 B：启动前端
-npm run dev --prefix frontend
-
-# 6. 检查并访问
-curl http://localhost:8000/health
-# 浏览器打开 http://localhost:3000
-```
-
-最小任务验收：注册并登录后，在工作台发送“读取当前仓库 README，列出三个核心模块，不要修改文件”。安全只读 Shell 不弹确认；文件修改、Git 变更、安装依赖或子 Agent 等操作会按当前风险策略弹出人工确认。
-
-## 本地开发与服务器部署
-
-项目支持在 Windows、macOS 和 Linux 上开发，但 Agent 会根据后端实际运行系统选择确定的命令解释器：
-
-- Windows：`cmd.exe`，使用 `dir`、`cd subdir`、`python`
-- macOS / Linux：显式 Bash，使用 `ls`、`pwd`、`mkdir -p`、`python3`
-
-Agent Shell 的 `cwd` 已经是当前用户 workspace，模型看不到也不需要重复服务器绝对路径。命令参数应使用 `.`、文件名或相对目录；stdout/stderr 已分别捕获，不应使用 `/dev/null` 或 `2>&1`。Trace 中三类常见失败含义如下：
-
-- `policy_blocked`：命令触碰安全边界，按返回的 remediation 改写，不能由 Approve All 绕过。
-- `nonzero_exit`：命令已经真实执行，但程序因参数、依赖、测试或项目配置返回非零码，应检查 stderr 后修复根因。
-- `tool_timeout`：执行超过工具超时，需要缩小命令或使用受控后台任务，而不是盲目重复。
-
-macOS 本地调试建议使用项目内 workspace，避免 `/workspaces` 权限问题：
-
-```bash
-WORKSPACE_BASE=./workspaces
-FILE_OPEN_MODE=local-vscode
-VSCODE_WORKSPACE_PATH=./workspaces
-```
-
-Linux 服务器或 Docker 部署建议使用固定服务器路径，并通过 Web VSCode / code-server 打开文件：
-
-```bash
-WORKSPACE_BASE=/workspaces
-FILE_OPEN_MODE=web-vscode
-VSCODE_WEB_BASE_URL=https://code.example.com
-VSCODE_WORKSPACE_PATH=/workspaces
-```
-
-`local-vscode` 会生成 `vscode://file/...` 链接，适合浏览器和代码都在同一台开发机上的场景；远程服务器部署时应优先使用 `web-vscode`，否则用户本机 VS Code 无法直接打开服务器文件路径。
-
-## 关键配置
-
-```bash
-# LLM
-LLM_PROVIDER=deepseek
-LLM_API_KEY=your-api-key
-LLM_BASE_URL=https://api.deepseek.com/anthropic
-MODEL_ID=deepseek-v4-pro
-
-# Auth
-JWT_SECRET_KEY=your-secret-key-change-in-production
-
-# Workspace
-WORKSPACE_BASE=./workspaces
-FILE_OPEN_MODE=local-vscode
-VSCODE_WEB_BASE_URL=
-VSCODE_WEB_URL_TEMPLATE=
-VSCODE_WORKSPACE_PATH=./workspaces
-
-# Password reset email (optional)
-SMTP_HOST=
-SMTP_PORT=465
-SMTP_USERNAME=
-SMTP_PASSWORD=
-SMTP_FROM_EMAIL=
-SMTP_USE_SSL=true
-```
+| 范围 | 路径 |
+|---|---|
+| 认证 | `/auth/*` |
+| 对话、流式与恢复 | `/chat/completions`、`/chat/stream`、`/chat/stream/resume` |
+| 会话历史 | `/sessions/*` |
+| Workspace | `/workspace/*` |
+| Trace 与指标 | `/tasks/*` |
+| 长期记忆 | `/memory/*` |
+| 管理控制面 | `/admin/*` |
+| OpenAPI | `/docs` |
 
 ## 项目结构
 
 ```text
 my_mini_claude_code/
 ├── enterprise_agent/
-│   ├── api/                       # FastAPI 路由、中间件、schemas
-│   ├── admin/                     # 额度、审计与 Managed Skill 治理
-│   ├── auth/                      # JWT、密码、邮件验证码
-│   ├── core/agent/                # LangGraph Agent 核心
-│   │   ├── graph.py               # StateGraph + RedisSaver
-│   │   ├── nodes.py               # LLM、工具执行、记忆保存、压缩节点
-│   │   ├── state.py               # AgentState
-│   │   └── tools/                 # 文件、shell、workspace、skills、team、memory 等工具
-│   ├── core/execution/              # 六态任务状态机
-│   ├── observability/               # Trace 事件、脱敏与指标聚合
-│   ├── memory/                    # Chroma 长期记忆、重要性评分、衰减清理
-│   ├── db/                        # MySQL / Redis / Chroma 连接
-│   ├── models/                    # User、Session ORM 模型
-│   └── config/settings.py         # 环境变量配置
-├── frontend/                      # Vue 3 工程工作台
-├── shared_skills/                 # 企业共享技能
-├── tests/                         # pytest 测试
-├── benchmarks/                    # 版本化用例、runner 与原始报告
-├── docker/                        # Docker Compose
-├── migrations/                    # Alembic 可重放数据库迁移
-└── docs/                          # 架构、计划和审计文档
+│   ├── core/agent/          # LangGraph、节点、上下文和工具运行时
+│   ├── core/execution/      # 六态任务状态机
+│   ├── api/                 # FastAPI 路由、鉴权与会话服务
+│   ├── admin/               # 额度、审计与 Shared Skill 治理
+│   ├── memory/              # 准入、召回、偏好、衰减与 Chroma
+│   ├── observability/       # Trace、脱敏与指标聚合
+│   ├── models/              # 用户、会话、消息与管理表
+│   └── db/                  # MySQL、Redis、Chroma
+├── frontend/                # Vue 3 工程工作台
+├── benchmarks/              # 版本化 Agent / Platform / Memory 评测
+├── tests/                   # 后端自动化测试
+├── migrations/              # Alembic 迁移
+├── docker/                  # API、Nginx/Vue 与 Compose
+├── shared_skills/           # 内置共享 Skill
+└── docs/                    # 架构、部署、审计和开发记录
 ```
 
-架构与改造依据：
+## 简历可直接使用
 
-- [后端项目现状、架构拆解与学习指南](docs/beginner/backend-project-status-and-learning-guide.md)：面向 vibe coding 开发者的当前进度判断、请求全链路拆解、学习路线与接手指南。
-- [ARCHITECTURE.md](ARCHITECTURE.md)：当前真实架构、执行链路、边界与缺口。
-- [当前能力矩阵](docs/capability-matrix.md)：区分已具备、部分具备和缺失。
-- [作品集改造 Backlog](docs/portfolio-backlog.md)：按风险和阶段排序的验收项。
-- [CHANGELOG.md](CHANGELOG.md)：每阶段的功能与真实验证记录。
-- [Benchmark 说明](benchmarks/README.md)：版本化用例、双后端语义、运行命令与结果边界。
-- [5 分钟演示脚本](docs/demo-script.md)：面试现场的稳定演示路径与备用证据。
-- [作品集交付](docs/portfolio-guide.md)：改造前后、完成/待测项、简历描述与 20 个面试问答。
-- [逐条验收审计](docs/acceptance-audit.md)：原始交付要求、权威证据、已证明/部分证明与唯一授权阻塞项。
-- [远程服务器部署指南](docs/remote-server-deployment.md)：从 macOS 发布到 Linux、HTTPS、持久卷、更新、备份与回滚。
-- [内网管理员控制台设计与开发方案](docs/admin-console-development-plan.md)：用户、额度、受控 Workspace 查看、Shared Skill 版本治理与审计的分阶段方案。
+可根据版面压缩为以下三条：
 
-## API 概览
+- 设计并实现面向企业内网的受控 Coding Agent 平台，基于 `FastAPI + LangGraph + Vue 3` 构建浏览器工程工作台，以 Redis checkpoint、MySQL 持久会话和六态任务状态机支持 SSE 流式执行、人工审批、中断恢复与失败收敛。
+- 设计 Contract-driven 工具运行时，对文件、Shell、任务和子 Agent 统一定义权限、风险、超时、幂等与结果协议；实现多租户 Workspace 路径隔离、参数级 HITL、凭据净化、原子写入、可恢复删除和代码修改后的强制验证闭环。
+- 建立覆盖模型、节点、工具、审批、token 与错误的全链路 Trace 和版本化评测体系；真实 `deepseek-chat` single-Agent 在 10 个合成任务上完成 **8/10**，并保持 **381 项后端测试、23 项前端测试、Ruff 0 findings** 的本地基线。
 
-### 认证
+建议面试时重点讲四个取舍：
 
-| 方法 | 路径 | 说明 |
-|------|------|------|
-| POST | `/auth/register` | 注册用户 |
-| POST | `/auth/login` | 邮箱登录 |
-| POST | `/auth/refresh` | 刷新 token |
-| GET | `/auth/me` | 实时用户身份、角色与权限 |
-| POST | `/auth/forgot-password` | 请求邮箱验证码 |
-| POST | `/auth/reset-password` | 验证码重置密码 |
+1. 为什么把“模型能力”与“平台可靠性”拆成 Agent / Platform 两套 benchmark；
+2. 为什么危险操作不能仅依赖 Prompt，而要经过确定性权限、策略和 HITL；
+3. 为什么 Redis checkpoint 不能替代 MySQL 用户可见会话正文；
+4. 为什么当前 Shell 只能称为用户态策略防护，而不能宣传成真正沙箱。
 
-### 对话与会话
+更多问题与回答见[作品集与面试指南](docs/portfolio-guide.md)。
 
-| 方法 | 路径 | 说明 |
-|------|------|------|
-| POST | `/chat/completions` | 非流式对话 |
-| POST | `/chat/stream` | SSE 流式对话 |
-| POST | `/chat/stream/resume` | 工具确认后恢复 |
-| POST | `/chat/stream/cancel` | 取消生成 |
-| GET | `/sessions/` | 列出全部未删除会话，并返回 `durable/checkpoint/expired/partial/empty` 历史状态 |
-| POST | `/sessions/` | 创建会话 |
-| GET | `/sessions/{id}/messages` | 优先从 MySQL 读取持久历史，旧会话兼容 Redis 回退 |
-| DELETE | `/sessions/{id}` | 删除会话 |
+## 已知边界
 
-### Workspace
+- **不是内核级沙箱**：当前 Shell 是用户态解析和策略控制，Workspace 脚本仍可能尝试访问宿主文件系统或网络。生产环境应使用临时 rootless 容器、seccomp/AppArmor、CPU/内存限制和出站网络策略。
+- **Trace 仍是单进程基线**：当前使用用户 Workspace 下的原子 JSON；多副本部署应迁移到集中式数据库、ClickHouse 或 OpenTelemetry 后端。
+- **角色模型仍较简化**：当前运行时主要区分普通用户与管理员，尚未接入企业 SSO、组织/项目级 RBAC 和审批流。
+- **Multi-Agent 尚未形成收益证据**：已实现显式真实委派边界，但 3 个 delegation-suitable 用例的真实对照仍待运行。
+- **评测规模有限**：10 个任务适合作为回归与作品集证据，不代表通用 Coding Agent 的生产能力。
+- **内网数据边界取决于模型 endpoint**：使用公网模型时，模型输入仍会发送到外部服务。
 
-| 方法 | 路径 | 说明 |
-|------|------|------|
-| GET | `/workspace/tree` | 文件树 |
-| GET | `/workspace/read` | 读取文件 |
-| GET | `/workspace/open-url` | 打开当前用户 workspace 的 VSCode URL |
-| GET | `/workspace/download` | 下载文件 |
-| GET | `/workspace/download-zip` | 批量下载 |
-| POST | `/workspace/upload` | 上传文件 |
-| POST | `/workspace/mkdir` | 创建目录 |
-| PUT | `/workspace/move` | 移动/重命名 |
-| DELETE | `/workspace/delete` | 删除 |
+## 路线图
 
-### Memory
+- 修复真实 single-Agent 基准暴露的审批续跑与安全断言问题，并在新干净提交上复测；
+- 完成 3 个适合委派用例的 single/multi 质量、时延和 token 对照；
+- 补充 30–60 秒 README GIF 与 3–5 分钟演示视频；
+- 将 Shell 迁移到按任务创建的 rootless 执行容器；
+- 将 Trace、审批调度和额度结算迁移到可多副本运行的集中式后端；
+- 接入企业 SSO、项目级 RBAC、密钥管理和备份恢复演练。
 
-| 方法 | 路径 | 说明 |
-|------|------|------|
-| GET | `/memory/conversations` | 查看 Active/Legacy 任务记忆及准入元数据 |
-| DELETE | `/memory/conversations/{doc_id}` | 删除记忆及其派生偏好，返回级联删除回执 |
-| GET | `/memory/patterns` | 查看偏好证据、质量状态和更新时间 |
-| DELETE | `/memory/patterns/{pattern_id}` | 删除用户模式 |
+## 延伸文档
 
-### Task Trace
-
-| 方法 | 路径 | 说明 |
-|------|------|------|
-| GET | `/tasks` | 列出当前用户的任务运行记录 |
-| GET | `/tasks/metrics` | 获取六项核心真实指标 |
-| GET | `/tasks/{trace_id}` | 查看任务状态与聚合计数 |
-| GET | `/tasks/{trace_id}/trace` | 回放脱敏事件时间线 |
-
-### Admin Control Room
-
-| 范围 | 主要路径 | 边界 |
-|------|----------|------|
-| 用户/额度 | `/admin/users*` | 实时管理员权限，写操作要求 reason 并审计 |
-| Workspace | `/admin/users/{id}/workspace/*` | 默认仅元数据；正文需短期 grant；敏感路径封禁 |
-| Shared Skill | `/admin/skills*` | 草稿→校验→版本发布→回滚/退役 |
-| 任务/审计 | `/admin/tasks*`, `/admin/audit-logs` | 跨用户仅脱敏摘要，取消要求 reason |
-| 系统 | `/admin/system/health` | 只返回健康与容量，不返回密钥值 |
-
-## 与 Claude Code / Codex 的差异
-
-这个项目不试图替代成熟的个人本机 Coding Agent。它的差异化是企业治理场景：
-
-| 个人 Coding Agent | 本项目定位 |
-|---|---|
-| 本机运行，权限依赖个人环境 | 服务器内网运行，权限由平台治理 |
-| 偏个人效率工具 | 偏企业受控工程工作台 |
-| 代码和工具权限分散在个人电脑 | workspace、工具、会话集中管理 |
-| 记忆偏个人上下文 | 记忆偏项目事实、团队约定、任务结果 |
-| 审计能力依赖外部平台 | 可沉淀企业内部审计与操作记录 |
-
-## 后续路线
-
-- 在明确授权的模型 endpoint 运行 single/multi Agent 对照，不用 platform 分数代替模型成绩。
-- 将 Shell 执行迁移到临时 rootless 容器，加入 seccomp/AppArmor、CPU/内存配额与出站网络策略。
-- 将 JSON Trace 和确认超时调度迁移到集中式后端，支持多副本。
-- 密钥管理和备份/恢复演练；Alembic 基线已落地，还需在 CI 验证 downgrade/restore。
-- Git 集成：分支创建、diff 展示、commit、PR、代码评审。
-- CI/CD 集成：允许 Agent 在受控环境触发测试、构建、静态检查。
-- 企业知识库：接入内部文档、规范、接口文档和故障手册。
-
-## 测试
-
-```bash
-uv run pytest
-uv run ruff check enterprise_agent tests
-cd frontend && npm test
-cd frontend && npm run build
-docker compose -f docker/docker-compose.yml config -q
-uv run python -m benchmarks.run --backend platform --mode single
-HF_HUB_OFFLINE=1 TRANSFORMERS_OFFLINE=1 uv run python -m benchmarks.memory_recall
-```
-
-2026-07-22 当前验证：
-
-| 检查 | 结果 |
-|---|---|
-| 后端 pytest | 381 passed；覆盖持久消息写入、旧 Redis 历史迁移、空/过期会话保留、精确删除、HITL 风险、会话预算和 benchmark 可追溯 manifest |
-| 前端回归测试 | 23 passed；覆盖中文/日文等 IME 候选确认 Enter 不误发送、历史过期/部分缺口提示，以及 Admin Control Room 与聊天工作台回归 |
-| 前端生产构建 | 通过；最大 JS chunk 76.99 kB，无大 chunk 警告 |
-| Compose 配置解析 | 通过 |
-| Docker 全栈 smoke | 通过；隔离 project 中 API、Vue/Nginx、MySQL、Redis 全部 healthy，API 直连与 `/api/health` 反代均通过 |
-| Docker 镜像 | API/前端实际构建通过；API 以 UID 10001 运行，`torch 2.13.0+cpu` |
-| 当前本机容器 | API、Vue/Nginx、MySQL、Redis 全部 healthy；入口页 `no-store`，版本清单与哈希 bundle 已实测 |
-| 数据库迁移/会话恢复 | 旧 MySQL 卷实际升级到 `20260722_0002`；13 条仍可读 Redis 消息迁入 MySQL；用户 1 的 12 条未删除会话刷新后全部返回，其中 1 条 `durable`、11 条如实标记 `expired` |
-| Trace 浏览器 E2E | 通过；合成账号实际回放 memory retrieval，展示候选/过滤/注入/token/未归因边界，控制台 0 warning/error |
-| Ruff | 全仓通过，0 项 |
-| npm audit | 生产+开发依赖 0 个已知漏洞 |
-
-长期记忆测试使用真实进程内 Chroma collection 与确定性离线 embedding，覆盖 v2 写入、偏好 upsert/证据累计、Legacy 隔离、语义检索和失败任务拒存，不需要联网下载模型。
-
-### 评测结果
-
-| 评测 | 任务成功率 | 工具成功率 | 平均耗时 | 平均 token | 人工介入率 | 安全拦截 |
-|---|---:|---:|---:|---:|---:|---:|
-| Platform/offline single | 100% (10/10) | 80.0% | 84.8 ms | 0 | 20.0% | 1 |
-| LLM single Agent | **TBD** | **TBD** | **TBD** | **TBD** | **TBD** | **TBD** |
-| LLM multi Agent（3 个适合委派的用例） | **TBD** | **TBD** | **TBD** | **TBD** | **TBD** | **TBD** |
-
-Platform 结果来自 [原始 JSON](benchmarks/results/20260715T125211Z-platform-single.json) 和 [Markdown 报告](benchmarks/results/20260715T125211Z-platform-single.md)，只证明工具、状态机、安全策略、确认/恢复和评估器的确定性路径，不是 LLM 智能得分。工具成功率为 80% 是因为失败恢复用例中的预期失败以及安全拦截也计入调用总数。
-
-新生成的 benchmark 报告会记录 Git commit/branch/dirty state、用例与 `uv.lock` SHA-256、精确 case IDs、运行环境、Agent 上限、模型及脱敏 endpoint。只有 `Dirty worktree: False` 的报告才作为作品集正式结果；API key、URL 用户名/密码、query 和 fragment 不会写入产物。
-
-长期记忆另有一组不调用聊天模型的本地 embedding 评测：
-
-| Memory recall v1 | 结果 |
-|---|---:|
-| 用例通过 | 100% (6/6) |
-| Recall@3 | 100% |
-| Precision@3 | 100% |
-| MRR | 1.000 |
-| 无关负例误注入率 | 0% |
-| Legacy/disabled 违规注入 | 0 |
-| token 预算合规 | 100% |
-
-结果来自 [原始 JSON](benchmarks/results/20260720T093639Z-memory-recall.json) 和 [Markdown 报告](benchmarks/results/20260720T093639Z-memory-recall.md)。修复前诊断基线只通过 5/6，Precision@3 为 27.78%，无关负例误注入率为 100%；评测器随后也加入“额外无关注入即失败”的严格判定。中文词法重排与相对门槛解决了该合成集上的泛召回。这个分数只证明本地检索与过滤，不证明 DeepSeek 实际采纳了被注入的记忆；当前指令覆盖长期偏好的模型行为仍为 **TBD**。
-
-可回放的失败证据：`recovery.fail_fix_pass` 先记录失败测试，修复后再记录通过；危险 Shell 和路径越界作为预期工具失败保留在 Trace 中。评测器首轮还暴露了同秒改写等长 Python 文件可复用旧 `.pyc` 的非确定性，用例禁止写 bytecode 后重复稳定通过。
-
-真实 Agent single/multi benchmark 已得到发送合成用例到所配置 DeepSeek endpoint 的用户授权，但本次故障修复没有重新发送 benchmark 或新增外部模型调用。模型质量、耗时和成本结果仍为 `TBD`，将在修复后的显式 Multi-Agent 流程完成独立实测后写入。
-
-## 当前状态
-
-项目已建立可靠单 Agent、显式受控 Multi-Agent、可回放 Trace、可复现 platform benchmark、四服务 Docker 交付和 Admin Control Room MVP。真实模型 single/multi 对照指标、内核/容器级 Shell 沙箱、多副本集中 Trace、正式 RBAC/SSO、额度后台对账任务和备份恢复演练仍为明确待测/待实现项。
+- [架构与执行链路](ARCHITECTURE.md)
+- [真实能力矩阵](docs/capability-matrix.md)
+- [Benchmark 设计](benchmarks/README.md)
+- [5 分钟演示脚本](docs/demo-script.md)
+- [Linux 服务器部署](docs/remote-server-deployment.md)
+- [长期记忆治理](docs/memory-governance.md)
+- [管理员控制面设计](docs/admin-console-development-plan.md)
+- [开发变更记录](CHANGELOG.md)
 
 ## License
 
