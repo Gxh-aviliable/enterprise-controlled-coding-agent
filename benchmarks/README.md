@@ -29,6 +29,18 @@ Reports are written as raw JSON plus a human-readable Markdown summary under `be
 
 Every report carries a secret-free reproducibility manifest: Git commit/branch/dirty state, benchmark suite and `uv.lock` SHA-256, exact selected case IDs, Python/platform identity, run timestamps, Agent limits, provider/model, sanitized endpoint, and the effective inference-default policy. A measured portfolio run is valid only when `Dirty worktree` is `False`; API keys, URL credentials, query strings, and fragments are never written to artifacts.
 
+## Canonical checked-in reports
+
+Only one representative artifact pair is retained for each measured layer:
+
+| Layer | Result | Canonical artifact | What it proves |
+|---|---:|---|---|
+| Platform single | 10/10 | `20260715T125211Z-platform-single.*` | Deterministic tools, policy, lifecycle, recovery and evaluator behavior |
+| Memory recall | 6/6 | `20260720T093639Z-memory-recall.*` | Small synthetic-set retrieval, filtering and Trace-field coverage |
+| DeepSeek Agent single | 8/10 | `20260723T052543Z-agent-single.*` | One real `deepseek-chat` autonomous run with tokens, latency and failures |
+
+The earlier platform runs at `12:14:04Z` and `12:39:55Z` were diagnostic duplicates with the same 10/10 final assertions and are available through Git history instead of the active result directory. The multi-Agent comparison remains unmeasured.
+
 ## V1 coverage
 
 | Area | Cases |

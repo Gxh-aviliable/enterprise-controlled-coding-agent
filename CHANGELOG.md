@@ -6,6 +6,8 @@ All notable project changes are recorded here. Benchmark and performance claims 
 
 ### Added
 
+- Canonical documentation index and current-code walkthrough replacing four overlapping, line-number-sensitive beginner guides.
+- Canonical benchmark artifact policy retaining one final platform report, one memory report, and one real single-Agent report.
 - Secret-free benchmark reproducibility manifests recording Git commit/branch/dirty state, suite and lockfile hashes, selected cases, runtime, Agent limits, model identity, sanitized endpoint, and effective inference-default policy.
 - Recoverable `delete_paths(paths, reason)` Agent tool with exact-path HITL, protected workspace/system paths, wildcard and overlap rejection, symlink-safe moves, rollback on partial failure, and per-operation recovery manifests under `.agent/trash/`.
 - Persistent `session_token_count` enforcement with a configurable 1,000,000-token cumulative session budget, separate from per-task usage and context compaction.
@@ -14,8 +16,8 @@ All notable project changes are recorded here. Benchmark and performance claims 
 - Runtime product quota enforcement with Redis atomic concurrent leases, MySQL daily task settlement, Trace-derived daily/monthly token checks, structured 429 errors, and release on normal/error/SSE exit paths.
 - Administrator-managed Shared Skill registry with validation/credential scanning, immutable versions, durable materialization, publish/rollback/retire actions, cache refresh, and runtime version/SHA-256 evidence.
 - Vue administrator console with a persistent Access Scope Bar, fleet overview, user/quota operations, guarded workspace preview, Shared Skill editor/version controls, audit ledger, and system health.
-- Internal admin-console development plan covering live authorization, user/quota operations, break-glass workspace access, versioned Shared Skill governance, audit evidence, UI structure, API contracts, data models, and phased acceptance criteria.
-- Architecture baseline, current capability matrix, and risk-ranked portfolio hardening backlog.
+- Current administrator-console reference covering live authorization, quotas, audited temporary workspace access, Shared Skill governance, API groups, and production boundaries.
+- Architecture baseline, current capability matrix, canonical documentation index, and code walkthrough.
 - Dependency-light smoke test covering application imports, graph compilation, workspace isolation, file tools, safe shell execution, and dangerous-command rejection.
 - Regression coverage for task-manager cache isolation across workspace changes.
 - Validated six-state task lifecycle and explicit parse/plan/execute/checkpoint/validate/summarize graph phases.
@@ -27,8 +29,7 @@ All notable project changes are recorded here. Benchmark and performance claims 
 - Vue execution-trace page with a task index, six acceptance metrics, ordered execution spine, latency bars, and expandable redacted evidence.
 - Versioned 10-case coding-agent benchmark with deterministic platform and real-Agent backends, machine-readable assertions, raw JSON/Markdown artifacts, and a delegation-suitable multi-Agent subset.
 - Full-stack Compose delivery with Nginx/Vue, API, MySQL, Redis, health dependencies, durable workspace/Chroma/model-cache volumes, shared skills, and non-root API execution.
-- Five-minute demo script plus portfolio handoff with before/after architecture, honest limitations, résumé bullets, and 20 interview Q&As.
-- Requirement-by-requirement acceptance audit separating locally proven evidence from the unmeasured external-model path.
+- Five-minute demo script plus portfolio guide with before/after architecture, honest limitations, résumé bullets, and 20 interview Q&As.
 - macOS-to-Linux server deployment guide covering Git/image delivery, Docker Compose startup, HTTPS, persistent data, updates, rollback, code-server, and production-hardening gaps.
 - Explicit per-request `single_agent` / `multi_agent` API mode, authenticated capabilities endpoint, and frontend mode selector.
 - Real tool-free specialist delegation through `delegate_task(role, prompt)` for bounded planning, drafting, and review roles.
@@ -38,6 +39,8 @@ All notable project changes are recorded here. Benchmark and performance claims 
 
 ### Fixed
 
+- Removed the unreferenced legacy Vue file manager, standalone 739-line prototype, empty utility package, obsolete Claude workflow rules, and duplicate pytest configuration source.
+- Removed completed implementation plans, obsolete audits, misleading issue reports, raw LangSmith dumps, duplicate benchmark runs, and stale beginner guides from the active documentation tree.
 - POSIX foreground/background commands now use an explicit Bash executable instead of the host's implicit `/bin/sh`; the Agent no longer receives the tenant's absolute workspace path, and policy failures provide actionable relative-path, captured-output, or `delete_paths` remediation without weakening existing blocks.
 - Chat input now distinguishes IME candidate confirmation from an intentional send: composition state, Safari's post-`compositionend` Enter ordering, and legacy key-code 229 are guarded while ordinary Enter-to-send and Shift+Enter remain intact.
 - Conversation refresh no longer hides every MySQL session whose 24-hour Redis checkpoint expired. User-visible messages now persist in MySQL `chat_messages`; startup migrates readable legacy checkpoints, list/history APIs expose explicit durability/gap status, and streaming, cancellation, failure, timeout, and HITL resume paths update one idempotent assistant record.
@@ -94,13 +97,12 @@ All notable project changes are recorded here. Benchmark and performance claims 
 
 ### Baseline verification
 
-- Current milestone (2026-07-22): backend 372 passed; Ruff passed; frontend 23/23 passed; production build passed with a 76.99 kB largest chunk; isolated clean-volume Docker smoke passed.
+- Current milestone (2026-07-23): backend 381 passed; Ruff passed; frontend 23/23 passed; production build passed with a 76.99 kB largest chunk; Compose configuration and local smoke passed.
+- Real `deepseek-chat` single-Agent benchmark: 8/10 tasks, 82.9% tool success, 5.285 s average duration, 19,339.9 average tokens, 50.0% human intervention, 6 safety interceptions, and 0 infrastructure errors.
 - Rebuilt API/frontend images passed against the existing MySQL volume; Alembic reached `20260722_0002`, 13 readable Redis messages migrated to MySQL, all 12 non-deleted user-1 sessions were returned after refresh (1 durable, 11 honestly expired), and all four Compose services were healthy.
 - Live API authorization smoke: users.id=1 administrator overview returned 200 with `metadata_only`; an active non-admin user returned 403. Browser regular-user smoke showed no administrator entry and zero warning/error logs.
-- Backend: 343 passed (2026-07-20); real Chroma v2 write/search, provenance quarantine, cascade deletion, task-boundary/tool recall, Chinese reranking, admission policy, offline-first embedding initialization, and full Ruff checks passed.
 - Offline platform benchmark: 10/10 tasks passed; 80.0% tool-call success, 84.8 ms average task duration, 20.0% intervention rate, and 1 safety interception. This deterministic run uses no LLM and is not an Agent intelligence score.
 - Frontend: production build passed with a 76.99 kB largest JS chunk; npm audit reported zero known vulnerabilities.
-- Frontend regression suite: 16/16 tests passed, including history/view preservation, explicit mode propagation/escalation, disabled-capability behavior, HITL rejection, authoritative tool status mapping, user-controlled streaming scroll, Memory provenance/cascade evidence, and Recall receipt replay.
 - Docker Compose config and API/frontend image builds passed. API self-check ran as UID 10001 with `torch 2.13.0+cpu`, CUDA false, and successful app import.
 - An isolated four-service Compose startup passed with API, Vue/Nginx, MySQL, and Redis healthy; API direct health and the frontend `/api/health` reverse proxy both returned MySQL/Redis `ok`. `scripts/docker_smoke_test.sh` makes this check reproducible without using the default host ports.
 - Browser replay passed against the rebuilt local stack using only synthetic local data: registration, seven metrics, candidate filtering, memory injection/token evidence, non-attribution warning, and zero console warnings/errors were verified.
@@ -108,4 +110,4 @@ All notable project changes are recorded here. Benchmark and performance claims 
 
 ### Not yet measured
 
-- Model-backed single-Agent task success, latency, token usage, and single-Agent versus multi-Agent comparison. User authorization for the synthetic DeepSeek benchmark exists, but no new external model run was made during this repair; metrics remain `TBD`.
+- The 3-case delegation-suitable single-Agent versus multi-Agent comparison remains unexecuted. No multi-Agent benefit is claimed.

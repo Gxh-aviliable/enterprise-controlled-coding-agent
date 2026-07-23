@@ -480,4 +480,5 @@ Docker 会复用未变化的镜像层，命名卷不会因为重新构建容器�
 - [环境变量模板](../.env.example)
 - [Docker smoke test](../scripts/docker_smoke_test.sh)
 - [架构说明](../ARCHITECTURE.md)
-- [验收审计](acceptance-audit.md)
+- [能力矩阵](capability-matrix.md)
+- [文档总入口](README.md)

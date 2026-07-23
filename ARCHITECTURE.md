@@ -1,6 +1,6 @@
 # Mini Claude Code Architecture
 
-> Baseline date: 2026-07-17
+> Baseline date: 2026-07-23
 > Scope: architecture as implemented on `feature/portfolio-hardening`; planned components are explicitly labelled.
 
 ## 1. System context
@@ -217,27 +217,28 @@ The platform backend answers whether tools, isolation, recovery, safety policy, 
 
 ## 10. Baseline verification
 
-Recorded on 2026-07-17:
+Recorded on 2026-07-23:
 
 | Check | Result |
 |---|---|
-| `uv run pytest -q` | 328 passed |
+| `uv run pytest -q` | 381 passed |
 | `uv run python scripts/smoke_test.py` | 7/7 local checks passed |
-| `npm run build` | Passed; largest JS chunk 76.99 kB, no size warning |
+| `npm test --prefix frontend -- --run` | 23 passed across 6 test files |
+| `npm run build --prefix frontend` | Passed; largest JS chunk 76.99 kB, no size warning |
 | `npm audit --json` | 0 known production/development vulnerabilities |
 | `docker compose -f docker/docker-compose.yml config -q` | Passed |
 | `./scripts/docker_smoke_test.sh` | Passed in an isolated Compose project; all four services healthy and both direct/proxied API health checks passed |
 | Docker API/frontend builds | Passed; 464.5 MB / 21.9 MB final images |
 | API image self-check | UID 10001, `torch 2.13.0+cpu`, CUDA false, app import passed |
 | Browser Trace replay | Passed with a synthetic local user/trace: six metrics, run list, nine events, HITL, safety block and redacted detail rendered; no console warning/error |
-| `ruff check enterprise_agent tests benchmarks scripts` | Passed, 0 findings |
+| `ruff check enterprise_agent migrations tests benchmarks scripts` | Passed, 0 findings |
 
-Long-term-memory tests exercise real in-process Chroma collections with a deterministic offline embedding, including v2 admission, Legacy quarantine, pattern upsert, filtered semantic search, and local-first model initialization. The final locked-environment platform benchmark passed 10/10 task assertions with 84.8 ms average task duration; model-backed end-to-end success remains unmeasured.
+Long-term-memory tests exercise real in-process Chroma collections with a deterministic offline embedding, including v2 admission, Legacy quarantine, pattern upsert, filtered semantic search, and local-first model initialization. The final locked-environment platform benchmark passed 10/10 task assertions with 84.8 ms average task duration. A real `deepseek-chat` single-Agent run passed 8/10 tasks with zero infrastructure errors; the 3-case single/multi comparison remains unmeasured.
 
 ## 11. Evolution constraints
 
 1. Preserve `/chat`, `/sessions`, `/workspace`, and `/memory` contracts unless a compatible extension is possible.
 2. Establish a reliable single-agent baseline before enabling multi-agent experiments.
 3. Keep graph checkpoints backward-compatible where possible by adding optional state fields with safe defaults.
-4. Record real measurements only; unexecuted benchmark cells remain `TBD`.
+4. Record real measurements only; unexecuted benchmark cells must be labeled as not measured.
 5. Prefer explicit policy and trace records over model-generated claims about what happened.

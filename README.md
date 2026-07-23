@@ -324,7 +324,7 @@ my_mini_claude_code/
 ├── migrations/              # Alembic 迁移
 ├── docker/                  # API、Nginx/Vue 与 Compose
 ├── shared_skills/           # 内置共享 Skill
-└── docs/                    # 架构、部署、审计和开发记录
+└── docs/                    # 文档索引、理解指南、部署和开发记录
 ```
 
 ## 简历可直接使用
@@ -364,13 +364,15 @@ my_mini_claude_code/
 
 ## 延伸文档
 
+- [文档总入口](docs/README.md)
+- [当前代码理解指南](docs/PROJECT-WALKTHROUGH.md)
 - [架构与执行链路](ARCHITECTURE.md)
 - [真实能力矩阵](docs/capability-matrix.md)
 - [Benchmark 设计](benchmarks/README.md)
 - [5 分钟演示脚本](docs/demo-script.md)
 - [Linux 服务器部署](docs/remote-server-deployment.md)
 - [长期记忆治理](docs/memory-governance.md)
-- [管理员控制面设计](docs/admin-console-development-plan.md)
+- [管理员控制台](docs/admin-console.md)
 - [开发变更记录](CHANGELOG.md)
 
 ## License
