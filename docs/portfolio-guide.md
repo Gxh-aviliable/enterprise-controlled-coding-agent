@@ -23,10 +23,16 @@
 
 ## 简历可用描述
 
-- 基于 FastAPI、LangGraph 与 Vue 3 构建面向企业内网的受控 Coding Agent，使用 MySQL 持久会话、Redis checkpoint 和六态任务状态机，实现 SSE 流式执行、人工确认、中断恢复与失败收敛。
-- 设计 Contract-driven 工具运行时，统一文件、Shell、任务和委派工具的权限、风险、超时、幂等与结果协议，并实现多租户 Workspace 隔离、参数级 HITL、凭据净化、原子写入、可恢复删除和修改后验证门。
-- 建立覆盖节点、模型、工具、审批、token 与错误的统一 Trace 和版本化评测；真实 `deepseek-chat` single-Agent 在 10 个合成任务上完成 8/10，并保持 381 项后端和 23 项前端回归。
-- 使用多阶段 Docker 与 CPU-only PyTorch 构建非 root API 镜像，通过 Nginx 托管 Vue/SSE 代理，并将最大前端 JS chunk 从约 1.15 MB 降至 76.99 kB。
+项目描述：
+
+> 基于 LangGraph 构建可自主理解代码库、拆解任务、调用工具、修改代码、运行验证并从失败中恢复的有状态 Coding Agent，并以 FastAPI + Vue 3 实现面向企业内网的权限、审批、隔离、恢复与审计控制面。
+
+核心工作：
+
+- 基于 `LangGraph StateGraph` 构建“代码检索 → Todo 规划 → 文件/Shell 工具执行 → 结果观察 → 失败诊断 → 修改后验证”的多轮 Agent 闭环；将非零退出、策略拦截和超时结构化反馈给模型，并通过 verification gate 阻止未验证代码被标记为成功。
+- 使用 Redis checkpoint 持久化完整 Agent 状态，引入后台命令、轮次/工具/token 预算、工具输出 microcompact、完整 transcript 和 LLM 摘要续跑，并结合受准入控制的 Chroma 长期记忆与按需 Skill 加载支持长任务和工程经验复用。
+- 设计 Contract-driven 工具运行时，统一文件、Shell、任务、记忆和子 Agent 的权限、风险、超时、幂等、副作用与结果协议，实现参数级 HITL、多租户 Workspace 隔离、凭据净化、原子写入和可恢复删除。
+- 建立覆盖模型、节点、工具、审批、token、错误和终态的 Trace 与版本化 Agent benchmark；真实 `deepseek-chat` single-Agent 在代码理解、文件操作、测试、失败修复、安全拒绝和中断恢复等 10 个任务中完成 8/10，并保持 381 项后端和 23 项前端回归。
 
 ## 20 个常见追问与回答要点
 

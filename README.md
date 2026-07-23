@@ -2,11 +2,11 @@
 
 > 面向企业内网的受控 Coding Agent 平台
 
-`Mini Claude Code` 是一个浏览器化的 AI 编程工作台：模型负责理解、规划与决策，平台负责身份认证、Workspace 隔离、工具权限、人工审批、任务恢复、全链路 Trace 和项目记忆。
+`Mini Claude Code` 是一个能够进入真实代码仓库，自主完成**理解需求、检索代码、拆解任务、调用工具、修改文件、运行验证和失败修复**的 Coding Agent。它以 LangGraph 驱动多轮“决策—执行—观察”循环，并通过文件、Shell、Todo、后台任务、Skill、记忆和委派工具完成工程任务。
 
-它不以复刻个人本机 Coding Agent 为目标，而是探索一个更偏企业工程的问题：
+在 Agent 执行层之外，项目还提供浏览器工作台和企业控制面，负责身份认证、Workspace 隔离、工具权限、人工审批、任务恢复、全链路 Trace 与长期记忆治理。项目关注的问题不是再做一个聊天界面，而是：
 
-> 当 Agent 需要真实读取代码、修改文件和执行命令时，如何让每一步都可限制、可暂停、可恢复、可追溯？
+> 如何让一个会自主读代码、改代码、跑测试和处理失败的 Agent，在企业内网中仍然可限制、可暂停、可恢复、可验证、可追溯？
 
 `LangGraph` · `FastAPI` · `Vue 3` · `Redis` · `MySQL` · `ChromaDB` · `Docker Compose`
 
@@ -20,6 +20,34 @@
 | Python 静态检查 | **Ruff 0 findings** |
 
 真实模型结果来自干净提交 `d95caf6` 上的 `deepseek-chat` 实测，不用离线规则分数冒充模型能力。详见[原始报告](benchmarks/results/20260723T052543Z-agent-single.md)。
+
+## 它为什么是 Coding Agent，而不是聊天机器人
+
+一次任务不是“用户提问 → 模型生成答案”，而是由模型根据环境反馈持续决定下一步：
+
+```mermaid
+flowchart LR
+    REQ["理解目标"] --> SEARCH["检索仓库与约束"]
+    SEARCH --> PLAN["拆解 Todo / 选择策略"]
+    PLAN --> ACT["调用文件、Shell、Skill 等工具"]
+    ACT --> OBSERVE["观察结构化结果"]
+    OBSERVE -->|"任务未完成"| PLAN
+    OBSERVE -->|"命令失败"| DIAGNOSE["读取 stderr / 定位原因"]
+    DIAGNOSE --> ACT
+    OBSERVE -->|"产生代码变更"| VERIFY["测试 / 构建 / Lint / 编译"]
+    VERIFY -->|"失败"| DIAGNOSE
+    VERIFY -->|"通过"| REPORT["汇总改动与验证证据"]
+```
+
+| Agent 能力 | 代码中的实现 | 已有证据 |
+|---|---|---|
+| 自主理解代码库 | 先使用只读文件与 Shell 工具检索项目元数据、入口、依赖和测试命令，再决定是否修改 | 真实基准通过入口定位、测试命令发现、嵌套配置读取 |
+| 多步任务规划 | `AgentState` 保存当前目标、Todo、轮次、工具记录和任务阶段；复杂工作使用 `todo_update` 持续更新进度 | Todo 生命周期、checkpoint 恢复和节点回归测试 |
+| 工具驱动执行 | LLM 只绑定当前角色可用工具，工具结果以结构化消息返回模型，形成多轮决策—执行—观察循环 | 文件、Shell、任务、Skill、上下文、记忆及委派工具链 |
+| 失败诊断与自修复 | 区分策略拦截、非零退出、超时和用户拒绝；模型读取真实 stderr 后选择修复、换路或重试 | `recovery.fail_fix_pass` 真实用例完成“失败 → 最小修复 → 复测通过” |
+| 结果验证 | 框架自动记录变更文件和验证命令；代码修改后没有成功测试、构建、Lint 或编译记录就不能成功结束 | verification gate 与真实 Shell/test benchmark |
+| 长任务续航 | 后台命令、Todo、轮次/工具/token 预算、旧工具输出微压缩、LLM 上下文摘要和 Redis checkpoint 协同工作 | 上下文、后台进程、预算及中断恢复测试 |
+| 知识与协作扩展 | 按需加载 Shared/Personal Skill，召回通过准入的工程记忆；显式 Multi 模式可创建独立 specialist 上下文 | Skill 版本治理、Memory 6/6；Multi-Agent 收益仍待对照实测 |
 
 ## 为什么做这个项目
 
@@ -41,7 +69,9 @@
 
 | 工程问题 | 当前实现 | 关键证据 |
 |---|---|---|
-| Agent 可靠执行 | LangGraph 六态任务生命周期，显式 `parse → plan → execute → checkpoint → validate → summarize`，轮次/工具/token 预算和代码修改验证门 | `core/agent/graph.py`、`core/execution/state_machine.py` |
+| Agent 自主执行 | LangGraph 多轮工具循环，显式 `parse → plan → act → observe → checkpoint → validate → summarize`；工具结果返回模型继续决策 | `core/agent/graph.py`、`nodes.py`、`state.py` |
+| 长任务与失败恢复 | Todo、后台命令、错误分类、上下文微压缩/摘要、轮次/工具/token 预算、代码修改验证门和 Redis checkpoint | `core/agent/context.py`、`tools/task.py`、`tools/background.py` |
+| 知识与任务扩展 | Shared/Personal Skill 按需加载，受治理的长期记忆召回，以及显式 single/multi 和真实 specialist 委派边界 | `tools/skills.py`、`tools/subagent.py`、`memory/` |
 | 工具风险治理 | 统一 Tool Contract，模型绑定与执行阶段双重权限过滤，参数级风险识别，LangGraph interrupt 审批与超时恢复 | `core/agent/tools/contracts.py`、`nodes.py` |
 | Workspace 安全 | 用户目录隔离、路径穿越拦截、敏感路径拒绝、原子写入、精确路径可恢复删除 | `core/agent/tools/workspace.py`、`file_ops.py` |
 | Shell 控制 | 复合命令解析、危险命令/外传工具拦截、工作区相对路径、凭据净化子进程环境、超时与输出截断 | `core/agent/tools/shell.py` |
@@ -77,13 +107,14 @@ flowchart LR
   → 身份认证与会话归属校验
   → 创建 trace_id，进入 pending/running
   → 注入当前任务相关的 Active 记忆
-  → LLM 决策并生成工具调用
+  → Agent 检索仓库、拆解 Todo，并由 LLM 决定下一步工具
   → 工具注册检查 + 实时角色权限过滤 + 参数级风险判定
       ├─ safe：直接执行
       ├─ review：进入 waiting_confirmation，审批后从 checkpoint 恢复
       └─ dangerous：执行器策略直接拦截，不能靠 Approve 绕过
-  → 记录结构化工具结果、耗时、token、审批与安全事件
-  → 若修改代码但没有成功验证，验证门要求补测
+  → 把结构化工具结果返回 Agent，继续观察、诊断和行动
+  → 命令失败时读取真实错误并修复或调整策略
+  → 若修改代码但没有成功验证，验证门把任务送回 Agent 补测
   → 进入 succeeded / failed / cancelled，并按策略决定是否写入长期记忆
 ```
 
@@ -97,16 +128,27 @@ pending/running/waiting_confirmation ─────→ cancelled
 
 ## 关键能力
 
-### 1. 可暂停、可恢复的有状态 Agent
+### 1. 自主完成“理解—修改—验证”工程闭环
+
+- 主 Agent 不是固定工作流脚本：每一轮由模型结合用户目标、代码上下文和上一轮工具结果，自主选择继续检索、编辑、执行、验证或结束。
+- LLM 只看到当前权限允许的工具；真实工具结果会以 `ToolMessage` 返回，使模型可以根据 stdout、stderr、退出码和错误类型继续推理。
+- 系统提示要求先检索再修改，并对 `policy_blocked` 和 `nonzero_exit` 采用不同恢复策略，避免遇到失败就直接报告结束。
+- 多步骤工作可由 `todo_update` 维护短期计划；长时间测试或构建可转入 `background_run`，完成结果会重新注入 Agent 上下文。
+- 框架自动统计工具调用、变更文件和验证结果，不依赖模型自报“已经执行”。
+- 真实 DeepSeek 基准已通过代码库理解、文件创建、测试执行、失败修复、安全拒绝和审批恢复等 8 个用例；两个保留失败也在 README 中公开说明。
+
+### 2. 长任务上下文与可恢复状态
 
 - LangGraph `StateGraph` 管理显式执行阶段，RedisSaver 按 `session_id/thread_id` 保存 checkpoint。
 - FastAPI 通过 SSE 输出 token、工具开始/结束、审批中断、取消和终态事件。
 - 审批超时会自动恢复图并确定性拒绝，不让任务永久停留在等待态。
 - 失败和取消会同步收敛未完成 Todo 与本任务创建的持久任务。
 - 每任务默认最多 20 轮、25 次工具调用，并分别限制任务与会话累计 token。
+- 每次模型调用前执行 microcompact，仅保留最近工具结果正文；超过阈值时先保存完整 transcript，再用 LLM 摘要保留关键决策、改动文件和未完成步骤。
+- 压缩后会注入“继续下一项具体行动”的控制信息，使 Agent 从摘要恢复执行，而不是把摘要复述给用户后提前结束。
 - 写入代码文件后，若没有成功的测试、构建、Lint 或编译记录，任务不能被标记为成功。
 
-### 2. Contract-driven 工具执行
+### 3. Contract-driven 工具执行
 
 每个可执行工具都必须注册唯一契约：
 
@@ -127,7 +169,7 @@ Tool = Input Schema
 - `write_file` / `edit_file` 使用临时文件、`fsync` 与 `os.replace` 原子替换。
 - 删除统一使用 `delete_paths(paths, reason)`：只接受精确相对路径，审批后移动到 `.agent/trash/` 并生成恢复 manifest。
 
-### 3. 多租户 Workspace 与会话隔离
+### 4. 多租户 Workspace 与会话隔离
 
 - 每个用户拥有独立的 `user_<id>` Workspace，文件工具和 Workspace API 都通过统一路径解析器。
 - `.env`、`.git`、SSH/云凭据和私钥类路径对 Agent 工具不可见。
@@ -135,7 +177,7 @@ Tool = Input Schema
 - API 在调用、恢复、取消、确认和读取 checkpoint 前都会验证 MySQL 会话归属。
 - MySQL `chat_messages` 是用户可见对话的持久来源；Redis 只承担短期执行恢复，TTL 过期不会让会话元数据凭空消失。
 
-### 4. Trace、指标与失败回放
+### 5. Trace、指标与失败回放
 
 每个任务生成独立 `trace_id`，统一记录：
 
@@ -147,7 +189,7 @@ Tool = Input Schema
 
 Trace 在写盘前递归脱敏，并可通过工作台时间线回放。当前聚合指标包括任务/工具成功率、平均耗时、平均 token、人工介入率、安全拦截数和记忆注入率。
 
-### 5. 有准入策略的长期记忆
+### 6. 有准入策略的长期记忆
 
 长期记忆不是“每轮对话自动总结”：
 
@@ -158,7 +200,7 @@ Trace 在写盘前递归脱敏，并可通过工作台时间线回放。当前�
 - 自动注入与主动 `search_memory` 使用同一相关性门槛，并在 Trace 中保存候选、过滤和注入回执；
 - 删除父记忆时级联删除其派生偏好，避免“页面删除但偏好仍被召回”。
 
-### 6. 显式 Single / Multi-Agent 边界
+### 7. 显式 Single / Multi-Agent 边界
 
 - 默认且已测量的模式是 `single_agent`。
 - `multi_agent` 需要服务器显式开启，并要求当前数据库角色拥有高级工具权限。
@@ -166,7 +208,7 @@ Trace 在写盘前递归脱敏，并可通过工作台时间线回放。当前�
 - 没有一次真实成功委派，Multi 任务不能修改 Workspace 或报告成功。
 - Multi-Agent 仍是实验能力；真实 single/multi 对照结果尚未完成，因此 README 不宣称它优于单 Agent。
 
-### 7. Admin Control Room
+### 8. Admin Control Room
 
 管理员控制台提供：
 
@@ -329,18 +371,26 @@ my_mini_claude_code/
 
 ## 简历可直接使用
 
-可根据版面压缩为以下三条：
+推荐项目名称：**面向企业内网的受控 Coding Agent 平台**
 
-- 设计并实现面向企业内网的受控 Coding Agent 平台，基于 `FastAPI + LangGraph + Vue 3` 构建浏览器工程工作台，以 Redis checkpoint、MySQL 持久会话和六态任务状态机支持 SSE 流式执行、人工审批、中断恢复与失败收敛。
-- 设计 Contract-driven 工具运行时，对文件、Shell、任务和子 Agent 统一定义权限、风险、超时、幂等与结果协议；实现多租户 Workspace 路径隔离、参数级 HITL、凭据净化、原子写入、可恢复删除和代码修改后的强制验证闭环。
-- 建立覆盖模型、节点、工具、审批、token 与错误的全链路 Trace 和版本化评测体系；真实 `deepseek-chat` single-Agent 在 10 个合成任务上完成 **8/10**，并保持 **381 项后端测试、23 项前端测试、Ruff 0 findings** 的本地基线。
+一句话项目描述：
 
-建议面试时重点讲四个取舍：
+> 基于 LangGraph 构建可自主理解代码库、拆解任务、调用工具、修改代码、运行验证并从失败中恢复的有状态 Coding Agent，并以 FastAPI + Vue 3 实现面向企业内网的权限、审批、隔离、恢复与审计控制面。
 
-1. 为什么把“模型能力”与“平台可靠性”拆成 Agent / Platform 两套 benchmark；
-2. 为什么危险操作不能仅依赖 Prompt，而要经过确定性权限、策略和 HITL；
-3. 为什么 Redis checkpoint 不能替代 MySQL 用户可见会话正文；
-4. 为什么当前 Shell 只能称为用户态策略防护，而不能宣传成真正沙箱。
+完整版可写以下四条，简历空间有限时优先保留前 3 条：
+
+- 基于 `LangGraph StateGraph` 设计有状态 Coding Agent，构建“代码检索 → Todo 规划 → 文件/Shell 工具执行 → 结果观察 → 失败诊断 → 修改后验证”的多轮闭环；对非零退出、策略拦截和超时进行结构化反馈，并通过 verification gate 阻止未验证代码被标记为成功。
+- 实现面向长任务的 Agent 上下文与恢复机制：使用 Redis checkpoint 持久化完整执行状态，引入后台命令、轮次/工具/token 预算、旧工具输出 microcompact、完整 transcript 和 LLM 摘要续跑；结合受准入控制的 Chroma 长期记忆与按需 Skill 加载复用工程经验。
+- 设计 Contract-driven 工具运行时，对文件、Shell、任务、记忆和子 Agent 统一定义权限、风险、超时、幂等、副作用与结果协议；实现模型绑定/执行双重权限过滤、参数级 HITL、多租户 Workspace 隔离、凭据净化、原子写入和可恢复删除。
+- 建立覆盖模型、节点、工具、审批、token、错误和终态的 Trace 与版本化 Agent benchmark；真实 `deepseek-chat` single-Agent 在代码理解、文件操作、测试、失败修复、安全拒绝和中断恢复等 10 个任务中完成 **8/10**，项目保持 **381 项后端测试、23 项前端测试、Ruff 0 findings**。
+
+建议面试时重点讲五个问题：
+
+1. Agent 如何根据工具结果形成多轮决策，而不是执行预先写死的流水线；
+2. 为什么代码修改后需要框架级 verification gate，而不能相信模型口头报告“测试通过”；
+3. checkpoint、上下文压缩和长期记忆分别解决什么问题，为什么不能混为一层；
+4. 为什么危险操作不能只依赖 Prompt，而要经过确定性权限、策略和 HITL；
+5. 为什么把“模型自主任务能力”与“平台确定性可靠性”拆成 Agent / Platform 两套 benchmark。
 
 更多问题与回答见[作品集与面试指南](docs/portfolio-guide.md)。
 
