@@ -3,12 +3,14 @@
     <div class="tool-header">
       <span class="tool-status-icon">
         <span v-if="status === 'running'" class="spinner"></span>
+        <svg v-else-if="status === 'waiting'" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="#6366f1" stroke-width="2.5"><circle cx="12" cy="12" r="9"/><path d="M12 7v5l3 2"/></svg>
         <svg v-else-if="status === 'done'" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="#10b981" stroke-width="3"><polyline points="20 6 9 17 4 12"/></svg>
         <svg v-else width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="#ef4444" stroke-width="3"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
       </span>
       <span class="tool-label">
         <span class="tool-name">{{ name }}</span>
         <span v-if="status === 'running'" class="tool-state running-text">running…</span>
+        <span v-else-if="status === 'waiting'" class="tool-state waiting-text">awaiting approval</span>
         <span v-else-if="status === 'done'" class="tool-state done-text">{{ duration ? duration + 'ms' : 'done' }}</span>
         <span v-else class="tool-state error-text">failed</span>
       </span>
@@ -20,8 +22,8 @@
         <pre>{{ result }}</pre>
       </div>
       <div v-if="error" class="tool-error">{{ error }}</div>
-      <div v-if="!result && !error && status === 'running'" class="tool-waiting">
-        Waiting for output…
+      <div v-if="!result && !error && ['running', 'waiting'].includes(status)" class="tool-waiting">
+        {{ status === 'waiting' ? 'Waiting for human approval…' : 'Waiting for output…' }}
       </div>
     </div>
   </div>
@@ -32,7 +34,7 @@ import { ref } from 'vue'
 
 defineProps({
   name: { type: String, required: true },
-  status: { type: String, default: 'running' },  // 'running' | 'done' | 'error'
+  status: { type: String, default: 'running' },  // 'running' | 'waiting' | 'done' | 'error'
   result: { type: String, default: '' },
   error: { type: String, default: '' },
   duration: { type: Number, default: null }
@@ -58,6 +60,7 @@ function toggle() {
 }
 
 .tool-card.running { border-left: 3px solid #f59e0b; }
+.tool-card.waiting { border-left: 3px solid #6366f1; }
 .tool-card.done { border-left: 3px solid #10b981; }
 .tool-card.error { border-left: 3px solid #ef4444; }
 
@@ -115,6 +118,7 @@ function toggle() {
 }
 
 .running-text { color: #f59e0b; }
+.waiting-text { color: #6366f1; }
 .done-text { color: #10b981; }
 .error-text { color: #ef4444; }
 

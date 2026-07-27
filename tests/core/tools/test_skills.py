@@ -1,14 +1,13 @@
 """Tests for skills module (load_skill, list_skills, reload_skills)."""
 
-import tempfile
 from pathlib import Path
 
 import pytest
 
 from enterprise_agent.core.agent.tools.skills import (
     SkillLoader,
-    load_skill,
     list_skills,
+    load_skill,
     reload_skills,
 )
 
@@ -76,6 +75,7 @@ This is a test skill with some guidelines.
         result = skill_loader.load("test_skill")
         assert "<skill" in result
         assert "Test Skill Content" in result
+        assert 'sha256="' in result
 
     def test_load_nonexistent_skill(self, skill_loader: SkillLoader):
         """Test loading nonexistent skill returns error."""

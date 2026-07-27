@@ -6,6 +6,25 @@ export const auth = reactive({
   loading: false,
   error: '',
   notice: '',
+  profile: null,
+
+  get isAdmin() {
+    return Boolean(this.profile?.is_superuser && this.profile?.permissions?.includes('admin:console'))
+  },
+
+  async loadProfile() {
+    if (!this.loggedIn) {
+      this.profile = null
+      return null
+    }
+    try {
+      this.profile = await api.getMe()
+      return this.profile
+    } catch (e) {
+      if (!localStorage.getItem('access_token')) this.loggedIn = false
+      throw e
+    }
+  },
 
   async login(email, password) {
     this.loading = true
@@ -14,6 +33,7 @@ export const auth = reactive({
     try {
       await api.login({ email, password })
       this.loggedIn = true
+      await this.loadProfile()
     } catch (e) {
       this.error = e.message
       throw e
@@ -29,6 +49,7 @@ export const auth = reactive({
     try {
       await api.register({ username, email, password })
       this.loggedIn = true
+      await this.loadProfile()
     } catch (e) {
       this.error = e.message
       throw e
@@ -76,5 +97,6 @@ export const auth = reactive({
   logout() {
     api.clearTokens()
     this.loggedIn = false
+    this.profile = null
   }
 })

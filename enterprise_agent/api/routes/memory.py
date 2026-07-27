@@ -36,25 +36,46 @@ async def list_conversation_memories(
         limit=limit,
         role="task_summary",
         min_importance=min_importance,
+        active_only=False,
     )
 
     # Format response
     memories = []
     for item in results:
         importance = item.get("metadata", {}).get("importance", 0)
+        metadata = item.get("metadata", {})
         memories.append({
             "id": item.get("id", ""),
             "content": item.get("content", ""),
             "importance": importance,
-            "timestamp": item.get("metadata", {}).get("timestamp", ""),
-            "session_id": item.get("metadata", {}).get("session_id", ""),
-            "rounds": item.get("metadata", {}).get("rounds", 0),
-            "has_tool_actions": item.get("metadata", {}).get("has_tool_actions", False),
+            "timestamp": metadata.get("timestamp", ""),
+            "session_id": metadata.get("session_id", ""),
+            "rounds": metadata.get("rounds", 0),
+            "has_tool_actions": metadata.get("has_tool_actions", False),
+            "memory_type": metadata.get("memory_type", "legacy_summary"),
+            "task_status": metadata.get("task_status", "unknown"),
+            "quality_status": item.get("quality_status", "legacy"),
+            "admission_reason": metadata.get("admission_reason", "legacy_unclassified"),
+            "schema_version": metadata.get("schema_version", 1),
+            "source": metadata.get("source", "legacy"),
+            "content_format": metadata.get("content_format", "legacy_summary"),
+            "retrieval_enabled": metadata.get("retrieval_enabled", True),
+            "retrieval_count": metadata.get(
+                "retrieval_count",
+                metadata.get("access_count", 0),
+            ),
+            "last_retrieved_at": metadata.get(
+                "last_retrieved_at",
+                metadata.get("last_access", ""),
+            ),
         })
 
+    active_count = sum(m["quality_status"] == "active" for m in memories)
     return {
         "user_id": user_id,
         "count": len(memories),
+        "active_count": active_count,
+        "legacy_count": len(memories) - active_count,
         "memories": memories[:limit],
     }
 
@@ -80,15 +101,15 @@ async def delete_conversation_memory(
         HTTPException: 404 if document not found or not owned by user
     """
     memory = get_long_term_memory(user_id)
-    deleted = await memory.delete_conversation(doc_id)
+    receipt = await memory.delete_conversation_with_dependents(doc_id)
 
-    if not deleted:
+    if receipt is None:
         raise HTTPException(
             status_code=404,
             detail="Memory not found or you do not have permission to delete it",
         )
 
-    return {"status": "deleted", "id": doc_id}
+    return {"status": "deleted", **receipt}
 
 
 @router.get("/patterns")
@@ -107,20 +128,33 @@ async def list_user_patterns(
         List of pattern objects with id, type, key, confidence
     """
     memory = get_long_term_memory(user_id)
-    patterns = await memory.get_all_patterns()
+    patterns = await memory.get_all_patterns(active_only=False)
 
+    formatted_patterns = [
+        {
+            "id": p.get("id", ""),
+            "pattern_type": p.get("pattern_type", ""),
+            "pattern_key": p.get("pattern_key", ""),
+            "confidence": p.get("confidence", 0),
+            "evidence_count": p.get("evidence_count", 0),
+            "updated_at": p.get("updated_at", ""),
+            "retrieval_count": p.get("retrieval_count", 0),
+            "last_retrieved_at": p.get("last_retrieved_at", ""),
+            "value": p.get("value", ""),
+            "text": p.get("text", ""),
+            "quality_status": p.get("quality_status", "legacy"),
+            "quarantine_reason": p.get("quarantine_reason", ""),
+            "source_memory_ids": p.get("source_memory_ids", []),
+        }
+        for p in patterns
+    ]
+    active_count = sum(p["quality_status"] == "active" for p in formatted_patterns)
     return {
         "user_id": user_id,
-        "count": len(patterns),
-        "patterns": [
-            {
-                "id": p.get("id", ""),
-                "pattern_type": p.get("pattern_type", ""),
-                "pattern_key": p.get("pattern_key", ""),
-                "confidence": p.get("confidence", 0),
-            }
-            for p in patterns
-        ],
+        "count": len(formatted_patterns),
+        "active_count": active_count,
+        "legacy_count": len(formatted_patterns) - active_count,
+        "patterns": formatted_patterns,
     }
 
 

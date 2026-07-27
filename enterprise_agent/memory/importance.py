@@ -127,8 +127,9 @@ class LLMEvaluator:
             Importance score (0-1)
         """
         # Import LLM client
-        from enterprise_agent.core.agent.llm_factory import get_llm
         from langchain_core.messages import HumanMessage
+
+        from enterprise_agent.core.agent.llm_factory import get_llm
 
         prompt = f"""
 Evaluate the importance of this conversation content for future reference.
@@ -154,8 +155,6 @@ Return ONLY a JSON object with this exact format:
         try:
             llm = get_llm()
 
-            # Use cheaper model for evaluation (if configured)
-            model = getattr(settings, "IMPORTANCE_EVAL_MODEL", settings.MODEL_ID)
             # Note: LangChain uses the model from settings by default
 
             # Suppress callbacks so LangGraph stream_mode doesn't capture
@@ -180,7 +179,7 @@ Return ONLY a JSON object with this exact format:
             # Validate range
             return max(0.0, min(1.0, importance))
 
-        except Exception as e:
+        except Exception:
             # Fallback to medium score on error
             return 0.5
 

@@ -12,6 +12,8 @@ dependencies = [
     # Vector database
     "chromadb>=0.4.0",
     "sentence-transformers>=2.0.0",
+    # Pin transitive PyTorch to the CPU index below; Agent embeddings do not need CUDA.
+    "torch>=2.0.0",
     # API
     "fastapi>=0.115.0",
     "uvicorn[standard]>=0.32.0",
@@ -19,6 +21,7 @@ dependencies = [
     # Database
     "sqlalchemy[asyncio]>=2.0.0",
     "aiomysql>=0.2.0",
+    "alembic>=1.13.0",
     "redis>=5.0.0",
     # Auth
     "python-jose[cryptography]>=3.3.0",
@@ -29,6 +32,7 @@ dependencies = [
     "python-dotenv>=1.0.0",
     "langgraph-checkpoint-redis>=0.4.1",
     "bcrypt<4.1",
+    "socksio>=1.0.0",
 ]
 
 [project.optional-dependencies]
@@ -50,9 +54,29 @@ include = ["enterprise_agent*"]
 [tool.uv]
 package = true
 
+[tool.uv.sources]
+torch = { index = "pytorch-cpu" }
+
+[[tool.uv.index]]
+name = "pytorch-cpu"
+url = "https://download.pytorch.org/whl/cpu"
+explicit = true
+
 [tool.pytest.ini_options]
 asyncio_mode = "auto"
 testpaths = ["tests"]
+python_files = ["test_*.py"]
+python_classes = ["Test*"]
+python_functions = ["test_*"]
+filterwarnings = [
+    "ignore::DeprecationWarning",
+    "ignore::PendingDeprecationWarning",
+]
+markers = [
+    "asyncio: mark test as async test",
+    "integration: mark test as integration test (requires external services)",
+    "slow: mark test as slow running",
+]
 
 [tool.ruff]
 line-length = 120

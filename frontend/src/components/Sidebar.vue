@@ -30,6 +30,15 @@
         <span>Files</span>
       </button>
       <button
+        :class="['tab-btn', { active: activeTab === 'trace' }]"
+        @click="activeTab = 'trace'"
+      >
+        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round">
+          <circle cx="5" cy="5" r="2"/><circle cx="19" cy="12" r="2"/><circle cx="5" cy="19" r="2"/><path d="M7 5h4a3 3 0 013 3v1a3 3 0 003 3M7 19h4a3 3 0 003-3v-1a3 3 0 013-3"/>
+        </svg>
+        <span>Trace</span>
+      </button>
+      <button
         :class="['tab-btn', { active: activeTab === 'memory' }]"
         @click="activeTab = 'memory'"
       >
@@ -58,6 +67,7 @@
           v-for="s in sessions"
           :key="s.id"
           :class="['session-item', { active: activeId === s.id }]"
+          :title="s.history_status === 'expired' ? 'Conversation metadata exists; legacy message history expired' : ''"
           @click="$emit('select', s.id)"
         >
           <div class="session-icon">
@@ -66,6 +76,11 @@
             </svg>
           </div>
           <div class="session-title">{{ s.title || s.id.slice(0, 8) }}</div>
+          <span
+            v-if="s.history_status === 'expired' || s.history_status === 'partial'"
+            :class="['history-state', s.history_status]"
+            :aria-label="s.history_status === 'expired' ? 'History expired' : 'History partially available'"
+          >!</span>
           <button
             class="btn-delete"
             @click.stop="$emit('delete', s.id)"
@@ -88,6 +103,9 @@
       />
     </div>
 
+    <!-- Main-area views still need to reserve sidebar height for the user footer. -->
+    <div class="tab-content" v-show="activeTab === 'trace' || activeTab === 'memory'"></div>
+
     <!-- User footer -->
     <div ref="footerRef" class="sidebar-footer" @click="showUserMenu = !showUserMenu">
       <div class="user-info">
@@ -104,7 +122,10 @@
           <span>{{ username }}</span>
         </div>
         <div class="menu-divider"></div>
-        <!-- Future items go here -->
+        <button v-if="auth.isAdmin" class="menu-item" @click="openAdminConsole">
+          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 3l8 4v5c0 5-3.4 8.4-8 9-4.6-.6-8-4-8-9V7l8-4z"/><path d="M9 12l2 2 4-4"/></svg>
+          Admin Control Room
+        </button>
         <button class="menu-item" @click="handleLogout">
           <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round"><path d="M9 21H5a2 2 0 01-2-2V5a2 2 0 012-2h4"/><polyline points="16 17 21 12 16 7"/><line x1="21" y1="12" x2="9" y2="12"/></svg>
           Sign Out
@@ -125,7 +146,7 @@ defineProps({
   activeId: { type: String, default: '' },
   selectedFilePath: { type: String, default: '' }
 })
-const emit = defineEmits(['select', 'delete', 'new-session', 'file-select', 'tab-change'])
+const emit = defineEmits(['select', 'delete', 'new-session', 'file-select', 'tab-change', 'open-admin'])
 
 // User menu
 const showUserMenu = ref(false)
@@ -139,15 +160,14 @@ function onDocumentClick(e) {
 onMounted(() => document.addEventListener('click', onDocumentClick))
 onUnmounted(() => document.removeEventListener('click', onDocumentClick))
 
-// Extract username from JWT (base64 decode the payload)
 const username = computed(() => {
-  const token = localStorage.getItem('access_token')
-  if (!token) return 'User'
-  try {
-    const payload = JSON.parse(atob(token.split('.')[1]))
-    return payload.sub || payload.username || 'User'
-  } catch { return 'User' }
+  return auth.profile?.username || auth.profile?.full_name || 'User'
 })
+
+function openAdminConsole() {
+  showUserMenu.value = false
+  emit('open-admin')
+}
 
 function handleLogout() {
   showUserMenu.value = false
@@ -217,8 +237,8 @@ function handleFileSelect(node) {
   display: flex;
   align-items: center;
   justify-content: center;
-  gap: 5px;
-  padding: 7px 8px;
+  gap: 4px;
+  padding: 7px 5px;
   background: transparent;
   border: none;
   color: var(--text-secondary);
@@ -347,6 +367,25 @@ function handleFileSelect(node) {
   color: var(--text-primary);
   font-size: var(--text-base);
   font-weight: 400;
+}
+
+.history-state {
+  width: 16px;
+  height: 16px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+  border-radius: 50%;
+  font-size: 10px;
+  font-weight: 700;
+  color: #92400e;
+  background: #fef3c7;
+}
+
+.history-state.partial {
+  color: #1d4ed8;
+  background: #dbeafe;
 }
 
 .btn-delete {

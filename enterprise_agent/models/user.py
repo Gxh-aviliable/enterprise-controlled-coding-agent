@@ -1,6 +1,6 @@
 from datetime import datetime, timezone
 
-from sqlalchemy import TIMESTAMP, BigInteger, Boolean, Column, String
+from sqlalchemy import TIMESTAMP, BigInteger, Boolean, Column, Integer, String
 from sqlalchemy.orm import relationship
 
 from enterprise_agent.db.mysql import Base
@@ -17,6 +17,7 @@ class User(Base):
     full_name = Column(String(100), nullable=True)
     is_active = Column(Boolean, default=True)
     is_superuser = Column(Boolean, default=False)
+    auth_version = Column(Integer, nullable=False, default=0)
     created_at = Column(TIMESTAMP, default=lambda: datetime.now(timezone.utc))
     updated_at = Column(
         TIMESTAMP,

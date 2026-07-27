@@ -7,15 +7,143 @@ Replaces MySQL-based long-term memory with vector-based storage.
 import asyncio
 import json
 import logging
+import re
 import uuid
 from datetime import datetime, timezone
 from typing import Any, Dict, List
 
+from enterprise_agent.config.settings import settings
 from enterprise_agent.db.chroma import (
     get_conversations_collection,
     get_patterns_collection,
 )
 from enterprise_agent.memory.base import MemoryBase
+from enterprise_agent.memory.policy import (
+    ACTIVE_QUALITY_STATUS,
+    LEGACY_QUALITY_STATUS,
+    MEMORY_SCHEMA_VERSION,
+    memory_quality_status,
+)
+
+_CJK_RE = re.compile(r"[\u4e00-\u9fff]")
+_ASCII_TERM_RE = re.compile(r"[a-z0-9_+#.-]{2,}")
+_PATTERN_PROVENANCE_VERSION = 1
+
+
+def _json_string_list(value: Any) -> list[str]:
+    try:
+        parsed = json.loads(value or "[]")
+    except (TypeError, json.JSONDecodeError):
+        return []
+    if not isinstance(parsed, list):
+        return []
+    return [str(item) for item in parsed if str(item)]
+
+
+def pattern_quality_status(metadata: dict[str, Any] | None) -> tuple[str, str]:
+    """Patterns are recallable only when their source evidence still exists."""
+    metadata = metadata or {}
+    base_status = memory_quality_status(metadata)
+    if base_status != ACTIVE_QUALITY_STATUS:
+        return base_status, "legacy_unclassified"
+    source_ids = _json_string_list(metadata.get("source_memory_ids_json"))
+    if (
+        metadata.get("provenance_version") != _PATTERN_PROVENANCE_VERSION
+        or not source_ids
+    ):
+        return LEGACY_QUALITY_STATUS, "missing_source_provenance"
+    return ACTIVE_QUALITY_STATUS, ""
+
+
+def _lexical_tokens(text: str) -> set[str]:
+    normalized = str(text or "").lower()
+    tokens = set(_ASCII_TERM_RE.findall(normalized))
+    cjk = "".join(_CJK_RE.findall(normalized))
+    tokens.update(cjk[index:index + 2] for index in range(max(0, len(cjk) - 1)))
+    return tokens
+
+
+def _cjk_lexical_score(query: str, document: str) -> float:
+    query_tokens = _lexical_tokens(query)
+    if not query_tokens:
+        return 0.0
+    return len(query_tokens & _lexical_tokens(document)) / len(query_tokens)
+
+
+def rank_memory_candidates(
+    candidates: List[Dict[str, Any]],
+    *,
+    query: str,
+    max_distance: float | None,
+    include_rejected: bool,
+    n_results: int,
+) -> List[Dict[str, Any]]:
+    """Apply language-aware relevance gates and expose every decision.
+
+    ``all-MiniLM-L6-v2`` is kept for backward compatibility with existing
+    collections, but it is weak for Chinese ranking. Chinese queries therefore
+    use deterministic CJK bigram/engineering-term reranking and a relative
+    cutoff. Other languages retain the configured vector-distance gate.
+    """
+    is_cjk_query = bool(_CJK_RE.search(query or ""))
+    for candidate in candidates:
+        candidate["semantic_rank"] = candidate.get("rank")
+        candidate["lexical_score"] = round(
+            _cjk_lexical_score(query, candidate.get("_search_text", "")),
+            6,
+        )
+
+    if is_cjk_query:
+        base_eligible = [
+            candidate
+            for candidate in candidates
+            if not candidate.get("_rejection_reasons")
+        ]
+        best_score = max(
+            (candidate["lexical_score"] for candidate in base_eligible),
+            default=0.0,
+        )
+        cutoff = max(
+            settings.MEMORY_CJK_LEXICAL_MIN_SCORE,
+            best_score * settings.MEMORY_CJK_RELATIVE_SCORE,
+        )
+        for candidate in candidates:
+            reasons = candidate["_rejection_reasons"]
+            if not reasons and candidate["lexical_score"] < cutoff:
+                reasons.append("cjk_lexical_below_threshold")
+            candidate["retrieval_strategy"] = "cjk_lexical_rerank"
+        candidates.sort(
+            key=lambda item: (
+                -item["lexical_score"],
+                item.get("distance") if item.get("distance") is not None else float("inf"),
+            )
+        )
+    else:
+        for candidate in candidates:
+            reasons = candidate["_rejection_reasons"]
+            distance = candidate.get("distance")
+            if (
+                not reasons
+                and max_distance is not None
+                and distance is not None
+                and distance > max_distance
+            ):
+                reasons.append("distance_above_threshold")
+            candidate["retrieval_strategy"] = "semantic_top_k"
+
+    finalized = []
+    for rank, candidate in enumerate(candidates, start=1):
+        candidate["rank"] = rank
+        reasons = candidate.pop("_rejection_reasons")
+        candidate.pop("_search_text", None)
+        candidate["eligible"] = not reasons
+        candidate["filter_reason"] = (
+            "eligible" if not reasons else ",".join(reasons)
+        )
+        if include_rejected or candidate["eligible"]:
+            finalized.append(candidate)
+    limit = n_results * 4 if include_rejected else n_results
+    return finalized[:limit]
 
 
 class ChromaLongTermMemory(MemoryBase):
@@ -101,6 +229,10 @@ class ChromaLongTermMemory(MemoryBase):
             "has_tool_actions": has_tool_actions,
             "importance": importance,
             "access_count": 0,
+            "memory_type": "task_outcome",
+            "schema_version": MEMORY_SCHEMA_VERSION,
+            "quality_status": ACTIVE_QUALITY_STATUS,
+            "task_status": "succeeded",
         }
         if metadata:
             task_metadata.update(metadata)
@@ -117,7 +249,11 @@ class ChromaLongTermMemory(MemoryBase):
         query: str,
         n_results: int = 10,
         session_id: str = None,
-        role: str = None
+        role: str = None,
+        active_only: bool = False,
+        max_distance: float = None,
+        retrieval_enabled_only: bool = False,
+        include_rejected: bool = False,
     ) -> List[Dict[str, Any]]:
         """Search conversations semantically.
 
@@ -145,10 +281,18 @@ class ChromaLongTermMemory(MemoryBase):
             elif len(conditions) > 1:
                 where_filter = {"$and": conditions}
 
+        query_limit = (
+            n_results * 4
+            if active_only
+            or max_distance is not None
+            or retrieval_enabled_only
+            or include_rejected
+            else n_results
+        )
         results = await asyncio.to_thread(
             self.conversations.query,
             query_texts=[query],
-            n_results=n_results,
+            n_results=max(query_limit, n_results),
             where=where_filter,
         )
 
@@ -158,14 +302,38 @@ class ChromaLongTermMemory(MemoryBase):
             for i, doc in enumerate(results["documents"][0]):
                 meta = results["metadatas"][0][i] if results.get("metadatas") else {}
                 doc_id = results["ids"][0][i] if results.get("ids") else None
+                distance = (
+                    results["distances"][0][i]
+                    if results.get("distances")
+                    else None
+                )
+                quality_status = memory_quality_status(meta)
+                rejection_reasons = []
+                if active_only and quality_status != ACTIVE_QUALITY_STATUS:
+                    rejection_reasons.append("quality_not_active")
+                if (
+                    retrieval_enabled_only
+                    and meta.get("retrieval_enabled", True) is not True
+                ):
+                    rejection_reasons.append("retrieval_disabled")
                 messages.append({
                     "id": doc_id,
                     "content": doc,
                     "metadata": meta,
-                    "distance": results["distances"][0][i] if results.get("distances") else None,
+                    "quality_status": quality_status,
+                    "distance": distance,
+                    "rank": i + 1,
+                    "_search_text": doc,
+                    "_rejection_reasons": rejection_reasons,
                 })
 
-        return messages
+        return rank_memory_candidates(
+            messages,
+            query=query,
+            max_distance=max_distance,
+            include_rejected=include_rejected,
+            n_results=n_results,
+        )
 
     async def get_session_history(
         self,
@@ -207,6 +375,7 @@ class ChromaLongTermMemory(MemoryBase):
         limit: int = 50,
         role: str = None,
         min_importance: float = 0.0,
+        active_only: bool = False,
     ) -> List[Dict[str, Any]]:
         """List conversation memories for the current user.
 
@@ -240,10 +409,14 @@ class ChromaLongTermMemory(MemoryBase):
                 importance = meta.get("importance", 0.0) or 0.0
                 if importance < min_importance:
                     continue
+                quality_status = memory_quality_status(meta)
+                if active_only and quality_status != ACTIVE_QUALITY_STATUS:
+                    continue
                 memories.append({
                     "id": ids[i] if i < len(ids) else None,
                     "content": doc,
                     "metadata": meta,
+                    "quality_status": quality_status,
                 })
 
         memories.sort(
@@ -260,7 +433,11 @@ class ChromaLongTermMemory(MemoryBase):
         pattern_type: str,
         pattern_key: str,
         pattern_value: Dict[str, Any],
-        confidence: float = 1.0
+        source_memory_id: str,
+        confidence: float = 1.0,
+        source: str = "explicit_user_signal",
+        source_trace_id: str = "",
+        source_session_id: str = "",
     ) -> str:
         """Store a user behavior pattern.
 
@@ -268,6 +445,7 @@ class ChromaLongTermMemory(MemoryBase):
             pattern_type: Type of pattern (preference/workflow/shortcut)
             pattern_key: Pattern identifier
             pattern_value: Pattern data
+            source_memory_id: Durable source record that produced this pattern
             confidence: Confidence score (0-1)
 
         Returns:
@@ -276,18 +454,74 @@ class ChromaLongTermMemory(MemoryBase):
         pattern_id = f"pattern:{self.user_id}:{pattern_type}:{pattern_key}"
 
         # Create searchable text from pattern
-        pattern_text = f"{pattern_type}: {pattern_key} = {json.dumps(pattern_value)}"
+        if not source_memory_id:
+            raise ValueError("source_memory_id is required for recallable patterns")
+
+        pattern_text = (
+            f"{pattern_type}: {pattern_key} = "
+            f"{json.dumps(pattern_value, ensure_ascii=False)}"
+        )
+
+        now = datetime.now(timezone.utc).isoformat()
+        existing = await asyncio.to_thread(
+            self.patterns.get,
+            ids=[pattern_id],
+            include=["metadatas"],
+        )
+        previous_meta = (
+            existing["metadatas"][0]
+            if existing and existing.get("metadatas")
+            else {}
+        )
+        evidence_count = int(previous_meta.get("evidence_count", 0) or 0) + 1
+        source_memory_ids = _json_string_list(
+            previous_meta.get("source_memory_ids_json")
+        )
+        if source_memory_id not in source_memory_ids:
+            source_memory_ids.append(source_memory_id)
+        source_trace_ids = _json_string_list(
+            previous_meta.get("source_trace_ids_json")
+        )
+        if source_trace_id and source_trace_id not in source_trace_ids:
+            source_trace_ids.append(source_trace_id)
+        source_session_ids = _json_string_list(
+            previous_meta.get("source_session_ids_json")
+        )
+        if source_session_id and source_session_id not in source_session_ids:
+            source_session_ids.append(source_session_id)
 
         meta = {
             "user_id": self.user_id,
             "pattern_type": pattern_type,
             "pattern_key": pattern_key,
             "confidence": confidence,
-            "timestamp": datetime.now(timezone.utc).isoformat(),
+            "timestamp": previous_meta.get("timestamp", now),
+            "updated_at": now,
+            "evidence_count": evidence_count,
+            "value_json": json.dumps(pattern_value, ensure_ascii=False),
+            "source": source,
+            "schema_version": MEMORY_SCHEMA_VERSION,
+            "quality_status": ACTIVE_QUALITY_STATUS,
+            "retrieval_count": int(previous_meta.get("retrieval_count", 0) or 0),
+            "last_retrieved_at": previous_meta.get("last_retrieved_at", ""),
+            "retrieval_enabled": True,
+            "provenance_version": _PATTERN_PROVENANCE_VERSION,
+            "source_memory_ids_json": json.dumps(
+                source_memory_ids,
+                ensure_ascii=False,
+            ),
+            "source_trace_ids_json": json.dumps(
+                source_trace_ids,
+                ensure_ascii=False,
+            ),
+            "source_session_ids_json": json.dumps(
+                source_session_ids,
+                ensure_ascii=False,
+            ),
         }
 
         await asyncio.to_thread(
-            self.patterns.add,
+            self.patterns.upsert,
             documents=[pattern_text],
             metadatas=[meta],
             ids=[pattern_id],
@@ -299,7 +533,11 @@ class ChromaLongTermMemory(MemoryBase):
         self,
         query: str,
         pattern_type: str = None,
-        n_results: int = 5
+        n_results: int = 5,
+        active_only: bool = False,
+        max_distance: float = None,
+        retrieval_enabled_only: bool = False,
+        include_rejected: bool = False,
     ) -> List[Dict[str, Any]]:
         """Search user patterns semantically.
 
@@ -313,12 +551,25 @@ class ChromaLongTermMemory(MemoryBase):
         """
         where_filter = {"user_id": self.user_id}
         if pattern_type:
-            where_filter["pattern_type"] = pattern_type
+            where_filter = {
+                "$and": [
+                    {"user_id": self.user_id},
+                    {"pattern_type": pattern_type},
+                ]
+            }
 
+        query_limit = (
+            n_results * 4
+            if active_only
+            or max_distance is not None
+            or retrieval_enabled_only
+            or include_rejected
+            else n_results
+        )
         results = await asyncio.to_thread(
             self.patterns.query,
             query_texts=[query],
-            n_results=n_results,
+            n_results=max(query_limit, n_results),
             where=where_filter,
         )
 
@@ -327,18 +578,49 @@ class ChromaLongTermMemory(MemoryBase):
             for i, doc in enumerate(results["documents"][0]):
                 meta = results["metadatas"][0][i] if results.get("metadatas") else {}
                 pattern_id = results["ids"][0][i] if results.get("ids") else None
+                distance = (
+                    results["distances"][0][i]
+                    if results.get("distances")
+                    else None
+                )
+                quality_status, quarantine_reason = pattern_quality_status(meta)
+                rejection_reasons = []
+                if active_only and quality_status != ACTIVE_QUALITY_STATUS:
+                    rejection_reasons.append("quality_not_active")
+                if (
+                    retrieval_enabled_only
+                    and meta.get("retrieval_enabled", True) is not True
+                ):
+                    rejection_reasons.append("retrieval_disabled")
                 patterns.append({
                     "id": pattern_id,
                     "text": doc,
                     "pattern_type": meta.get("pattern_type"),
                     "pattern_key": meta.get("pattern_key"),
                     "confidence": meta.get("confidence"),
-                    "distance": results["distances"][0][i] if results.get("distances") else None,
+                    "evidence_count": meta.get("evidence_count", 0),
+                    "updated_at": meta.get("updated_at"),
+                    "value": meta.get("value_json", ""),
+                    "quality_status": quality_status,
+                    "quarantine_reason": quarantine_reason,
+                    "source_memory_ids": _json_string_list(
+                        meta.get("source_memory_ids_json")
+                    ),
+                    "distance": distance,
+                    "rank": i + 1,
+                    "_search_text": doc,
+                    "_rejection_reasons": rejection_reasons,
                 })
 
-        return patterns
+        return rank_memory_candidates(
+            patterns,
+            query=query,
+            max_distance=max_distance,
+            include_rejected=include_rejected,
+            n_results=n_results,
+        )
 
-    async def get_all_patterns(self) -> List[Dict[str, Any]]:
+    async def get_all_patterns(self, active_only: bool = False) -> List[Dict[str, Any]]:
         """Get all patterns for user.
 
         Returns:
@@ -353,11 +635,30 @@ class ChromaLongTermMemory(MemoryBase):
         if results and results.get("metadatas"):
             for i, meta in enumerate(results["metadatas"]):
                 pattern_id = results["ids"][i] if results.get("ids") else None
+                quality_status, quarantine_reason = pattern_quality_status(meta)
+                if active_only and quality_status != ACTIVE_QUALITY_STATUS:
+                    continue
+                document = (
+                    results["documents"][i]
+                    if results.get("documents") and i < len(results["documents"])
+                    else ""
+                )
                 patterns.append({
                     "id": pattern_id,
                     "pattern_type": meta.get("pattern_type"),
                     "pattern_key": meta.get("pattern_key"),
                     "confidence": meta.get("confidence"),
+                    "evidence_count": meta.get("evidence_count", 0),
+                    "updated_at": meta.get("updated_at"),
+                    "retrieval_count": meta.get("retrieval_count", 0),
+                    "last_retrieved_at": meta.get("last_retrieved_at", ""),
+                    "value": meta.get("value_json", ""),
+                    "text": document,
+                    "quality_status": quality_status,
+                    "quarantine_reason": quarantine_reason,
+                    "source_memory_ids": _json_string_list(
+                        meta.get("source_memory_ids_json")
+                    ),
                 })
 
         return patterns
@@ -408,8 +709,15 @@ class ChromaLongTermMemory(MemoryBase):
 
             if result and result.get("metadatas"):
                 meta = result["metadatas"][0].copy()
-                meta["access_count"] = meta.get("access_count", 0) + 1
-                meta["last_access"] = datetime.now(timezone.utc).isoformat()
+                now = datetime.now(timezone.utc).isoformat()
+                retrieval_count = int(
+                    meta.get("retrieval_count", meta.get("access_count", 0)) or 0
+                ) + 1
+                meta["retrieval_count"] = retrieval_count
+                meta["last_retrieved_at"] = now
+                # Compatibility fields retained for existing API consumers.
+                meta["access_count"] = retrieval_count
+                meta["last_access"] = now
 
                 await asyncio.to_thread(
                     self.conversations.update,
@@ -419,8 +727,35 @@ class ChromaLongTermMemory(MemoryBase):
         except Exception:
             logging.warning(f"Failed to update access count for {doc_id}", exc_info=True)
 
-    async def delete_conversation(self, doc_id: str) -> bool:
-        """Delete a single conversation memory by document ID.
+    async def update_pattern_access_count(self, pattern_id: str) -> None:
+        """Track pattern retrieval without claiming the model applied it."""
+        try:
+            result = await asyncio.to_thread(
+                self.patterns.get,
+                ids=[pattern_id],
+                include=["metadatas"],
+            )
+            if result and result.get("metadatas"):
+                meta = result["metadatas"][0].copy()
+                meta["retrieval_count"] = int(meta.get("retrieval_count", 0) or 0) + 1
+                meta["last_retrieved_at"] = datetime.now(timezone.utc).isoformat()
+                await asyncio.to_thread(
+                    self.patterns.update,
+                    ids=[pattern_id],
+                    metadatas=[meta],
+                )
+        except Exception:
+            logging.warning(
+                "Failed to update pattern retrieval count for %s",
+                pattern_id,
+                exc_info=True,
+            )
+
+    async def delete_conversation_with_dependents(
+        self,
+        doc_id: str,
+    ) -> Dict[str, Any] | None:
+        """Delete a memory and every pattern derived from that source.
 
         Verifies user ownership before deletion.
 
@@ -428,7 +763,7 @@ class ChromaLongTermMemory(MemoryBase):
             doc_id: ChromaDB document ID to delete
 
         Returns:
-            True if deleted, False if not found or not owned by user
+            Deletion receipt, or ``None`` when not found/not owned.
         """
         try:
             # Verify ownership: get the document first
@@ -438,7 +773,7 @@ class ChromaLongTermMemory(MemoryBase):
                 include=["metadatas"],
             )
             if not result or not result.get("ids"):
-                return False
+                return None
 
             meta = result["metadatas"][0] if result.get("metadatas") else {}
             owner_id = meta.get("user_id")
@@ -447,17 +782,57 @@ class ChromaLongTermMemory(MemoryBase):
                     f"User {self.user_id} attempted to delete memory "
                     f"owned by user {owner_id}: {doc_id}"
                 )
-                return False
+                return None
 
+            linked_pattern_ids = []
+            patterns = await asyncio.to_thread(
+                self.patterns.get,
+                where={"user_id": self.user_id},
+                include=["metadatas"],
+            )
+            pattern_metadatas = patterns.get("metadatas") or []
+            for index, pattern_id in enumerate(patterns.get("ids") or []):
+                metadata = (
+                    pattern_metadatas[index]
+                    if index < len(pattern_metadatas)
+                    else {}
+                )
+                if doc_id in _json_string_list(
+                    metadata.get("source_memory_ids_json")
+                ):
+                    linked_pattern_ids.append(pattern_id)
+            if linked_pattern_ids:
+                # Conservative privacy semantics: a derived pattern is removed
+                # entirely when any of its source memories is deleted. Without
+                # a per-source value history we cannot safely reconstruct it.
+                await asyncio.to_thread(
+                    self.patterns.delete,
+                    ids=linked_pattern_ids,
+                )
+            # Delete the parent only after dependants are gone. If Chroma
+            # fails mid-operation, retaining the source memory is safer than
+            # leaving a recallable derived preference after its source vanished.
             await asyncio.to_thread(
                 self.conversations.delete,
                 ids=[doc_id],
             )
-            logging.info(f"Deleted conversation memory: {doc_id}")
-            return True
+            logging.info(
+                "Deleted conversation memory %s and %s linked patterns",
+                doc_id,
+                len(linked_pattern_ids),
+            )
+            return {
+                "id": doc_id,
+                "deleted_pattern_ids": linked_pattern_ids,
+                "deleted_pattern_count": len(linked_pattern_ids),
+            }
         except Exception:
             logging.warning(f"Failed to delete conversation {doc_id}", exc_info=True)
-            return False
+            return None
+
+    async def delete_conversation(self, doc_id: str) -> bool:
+        """Backward-compatible boolean deletion API."""
+        return await self.delete_conversation_with_dependents(doc_id) is not None
 
     async def delete_pattern(self, pattern_id: str) -> bool:
         """Delete a single user pattern by document ID.

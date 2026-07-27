@@ -1,10 +1,13 @@
 """Tests for subagent module (task tool)."""
 
 import pytest
+from langchain_core.messages import AIMessage
 
+from enterprise_agent.core.agent.tools import subagent
 from enterprise_agent.core.agent.tools.subagent import (
     AGENT_TYPES,
     SUBAGENT_SYSTEM_PROMPTS,
+    delegate_task,
     task,
 )
 
@@ -19,6 +22,9 @@ class TestAgentTypes:
     def test_general_purpose_agent_type_exists(self):
         """Test that general-purpose agent type is defined."""
         assert "general-purpose" in AGENT_TYPES
+
+    def test_specialist_agent_is_tool_free(self):
+        assert AGENT_TYPES["specialist"] == []
 
     def test_explore_agent_has_read_only_tools(self):
         """Test that Explore agent has read-only tool set."""
@@ -87,6 +93,10 @@ class TestTaskToolDefinition:
             # Should have 'prompt' argument
             assert hasattr(args_schema, '__fields__') or 'prompt' in str(args_schema)
 
+    def test_delegate_task_is_explicit_real_delegation_tool(self):
+        assert delegate_task.name == "delegate_task"
+        assert "separate model context" in delegate_task.description
+
 
 class TestTaskToolExecution:
     """Test task tool execution behavior (mocked)."""
@@ -108,6 +118,21 @@ class TestTaskToolExecution:
         # Note: Full execution requires LLM, so this is partial test
         agent_types = AGENT_TYPES.keys()
         assert "Explore" in agent_types  # Default should be valid
+
+    @pytest.mark.asyncio
+    async def test_delegate_task_runs_an_isolated_tool_free_model_context(self, monkeypatch):
+        class FakeModel:
+            async def ainvoke(self, messages):
+                assert "independent specialist subagent" in messages[0].content
+                assert "Your delegated role is: reviewer" in messages[1].content
+                return AIMessage(content="The reviewer found a weak ending.")
+
+        monkeypatch.setattr(subagent, "get_llm", lambda: FakeModel())
+        result = await delegate_task.ainvoke({
+            "role": "reviewer",
+            "prompt": "Review this story ending.",
+        })
+        assert result == "The reviewer found a weak ending."
 
 
 class TestSubagentPromptTemplates:

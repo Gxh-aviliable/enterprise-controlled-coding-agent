@@ -5,6 +5,7 @@ from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from enterprise_agent.api.middleware.auth import get_current_user_record
 from enterprise_agent.api.schemas.auth import (
     ForgotPasswordRequest,
     MessageResponse,
@@ -12,6 +13,7 @@ from enterprise_agent.api.schemas.auth import (
     TokenRefresh,
     TokenResponse,
     UserLogin,
+    UserMeResponse,
     UserRegister,
 )
 from enterprise_agent.auth.email import send_password_reset_code
@@ -27,6 +29,25 @@ router = APIRouter(prefix="/auth", tags=["auth"])
 PASSWORD_RESET_GENERIC_MESSAGE = (
     "If the email exists, a verification code has been sent."
 )
+
+
+@router.get("/me", response_model=UserMeResponse)
+async def get_me(user: User = Depends(get_current_user_record)):
+    """Return the current user's live profile, role, and permissions."""
+    role = "admin" if user.is_superuser else "free"
+    permissions = [permission.value for permission in get_role_permissions(role)]
+    return UserMeResponse(
+        id=user.id,
+        username=user.username,
+        email=user.email,
+        full_name=user.full_name,
+        role=role,
+        is_active=user.is_active,
+        is_superuser=user.is_superuser,
+        permissions=permissions,
+        created_at=user.created_at,
+        last_login_at=user.last_login_at,
+    )
 
 
 def _normalize_email(email: str) -> str:
@@ -86,7 +107,7 @@ async def register(
 
     # Return tokens with free role permissions
     permissions = [p.value for p in get_role_permissions("free")]
-    return jwt_handler.create_tokens(user.id, permissions)
+    return jwt_handler.create_tokens(user.id, permissions, user.auth_version)
 
 
 @router.post("/login", response_model=TokenResponse)
@@ -123,7 +144,7 @@ async def login(
     role = "admin" if user.is_superuser else "free"
     permissions = [p.value for p in get_role_permissions(role)]
 
-    return jwt_handler.create_tokens(user.id, permissions)
+    return jwt_handler.create_tokens(user.id, permissions, user.auth_version)
 
 
 @router.post("/refresh", response_model=TokenResponse)
@@ -162,6 +183,8 @@ async def refresh_token(
 
     if not user or not user.is_active:
         raise HTTPException(status_code=401, detail="User not found or disabled")
+    if int(payload.ver) != int(user.auth_version or 0):
+        raise HTTPException(status_code=401, detail="Refresh token has been revoked")
 
     # Blacklist old refresh token (TTL = refresh token expiry)
     if old_jti:
@@ -171,7 +194,7 @@ async def refresh_token(
     role = "admin" if user.is_superuser else "free"
     permissions = [p.value for p in get_role_permissions(role)]
 
-    return jwt_handler.create_tokens(user.id, permissions)
+    return jwt_handler.create_tokens(user.id, permissions, user.auth_version)
 
 
 @router.post("/forgot-password", response_model=MessageResponse)
@@ -220,6 +243,7 @@ async def reset_password(
         raise HTTPException(status_code=400, detail="Invalid or expired verification code")
 
     user.password_hash = jwt_handler.hash_password(request.new_password)
+    user.auth_version = int(user.auth_version or 0) + 1
     await db.commit()
     await redis_client.delete(key)
 

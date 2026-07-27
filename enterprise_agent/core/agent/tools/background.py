@@ -4,6 +4,8 @@ Provides tools for running long-running commands in background threads
 and checking their status later.
 """
 
+import os
+import signal
 import subprocess
 import threading
 import uuid
@@ -14,7 +16,11 @@ from typing import Dict, Optional
 from langchain_core.tools import tool
 
 from enterprise_agent.config.settings import settings
-from enterprise_agent.core.agent.tools.shell import validate_command
+from enterprise_agent.core.agent.tools.shell import (
+    _safe_subprocess_environment,
+    _shell_execution_kwargs,
+    validate_command,
+)
 from enterprise_agent.core.agent.tools.workspace import get_user_workspace
 
 
@@ -28,6 +34,9 @@ class BackgroundManager:
     def __init__(self):
         self.tasks: dict = {}
         self.notifications: Queue = Queue()
+        self._threads: dict[str, threading.Thread] = {}
+        self._processes: dict[str, subprocess.Popen] = {}
+        self._lock = threading.Lock()
 
     def run(self, command: str, timeout: int = None) -> str:
         """Start a background task.
@@ -43,7 +52,7 @@ class BackgroundManager:
             timeout = settings.COMMAND_TIMEOUT_SECONDS
         error = validate_command(command)
         if error:
-            return f"Error: {error}"
+            return error
 
         task_id = str(uuid.uuid4())[:8]
         self.tasks[task_id] = {
@@ -53,46 +62,68 @@ class BackgroundManager:
             "timeout": timeout
         }
 
-        # Capture user_id in main thread before spawning daemon thread
-        # ContextVar is copied to child threads in Python 3.7+, but explicit capture is more reliable
+        # Freeze the user/workspace context before spawning. ContextVars are
+        # not reliably propagated to arbitrary threads, and resolving the
+        # workspace inside the worker races with request/test cleanup.
         from enterprise_agent.core.agent.tools.workspace import get_current_user_id
+
         user_id = get_current_user_id()
+        workdir = get_user_workspace(user_id)
 
         # Start execution thread with explicit user_id
         thread = threading.Thread(
             target=self._execute,
-            args=(task_id, command, timeout, user_id),
+            args=(task_id, command, timeout, workdir),
             daemon=True
         )
+        with self._lock:
+            self._threads[task_id] = thread
         thread.start()
 
         return f"Background task {task_id} started: {command[:80]}..."
 
-    def _execute(self, task_id: str, command: str, timeout: int, user_id: int = None) -> None:
+    def _execute(self, task_id: str, command: str, timeout: int, workdir: Path) -> None:
         """Execute command in thread.
 
         Args:
             task_id: Task identifier
             command: Shell command to execute
             timeout: Maximum execution time
-            user_id: User ID for workspace (captured in main thread)
+            workdir: Resolved workspace captured in the request thread
         """
         try:
-            workdir = get_user_workspace(user_id)  # Use explicit user_id, not ContextVar
-            result = subprocess.run(
-                command,
-                shell=True,
-                cwd=workdir,
-                capture_output=True,
-                text=True,
-                timeout=timeout
+            if self.tasks[task_id].get("status") == "cancelled":
+                return
+            process_group_args = (
+                {"creationflags": subprocess.CREATE_NEW_PROCESS_GROUP}
+                if os.name == "nt"
+                else {"start_new_session": True}
             )
-            output = ((result.stdout or "") + (result.stderr or "")).strip()
-            self.tasks[task_id].update({
-                "status": "completed",
-                "result": output[:settings.TOOL_OUTPUT_MAX_CHARS] or "(no output)"
-            })
+            process = subprocess.Popen(
+                command,
+                cwd=workdir,
+                env=_safe_subprocess_environment(workdir),
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                text=True,
+                **_shell_execution_kwargs(),
+                **process_group_args,
+            )
+            with self._lock:
+                self._processes[task_id] = process
+            if self.tasks[task_id].get("status") == "cancelled":
+                self._terminate_process(task_id)
+                return
+            stdout, stderr = process.communicate(timeout=timeout)
+            output = ((stdout or "") + (stderr or "")).strip()
+            if self.tasks[task_id].get("status") != "cancelled":
+                self.tasks[task_id].update({
+                    "status": "completed" if process.returncode == 0 else "error",
+                    "result": output[:settings.TOOL_OUTPUT_MAX_CHARS] or "(no output)",
+                    "exit_code": process.returncode,
+                })
         except subprocess.TimeoutExpired:
+            self._terminate_process(task_id)
             self.tasks[task_id].update({
                 "status": "error",
                 "result": f"Timeout after {timeout} seconds"
@@ -103,12 +134,54 @@ class BackgroundManager:
                 "result": str(e)
             })
 
-        # Send notification
-        self.notifications.put({
-            "task_id": task_id,
-            "status": self.tasks[task_id]["status"],
-            "result": self.tasks[task_id]["result"][:500]
-        })
+        finally:
+            with self._lock:
+                self._processes.pop(task_id, None)
+                self._threads.pop(task_id, None)
+
+            # Send notification
+            self.notifications.put({
+                "task_id": task_id,
+                "status": self.tasks[task_id]["status"],
+                "result": self.tasks[task_id]["result"][:500]
+            })
+
+    def _terminate_process(self, task_id: str) -> None:
+        with self._lock:
+            process = self._processes.get(task_id)
+        if not process or process.poll() is not None:
+            return
+        if os.name == "nt":
+            process.terminate()
+        else:
+            os.killpg(process.pid, signal.SIGTERM)
+        try:
+            process.wait(timeout=1)
+        except subprocess.TimeoutExpired:
+            if os.name == "nt":
+                process.kill()
+            else:
+                os.killpg(process.pid, signal.SIGKILL)
+            process.wait(timeout=1)
+
+    def cancel(self, task_id: str) -> bool:
+        """Cancel a running child process and retain a truthful terminal result."""
+        task = self.tasks.get(task_id)
+        if not task or task.get("status") != "running":
+            return False
+        task.update({"status": "cancelled", "result": "Cancelled by user"})
+        self._terminate_process(task_id)
+        return True
+
+    def shutdown(self, wait_seconds: float = 2.0) -> None:
+        """Cancel all running processes and briefly join worker threads."""
+        for task_id in list(self.tasks):
+            self.cancel(task_id)
+        with self._lock:
+            threads = list(self._threads.values())
+        for thread in threads:
+            if thread is not threading.current_thread():
+                thread.join(timeout=wait_seconds)
 
     def check(self, task_id: Optional[str] = None) -> str:
         """Check background task status.
@@ -183,11 +256,7 @@ def clear_background_manager(session_id: str) -> None:
     """
     if session_id in _bg_managers:
         bg_mgr = _bg_managers[session_id]
-        for task_id, task in bg_mgr.tasks.items():
-            if task.get("status") == "running":
-                # Note: threading.Thread cannot be forcefully killed
-                # The task will continue but notification won't be delivered
-                task["status"] = "cancelled"
+        bg_mgr.shutdown()
         # Remove from cache
         del _bg_managers[session_id]
 

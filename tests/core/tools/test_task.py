@@ -1,21 +1,18 @@
 """Tests for task module (todo_update, task_create, etc.)."""
 
 import json
-import tempfile
 from pathlib import Path
 
 import pytest
 
 from enterprise_agent.core.agent.tools.task import (
-    TASKS_DIR_NAME,
     TaskManager,
     TodoManager,
-    todo_update,
-    task_create,
-    task_get,
-    task_update,
-    task_list,
     claim_task,
+    clear_task_managers,
+    task_create,
+    task_list,
+    todo_update,
 )
 
 
@@ -251,3 +248,20 @@ class TestTaskTools:
 
         result = claim_task.invoke({"task_id": task_id, "owner": "test_user"})
         assert "Claimed" in result
+
+    def test_task_manager_tracks_workspace_changes(self, temp_workspace, monkeypatch):
+        """A cached user manager must not retain a deleted/old workspace path."""
+        workspace_a = temp_workspace / "workspace-a"
+        workspace_b = temp_workspace / "workspace-b"
+        clear_task_managers()
+
+        monkeypatch.setenv("WORKSPACE_BASE", str(workspace_a))
+        first = json.loads(task_create.invoke({"subject": "First"}))
+        assert first["id"] == 1
+
+        monkeypatch.setenv("WORKSPACE_BASE", str(workspace_b))
+        second = json.loads(task_create.invoke({"subject": "Second"}))
+        assert second["id"] == 1
+        assert (workspace_b / "default" / ".tasks" / "task_1.json").exists()
+
+        clear_task_managers()

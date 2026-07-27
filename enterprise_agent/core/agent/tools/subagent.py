@@ -17,6 +17,9 @@ from enterprise_agent.core.agent.llm_factory import get_llm
 AGENT_TYPES = {
     "Explore": ["bash", "read_file"],
     "general-purpose": ["bash", "read_file", "write_file", "edit_file"],
+    # A tool-free, isolated model context for planning, review, writing, and
+    # other specialist opinions that should not mutate the workspace.
+    "specialist": [],
 }
 
 # System prompts for each agent type
@@ -44,6 +47,19 @@ SUBAGENT_SYSTEM_PROMPTS = {
 - Be careful with file modifications — read before editing
 - Report a clear summary of what you did
 - If you encounter errors, try to fix them before reporting failure""",
+
+    "specialist": """You are an independent specialist subagent working in an isolated context.
+
+## Capabilities
+- Analyze the delegated prompt from the requested professional role
+- Produce concrete plans, drafts, critiques, or recommendations
+- Return your work to the lead agent for synthesis
+
+## Guidelines
+- Stay within the delegated role and task
+- Do not claim to have used tools, read files, or contacted other agents
+- Make the output self-contained and specific
+- Clearly identify assumptions or uncertainty""",
 }
 
 
@@ -120,7 +136,7 @@ async def _run_subagent_async(prompt: str, agent_type: str) -> str:
     # Get LLM and bind tools
     try:
         llm = get_llm()
-        llm_with_tools = llm.bind_tools(tools)
+        llm_with_tools = llm.bind_tools(tools) if tools else llm
     except Exception as e:
         return f"Error initializing LLM: {e}"
 
@@ -185,3 +201,27 @@ async def task(prompt: str, agent_type: Optional[str] = "Explore") -> str:
         Summary of what the subagent did and its findings
     """
     return await _run_subagent_async(prompt, agent_type or "Explore")
+
+
+@tool
+async def delegate_task(role: str, prompt: str) -> str:
+    """Delegate analysis or creative work to a real isolated specialist subagent.
+
+    This starts a separate model context and returns its result to the lead
+    Agent. Use it only in explicit Multi-Agent mode. It is suitable for roles
+    such as planner, writer, reviewer, security reviewer, or test strategist.
+    It does not modify files or execute shell commands.
+
+    Args:
+        role: Specific professional role for the independent subagent
+        prompt: Self-contained task, including any context the specialist needs
+
+    Returns:
+        The specialist subagent's real model response
+    """
+    role_name = role.strip() or "specialist"
+    delegated_prompt = (
+        f"Your delegated role is: {role_name}\n\n"
+        f"Complete this task and return the result to the lead agent:\n{prompt}"
+    )
+    return await _run_subagent_async(delegated_prompt, "specialist")

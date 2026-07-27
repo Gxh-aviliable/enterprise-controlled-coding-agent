@@ -13,6 +13,7 @@ from enterprise_agent.core.agent.nodes import (
     _extract_text,
     _memory_flush_tasks,
     _schedule_memory_flush,
+    init_context_node,
     route_after_llm,
     route_after_tool,
 )
@@ -38,9 +39,10 @@ class TestMainSystemPrompt:
         """Test prompt has decision framework section."""
         assert "Decision Framework" in MAIN_SYSTEM_PROMPT
 
-    def test_prompt_mentions_parallel_tools(self):
-        """Test prompt mentions tools for parallel or delegated work."""
-        assert "spawn_teammate" in MAIN_SYSTEM_PROMPT
+    def test_prompt_establishes_single_agent_baseline(self):
+        """Delegation is opt-in until benchmark evidence justifies it."""
+        assert "single-Agent baseline" in MAIN_SYSTEM_PROMPT
+        assert "multi-Agent mode is explicitly enabled" in MAIN_SYSTEM_PROMPT
 
     def test_prompt_mentions_skills(self):
         """Test prompt mentions skills."""
@@ -56,6 +58,7 @@ class TestMainSystemPrompt:
         formatted = MAIN_SYSTEM_PROMPT.format(
             environment_info="Test Environment",
             available_skills="Test Skills",
+            execution_mode_info="SINGLE-AGENT BASELINE",
         )
         assert "Test Environment" in formatted
         assert "Test Skills" in formatted
@@ -81,11 +84,79 @@ class TestBuildEnvironmentInfo:
         """Test contains workspace information."""
         result = _build_environment_info()
         assert "Workspace:" in result
+        assert "current shell directory (`.`)" in result
+        assert "- Workspace: /" not in result
+
+    def test_shell_policy_is_actionable(self):
+        result = _build_environment_info()
+
+        assert "relative paths only" in result
+        assert "/dev/null" in result
+        assert "2>&1" in result
 
     def test_contains_python_info(self):
         """Test contains Python version."""
         result = _build_environment_info()
         assert "Python:" in result
+
+
+def test_existing_session_retrieves_memory_for_current_task(monkeypatch):
+    calls = {}
+    trace_events = []
+
+    class FakeMemory:
+        async def search_patterns(self, **kwargs):
+            calls["pattern_query"] = kwargs["query"]
+            return [{
+                "id": "pattern-uv",
+                "pattern_type": "preference",
+                "pattern_key": "dependency_manager",
+                "value": '{"tool":"uv"}',
+                "distance": 0.2,
+                "rank": 1,
+                "eligible": True,
+                "filter_reason": "eligible",
+            }]
+
+        async def search_conversations(self, **kwargs):
+            calls["conversation_query"] = kwargs["query"]
+            return []
+
+        async def update_pattern_access_count(self, pattern_id):
+            calls["updated_pattern"] = pattern_id
+
+    monkeypatch.setattr(
+        "enterprise_agent.memory.long_term.get_long_term_memory",
+        lambda user_id: FakeMemory(),
+    )
+    monkeypatch.setattr(
+        "enterprise_agent.core.agent.nodes._record_trace",
+        lambda state, **event: trace_events.append(event),
+    )
+
+    state = {
+        "session_id": "existing-session",
+        "user_id": 1,
+        "trace_id": "trace-memory",
+        "current_user_request": "初始化一个新的 Python 项目",
+        "messages": [
+            {"role": "user", "content": "检查 Python 版本"},
+            {"role": "assistant", "content": "Python 3.11"},
+            {"role": "user", "content": "初始化一个新的 Python 项目"},
+        ],
+        "todos": [],
+    }
+
+    result = asyncio.run(init_context_node(state))
+
+    assert calls["pattern_query"] == state["current_user_request"]
+    assert calls["conversation_query"] == state["current_user_request"]
+    assert calls["updated_pattern"] == "pattern-uv"
+    assert "memory_id=pattern-uv" in result["retrieved_memory_context"]
+    assert "messages" not in result
+    event = next(item for item in trace_events if item["event_type"] == "memory")
+    assert event["data"]["injected_ids"] == ["pattern-uv"]
+    assert event["data"]["application_status"] == "not_attributed"
 
 
 class TestExtractText:
@@ -203,8 +274,8 @@ class TestRoutingFunctions:
         result = route_after_llm(state)
         assert result == "tool_call"
 
-    def test_route_after_llm_ends_at_max_rounds(self):
-        """Test route_after_llm sets end flag at max rounds."""
+    def test_route_after_llm_finishes_pending_tool_protocol_at_max_rounds(self):
+        """A tool_use still needs a tool_result at the round boundary."""
         from enterprise_agent.config.settings import settings
         state = {
             "pending_tool_calls": [{"name": "bash"}],
@@ -212,7 +283,7 @@ class TestRoutingFunctions:
             "token_count": 0
         }
         result = route_after_llm(state)
-        assert result == "save_memory"
+        assert result == "tool_call"
         assert "should_end_after_save" not in state
 
     def test_route_after_tool_returns_llm_call(self):

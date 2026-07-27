@@ -1,5 +1,7 @@
 """Tests for background module (background_run, check_background)."""
 
+import os
+
 import pytest
 
 from enterprise_agent.core.agent.tools.background import (
@@ -92,11 +94,40 @@ class TestBackgroundTaskCompletion:
         manager = BackgroundManager()
         assert manager.notifications is not None
 
+    @pytest.mark.skipif(os.name == "nt", reason="POSIX runtime uses explicit Bash")
+    def test_posix_background_commands_use_bash(self, mock_workspace_env):
+        manager = BackgroundManager()
+        manager.run("echo {background,bash}")
+        task_id = next(iter(manager.tasks))
+        thread = manager._threads[task_id]
+
+        thread.join(timeout=2)
+
+        assert manager.tasks[task_id]["status"] == "completed"
+        assert manager.tasks[task_id]["result"] == "background bash"
+
     def test_drain_notifications_empty(self):
         """Test draining empty notifications."""
         manager = BackgroundManager()
         notifications = manager.drain_notifications()
         assert notifications == []
+
+    def test_shutdown_cancels_and_reaps_running_process(self, mock_workspace_env):
+        from enterprise_agent.core.agent.tools.workspace import get_user_workspace
+
+        manager = BackgroundManager()
+        (get_user_workspace() / "sleep_task.py").write_text(
+            "import time\ntime.sleep(10)\n",
+            encoding="utf-8",
+        )
+        manager.run("python sleep_task.py", timeout=20)
+        task_id = next(iter(manager.tasks))
+
+        manager.shutdown(wait_seconds=2)
+
+        assert manager.tasks[task_id]["status"] == "cancelled"
+        assert manager._processes == {}
+        assert manager._threads == {}
 
     # Note: Testing actual task completion requires waiting,
     # which is complex in unit tests. Integration tests would cover this.

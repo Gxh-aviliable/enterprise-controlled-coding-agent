@@ -1,4 +1,7 @@
 <template>
+  <button v-if="updateAvailable" class="app-update-banner" @click="reloadForUpdate">
+    A newer frontend build is available. Reload now.
+  </button>
   <LoginForm v-if="!auth.loggedIn" />
 
   <div v-else class="app-layout">
@@ -11,21 +14,29 @@
       @delete="deleteSession"
       @file-select="onFileSelect"
       @tab-change="onTabChange"
+      @open-admin="openAdminConsole"
     />
 
     <div class="main-area">
       <ChatPanel
-        v-if="mainView === 'chat'"
+        v-show="mainView === 'chat'"
         :sessionId="activeSessionId"
         @session-created="onSessionCreated"
       />
       <FileViewer
-        v-else-if="mainView === 'file'"
+        v-if="mainView === 'file'"
         :file="selectedFile"
         @close="onCloseFileViewer"
       />
       <MemoryViewer
         v-else-if="mainView === 'memory'"
+      />
+      <TraceViewer
+        v-else-if="mainView === 'trace'"
+      />
+      <AdminConsole
+        v-else-if="mainView === 'admin'"
+        @close="mainView = 'chat'"
       />
     </div>
   </div>
@@ -33,20 +44,40 @@
 </template>
 
 <script setup>
-import { ref, onMounted } from 'vue'
+import { defineAsyncComponent, onMounted, onUnmounted, ref } from 'vue'
 import { auth } from './stores/auth.js'
 import * as api from './api/client.js'
 import LoginForm from './components/LoginForm.vue'
 import Sidebar from './components/Sidebar.vue'
-import ChatPanel from './components/ChatPanel.vue'
-import FileViewer from './components/FileViewer.vue'
-import MemoryViewer from './components/MemoryViewer.vue'
 import Toast from './components/Toast.vue'
+
+const ChatPanel = defineAsyncComponent(() => import('./components/ChatPanel.vue'))
+const FileViewer = defineAsyncComponent(() => import('./components/FileViewer.vue'))
+const MemoryViewer = defineAsyncComponent(() => import('./components/MemoryViewer.vue'))
+const TraceViewer = defineAsyncComponent(() => import('./components/TraceViewer.vue'))
+const AdminConsole = defineAsyncComponent(() => import('./components/admin/AdminConsole.vue'))
 
 const sessions = ref([])
 const activeSessionId = ref('')
 const selectedFile = ref(null)
 const mainView = ref('chat')
+const updateAvailable = ref(false)
+let versionPollTimer = null
+
+async function checkFrontendVersion() {
+  try {
+    const response = await fetch('/version.json', { cache: 'no-store' })
+    if (!response.ok) return
+    const version = await response.json()
+    updateAvailable.value = Boolean(version.build_id && version.build_id !== __APP_BUILD_ID__)
+  } catch {
+    // Version polling is best-effort and must never disrupt the workbench.
+  }
+}
+
+function reloadForUpdate() {
+  window.location.reload()
+}
 
 async function loadSessions() {
   try {
@@ -91,6 +122,13 @@ function onTabChange(tab) {
   if (tab === 'sessions') { mainView.value = 'chat'; selectedFile.value = null }
   else if (tab === 'files') { /* keep current view, let file tree control it */ }
   else if (tab === 'memory') { mainView.value = 'memory'; selectedFile.value = null }
+  else if (tab === 'trace') { mainView.value = 'trace'; selectedFile.value = null }
+}
+
+function openAdminConsole() {
+  if (!auth.isAdmin) return
+  selectedFile.value = null
+  mainView.value = 'admin'
 }
 
 async function deleteSession(id) {
@@ -103,8 +141,21 @@ async function deleteSession(id) {
   }
 }
 
-onMounted(() => {
-  if (auth.loggedIn) loadSessions()
+onMounted(async () => {
+  if (auth.loggedIn) {
+    try {
+      await auth.loadProfile()
+      await loadSessions()
+    } catch (e) {
+      console.error('Failed to load current user profile:', e)
+    }
+  }
+  checkFrontendVersion()
+  versionPollTimer = window.setInterval(checkFrontendVersion, 60_000)
+})
+
+onUnmounted(() => {
+  if (versionPollTimer) window.clearInterval(versionPollTimer)
 })
 </script>
 
@@ -177,6 +228,22 @@ body {
   background: var(--bg-primary);
 }
 
+.app-update-banner {
+  position: fixed;
+  z-index: 10000;
+  top: 12px;
+  left: 50%;
+  transform: translateX(-50%);
+  border: 1px solid #c7d2fe;
+  border-radius: 999px;
+  padding: 8px 16px;
+  background: #eef2ff;
+  color: #3730a3;
+  box-shadow: var(--shadow-md);
+  font: 600 var(--text-sm) var(--font-ui);
+  cursor: pointer;
+}
+
 /* Dark theme */
 [data-theme="dark"] {
   --bg-primary: #1a1b1e;
@@ -200,15 +267,15 @@ body {
 }
 
 /* Dark mode code blocks */
-[data-theme="dark"] .markdown-body :deep(code) {
+[data-theme="dark"] .markdown-body code {
   background: rgba(255, 255, 255, 0.08);
 }
 
-[data-theme="dark"] .markdown-body :deep(pre) {
+[data-theme="dark"] .markdown-body pre {
   background: rgba(255, 255, 255, 0.04);
 }
 
-[data-theme="dark"] .message-wrapper.user .markdown-body :deep(code) {
+[data-theme="dark"] .message-wrapper.user .markdown-body code {
   background: rgba(255, 255, 255, 0.12);
 }
 

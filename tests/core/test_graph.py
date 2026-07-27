@@ -8,3 +8,12 @@ def test_build_agent_graph_compiles_registered_nodes():
     graph = build_agent_graph()
 
     assert graph is not None
+    node_names = set(graph.get_graph().nodes)
+    assert {
+        "task_parse",
+        "plan_task",
+        "prepare_tool_execution",
+        "checkpoint_task",
+        "verification_gate",
+        "finalize_task",
+    }.issubset(node_names)

@@ -4,13 +4,7 @@ Provides persistent vector storage with semantic search capability.
 Uses sentence-transformers for local embedding (all-MiniLM-L6-v2).
 """
 
-import os
-
-# Set HuggingFace offline mode BEFORE importing any HF libraries
-# This prevents network requests when models are already cached
-os.environ["HF_HUB_OFFLINE"] = "1"
-os.environ["TRANSFORMERS_OFFLINE"] = "1"
-
+import logging
 from pathlib import Path
 from typing import Optional
 
@@ -22,6 +16,8 @@ from enterprise_agent.config.settings import settings
 # Global Chroma client and embedding function (cached singletons)
 _chroma_client: Optional[chromadb.Client] = None
 _embedding_function = None
+
+logger = logging.getLogger(__name__)
 
 
 def get_chroma_client() -> chromadb.Client:
@@ -55,9 +51,30 @@ def get_embedding_function():
     global _embedding_function
     if _embedding_function is None:
         from chromadb.utils import embedding_functions
-        _embedding_function = embedding_functions.SentenceTransformerEmbeddingFunction(
-            model_name=settings.EMBEDDING_MODEL
-        )
+        embedding_class = embedding_functions.SentenceTransformerEmbeddingFunction
+        try:
+            # Avoid Hugging Face HEAD requests on every process start when the
+            # model is already mounted in the persistent cache. This keeps
+            # intranet/offline restarts deterministic.
+            _embedding_function = embedding_class(
+                model_name=settings.EMBEDDING_MODEL,
+                local_files_only=True,
+            )
+        except (OSError, ValueError):
+            if not settings.EMBEDDING_ALLOW_DOWNLOAD:
+                raise RuntimeError(
+                    "Embedding model is not available in the local cache and "
+                    "EMBEDDING_ALLOW_DOWNLOAD=false. Preload the model volume "
+                    f"for {settings.EMBEDDING_MODEL!r} before starting the API."
+                ) from None
+            logger.warning(
+                "Embedding model %s is missing from the local cache; "
+                "falling back to the one-time online download path",
+                settings.EMBEDDING_MODEL,
+            )
+            _embedding_function = embedding_class(
+                model_name=settings.EMBEDDING_MODEL,
+            )
     return _embedding_function
 
 
