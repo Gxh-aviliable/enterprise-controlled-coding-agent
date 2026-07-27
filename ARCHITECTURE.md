@@ -1,7 +1,7 @@
 # Mini Claude Code Architecture
 
 > Baseline date: 2026-07-23
-> Scope: architecture as implemented on `feature/portfolio-hardening`; planned components are explicitly labelled.
+> Scope: architecture in the current implementation baseline; planned components are explicitly labelled.
 
 ## 1. System context
 

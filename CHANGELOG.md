@@ -6,6 +6,7 @@ All notable project changes are recorded here. Benchmark and performance claims 
 
 ### Added
 
+- Source-grounded Chinese “backend Agent from zero” reading guide with a 20-station, code-block-by-code-block route covering startup, API/SSE, AgentState, LangGraph nodes and routing, model/tool loops, HITL recovery, validation, context budgets, memory, Trace, Single/Multi boundaries, tests, and a seven-day study path.
 - Canonical documentation index and current-code walkthrough replacing four overlapping, line-number-sensitive beginner guides.
 - Canonical benchmark artifact policy retaining one final platform report, one memory report, and one real single-Agent report.
 - Secret-free benchmark reproducibility manifests recording Git commit/branch/dirty state, suite and lockfile hashes, selected cases, runtime, Agent limits, model identity, sanitized endpoint, and effective inference-default policy.
@@ -36,6 +37,10 @@ All notable project changes are recorded here. Benchmark and performance claims 
 - Live database-derived authorization so account promotion, demotion, or disabling takes effect without trusting stale JWT permission claims.
 - Per-task memory recall receipts with candidate IDs, semantic/lexical rank evidence, filter reasons, injected-token cost, and aggregate memory-injection metrics.
 - Versioned six-case local-embedding memory benchmark covering direct/paraphrased recall, task outcomes, negative rejection, Legacy/disabled filtering, and current-instruction conflict.
+
+### Changed
+
+- Renamed the public GitHub repository from `my_mini_claude_code` to `enterprise-controlled-coding-agent` to match the README product identity, and updated current clone/directory examples.
 
 ### Fixed
 

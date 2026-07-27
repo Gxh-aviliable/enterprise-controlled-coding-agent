@@ -7,7 +7,7 @@
 新开发者建议按以下顺序阅读：
 
 1. [项目 README](../README.md)：产品定位、真实指标、快速启动和已知边界。
-2. [项目理解指南](PROJECT-WALKTHROUGH.md)：沿一次真实请求理解前后端与 Agent 执行链。
+2. [后端 Agent 从零精读指南](PROJECT-WALKTHROUGH.md)：以“定位 Bug → 修改文件 → 执行测试 → 汇报结果”为主线，通过连续代码块逐层读懂 FastAPI、AgentState、LangGraph、模型/工具循环、HITL、验证门、记忆、Trace 与评测。
 3. [系统架构](../ARCHITECTURE.md)：组件边界、状态机、数据流、安全和部署设计。
 4. [能力矩阵](capability-matrix.md)：哪些能力已验证、部分完成或仍待测。
 5. [Benchmark 说明](../benchmarks/README.md)：评测数据、复现方法和解释边界。
@@ -19,7 +19,7 @@
 | 目标 | 文档 |
 |---|---|
 | 10 分钟启动项目 | [README 快速开始](../README.md#快速开始) |
-| 理解一次 Agent 任务 | [项目理解指南](PROJECT-WALKTHROUGH.md) |
+| 从零精读后端 Agent 主链路 | [后端 Agent 从零精读指南](PROJECT-WALKTHROUGH.md) |
 | 理解任务状态与工具治理 | [系统架构](../ARCHITECTURE.md) |
 | 查看真实测试和评测结果 | [能力矩阵](capability-matrix.md)、[Benchmark](../benchmarks/README.md) |
 | 部署到 Linux 服务器 | [远程服务器部署](remote-server-deployment.md) |

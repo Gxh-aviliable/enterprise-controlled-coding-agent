@@ -277,8 +277,8 @@ Trace 在写盘前递归脱敏，并可通过工作台时间线回放。当前�
 前置条件：Docker Desktop / Docker Engine，以及一个可用的 LLM API 或企业私有兼容 endpoint。
 
 ```bash
-git clone https://github.com/Gxh-aviliable/my_mini_claude_code.git
-cd my_mini_claude_code
+git clone https://github.com/Gxh-aviliable/enterprise-controlled-coding-agent.git
+cd enterprise-controlled-coding-agent
 cp .env.example .env
 ```
 
@@ -350,7 +350,7 @@ Vue 工作台包含 Chat、Files、Trace、Memory 与 Admin 五个主要视图�
 ## 项目结构
 
 ```text
-my_mini_claude_code/
+enterprise-controlled-coding-agent/
 ├── enterprise_agent/
 │   ├── core/agent/          # LangGraph、节点、上下文和工具运行时
 │   ├── core/execution/      # 六态任务状态机

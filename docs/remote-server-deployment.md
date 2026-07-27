@@ -148,7 +148,7 @@ M 系列 Mac 通常是 arm64，云服务器通常是 linux/amd64。不要默认�
 
     git add <确认过的文件>
     git commit -m "feat: prepare portfolio server deployment"
-    git push origin feature/portfolio-hardening
+    git push origin <your-release-branch>
 
 准备正式演示版本时，建议合并到稳定分支并打 tag：
 
