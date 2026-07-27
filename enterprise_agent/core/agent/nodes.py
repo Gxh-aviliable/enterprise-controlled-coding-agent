@@ -898,7 +898,7 @@ async def pre_llm_microcompact_node(state: AgentState) -> Dict[str, Any]:
     """Apply microcompact before LLM call.
 
     Clears old tool results to prevent token bloat.
-    This is the key mechanism from original mini_claude_code.py.
+    This keeps recent context while removing stale tool payloads.
     """
     messages = state.get("messages", [])
     ctx_mgr = get_context_manager()

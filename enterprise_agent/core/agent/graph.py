@@ -186,7 +186,7 @@ def build_agent_graph():
     add_node("init_context", init_context_node)
     add_node("plan_task", plan_task_node)
 
-    # Pre-LLM microcompact (key mechanism from original)
+    # Pre-LLM microcompact keeps tool output growth bounded.
     add_node("pre_microcompact", pre_llm_microcompact_node)
 
     # Core LLM call

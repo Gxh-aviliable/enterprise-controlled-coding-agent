@@ -148,7 +148,7 @@ M 系列 Mac 通常是 arm64，云服务器通常是 linux/amd64。不要默认�
 
     git add <确认过的文件>
     git commit -m "feat: prepare portfolio server deployment"
-    git push origin feature/portfolio-hardening
+    git push origin <your-release-branch>
 
 准备正式演示版本时，建议合并到稳定分支并打 tag：
 
@@ -480,4 +480,5 @@ Docker 会复用未变化的镜像层，命名卷不会因为重新构建容器�
 - [环境变量模板](../.env.example)
 - [Docker smoke test](../scripts/docker_smoke_test.sh)
 - [架构说明](../ARCHITECTURE.md)
-- [验收审计](acceptance-audit.md)
+- [能力矩阵](capability-matrix.md)
+- [文档总入口](README.md)
