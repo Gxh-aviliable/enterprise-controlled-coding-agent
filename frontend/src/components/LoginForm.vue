@@ -25,17 +25,36 @@
       </div>
 
       <form @submit.prevent="handleSubmit" class="login-form">
-        <div class="field">
+        <div v-if="mode === 'forgot'" class="reset-heading">
+          <h2>Reset password</h2>
+          <p>Enter your account email. In development, the code appears in the backend log.</p>
+        </div>
+        <div v-else-if="mode === 'reset'" class="reset-heading">
+          <h2>Enter verification code</h2>
+          <p>Use the 6-digit code from the backend log, then choose a new password.</p>
+        </div>
+
+        <div v-if="mode === 'login'" class="field">
+          <label>Email</label>
+          <input
+            v-model="loginEmail"
+            type="email"
+            placeholder="you@example.com"
+            required
+            autocomplete="email"
+          />
+        </div>
+        <div v-if="mode === 'register'" class="field">
           <label>Username</label>
           <input
             v-model="username"
             type="text"
-            placeholder="Enter your username"
+            placeholder="Choose a display username"
             required
             autocomplete="username"
           />
         </div>
-        <div v-if="mode === 'register'" class="field">
+        <div v-if="mode === 'register' || mode === 'forgot' || mode === 'reset'" class="field">
           <label>Email</label>
           <input
             v-model="email"
@@ -45,48 +64,97 @@
             autocomplete="email"
           />
         </div>
-        <div class="field">
-          <label>Password</label>
+        <div v-if="mode === 'reset'" class="field">
+          <label>Verification code</label>
+          <input
+            v-model="resetCode"
+            type="text"
+            inputmode="numeric"
+            pattern="[0-9]{6}"
+            maxlength="6"
+            placeholder="6-digit code"
+            required
+            autocomplete="one-time-code"
+          />
+        </div>
+        <div v-if="mode !== 'forgot'" class="field">
+          <label>{{ mode === 'reset' ? 'New password' : 'Password' }}</label>
           <input
             v-model="password"
             type="password"
-            placeholder="Enter your password"
+            :placeholder="mode === 'reset' ? 'Enter a new password' : 'Enter your password'"
             required
-            autocomplete="current-password"
+            :autocomplete="mode === 'reset' ? 'new-password' : 'current-password'"
           />
         </div>
 
         <p v-if="auth.error" class="error">{{ auth.error }}</p>
+        <p v-if="auth.notice" class="notice">{{ auth.notice }}</p>
 
         <button type="submit" class="btn-primary" :disabled="auth.loading">
           <span v-if="auth.loading" class="spinner"></span>
-          {{ auth.loading ? '' : (mode === 'login' ? 'Sign In' : 'Create Account') }}
+          {{ auth.loading ? '' : buttonText }}
         </button>
+
+        <button
+          v-if="mode === 'login'"
+          type="button"
+          class="link-button"
+          @click="switchMode('forgot')"
+        >Forgot password?</button>
+        <button
+          v-if="mode === 'forgot' || mode === 'reset'"
+          type="button"
+          class="link-button"
+          @click="switchMode('login')"
+        >Back to sign in</button>
       </form>
     </div>
   </div>
 </template>
 
 <script setup>
-import { ref } from 'vue'
+import { computed, ref } from 'vue'
 import { auth } from '../stores/auth.js'
 
 const mode = ref('login')
 const username = ref('')
+const loginEmail = ref('')
 const email = ref('')
 const password = ref('')
+const resetCode = ref('')
+
+const buttonText = computed(() => {
+  if (mode.value === 'login') return 'Sign In'
+  if (mode.value === 'register') return 'Create Account'
+  if (mode.value === 'forgot') return 'Send verification code'
+  return 'Reset password'
+})
 
 function switchMode(m) {
   mode.value = m
   auth.error = ''
+  auth.notice = ''
+  if (m === 'forgot') {
+    password.value = ''
+    resetCode.value = ''
+  }
 }
 
 async function handleSubmit() {
   try {
     if (mode.value === 'login') {
-      await auth.login(username.value, password.value)
-    } else {
+      await auth.login(loginEmail.value, password.value)
+    } else if (mode.value === 'register') {
       await auth.register(username.value, email.value, password.value)
+    } else if (mode.value === 'forgot') {
+      await auth.forgotPassword(email.value)
+      mode.value = 'reset'
+    } else {
+      await auth.resetPassword(email.value, resetCode.value, password.value)
+      password.value = ''
+      resetCode.value = ''
+      mode.value = 'login'
     }
   } catch {}
 }
@@ -215,6 +283,34 @@ h1 {
   border: 1px solid #fecaca;
 }
 
+.notice {
+  color: #047857;
+  font-size: var(--text-base);
+  margin: 0 0 12px;
+  padding: 8px 12px;
+  background: #ecfdf5;
+  border-radius: var(--radius-sm);
+  border: 1px solid #a7f3d0;
+}
+
+.reset-heading {
+  margin-bottom: 18px;
+}
+
+.reset-heading h2 {
+  color: var(--text-primary);
+  font-size: var(--text-lg);
+  font-weight: 650;
+  margin: 0 0 6px;
+}
+
+.reset-heading p {
+  color: var(--text-tertiary);
+  font-size: var(--text-sm);
+  line-height: 1.5;
+  margin: 0;
+}
+
 .btn-primary {
   width: 100%;
   padding: 11px 16px;
@@ -250,6 +346,24 @@ h1 {
   border-top-color: white;
   border-radius: 50%;
   animation: spin 0.6s linear infinite;
+}
+
+.link-button {
+  align-self: center;
+  margin-top: 14px;
+  padding: 4px 8px;
+  border: none;
+  background: transparent;
+  color: var(--accent);
+  font-size: var(--text-sm);
+  font-family: var(--font-ui);
+  font-weight: 500;
+  cursor: pointer;
+}
+
+.link-button:hover {
+  color: var(--accent-hover);
+  text-decoration: underline;
 }
 
 @keyframes spin {

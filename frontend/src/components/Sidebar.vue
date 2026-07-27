@@ -29,6 +29,22 @@
         </svg>
         <span>Files</span>
       </button>
+      <button
+        :class="['tab-btn', { active: activeTab === 'trace' }]"
+        @click="activeTab = 'trace'"
+      >
+        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round">
+          <circle cx="5" cy="5" r="2"/><circle cx="19" cy="12" r="2"/><circle cx="5" cy="19" r="2"/><path d="M7 5h4a3 3 0 013 3v1a3 3 0 003 3M7 19h4a3 3 0 003-3v-1a3 3 0 013-3"/>
+        </svg>
+        <span>Trace</span>
+      </button>
+      <button
+        :class="['tab-btn', { active: activeTab === 'memory' }]"
+        @click="activeTab = 'memory'"
+      >
+        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M12 2L2 7l10 5 10-5-10-5z"/><path d="M2 17l10 5 10-5"/><path d="M2 12l10 5 10-5"/></svg>
+        <span>Memory</span>
+      </button>
     </div>
 
     <!-- Sessions Tab -->
@@ -51,6 +67,7 @@
           v-for="s in sessions"
           :key="s.id"
           :class="['session-item', { active: activeId === s.id }]"
+          :title="s.history_status === 'expired' ? 'Conversation metadata exists; legacy message history expired' : ''"
           @click="$emit('select', s.id)"
         >
           <div class="session-icon">
@@ -59,6 +76,11 @@
             </svg>
           </div>
           <div class="session-title">{{ s.title || s.id.slice(0, 8) }}</div>
+          <span
+            v-if="s.history_status === 'expired' || s.history_status === 'partial'"
+            :class="['history-state', s.history_status]"
+            :aria-label="s.history_status === 'expired' ? 'History expired' : 'History partially available'"
+          >!</span>
           <button
             class="btn-delete"
             @click.stop="$emit('delete', s.id)"
@@ -80,26 +102,84 @@
         @select="handleFileSelect"
       />
     </div>
+
+    <!-- Main-area views still need to reserve sidebar height for the user footer. -->
+    <div class="tab-content" v-show="activeTab === 'trace' || activeTab === 'memory'"></div>
+
+    <!-- User footer -->
+    <div ref="footerRef" class="sidebar-footer" @click="showUserMenu = !showUserMenu">
+      <div class="user-info">
+        <div class="user-avatar-sm">
+          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M20 21v-2a4 4 0 00-4-4H8a4 4 0 00-4 4v2"/><circle cx="12" cy="7" r="4"/></svg>
+        </div>
+        <span class="user-name">{{ username }}</span>
+      </div>
+      <svg :class="['chevron', { rotated: showUserMenu }]" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><path d="M6 9l6 6 6-6"/></svg>
+
+      <!-- Dropdown menu -->
+      <div v-if="showUserMenu" class="user-menu" @click.stop>
+        <div class="menu-header">
+          <span>{{ username }}</span>
+        </div>
+        <div class="menu-divider"></div>
+        <button v-if="auth.isAdmin" class="menu-item" @click="openAdminConsole">
+          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 3l8 4v5c0 5-3.4 8.4-8 9-4.6-.6-8-4-8-9V7l8-4z"/><path d="M9 12l2 2 4-4"/></svg>
+          Admin Control Room
+        </button>
+        <button class="menu-item" @click="handleLogout">
+          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round"><path d="M9 21H5a2 2 0 01-2-2V5a2 2 0 012-2h4"/><polyline points="16 17 21 12 16 7"/><line x1="21" y1="12" x2="9" y2="12"/></svg>
+          Sign Out
+        </button>
+      </div>
+    </div>
   </aside>
 </template>
 
 <script setup>
-import { ref, watch, nextTick } from 'vue'
+import { ref, watch, nextTick, computed, onMounted, onUnmounted } from 'vue'
 import FileTree from './FileTree.vue'
 import ThemeToggle from './ThemeToggle.vue'
+import { auth } from '../stores/auth.js'
 
 defineProps({
   sessions: { type: Array, default: () => [] },
   activeId: { type: String, default: '' },
   selectedFilePath: { type: String, default: '' }
 })
-const emit = defineEmits(['select', 'delete', 'new-session', 'file-select'])
+const emit = defineEmits(['select', 'delete', 'new-session', 'file-select', 'tab-change', 'open-admin'])
+
+// User menu
+const showUserMenu = ref(false)
+const footerRef = ref(null)
+
+function onDocumentClick(e) {
+  if (footerRef.value && !footerRef.value.contains(e.target)) {
+    showUserMenu.value = false
+  }
+}
+onMounted(() => document.addEventListener('click', onDocumentClick))
+onUnmounted(() => document.removeEventListener('click', onDocumentClick))
+
+const username = computed(() => {
+  return auth.profile?.username || auth.profile?.full_name || 'User'
+})
+
+function openAdminConsole() {
+  showUserMenu.value = false
+  emit('open-admin')
+}
+
+function handleLogout() {
+  showUserMenu.value = false
+  auth.logout()
+}
 
 const activeTab = ref('sessions')
 const fileTreeRef = ref(null)
 
-// Auto-refresh file tree when switching to Files tab
+// Auto-refresh file tree + notify App when tab changes
 watch(activeTab, async (tab) => {
+  emit('tab-change', tab)
   if (tab === 'files') {
     await nextTick()
     fileTreeRef.value?.loadTree()
@@ -157,8 +237,8 @@ function handleFileSelect(node) {
   display: flex;
   align-items: center;
   justify-content: center;
-  gap: 5px;
-  padding: 7px 8px;
+  gap: 4px;
+  padding: 7px 5px;
   background: transparent;
   border: none;
   color: var(--text-secondary);
@@ -289,6 +369,25 @@ function handleFileSelect(node) {
   font-weight: 400;
 }
 
+.history-state {
+  width: 16px;
+  height: 16px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+  border-radius: 50%;
+  font-size: 10px;
+  font-weight: 700;
+  color: #92400e;
+  background: #fef3c7;
+}
+
+.history-state.partial {
+  color: #1d4ed8;
+  background: #dbeafe;
+}
+
 .btn-delete {
   display: flex;
   align-items: center;
@@ -328,5 +427,115 @@ function handleFileSelect(node) {
 .empty-state span {
   color: var(--text-tertiary);
   font-size: var(--text-sm);
+}
+
+/* User footer */
+.sidebar-footer {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 10px 14px;
+  border-top: 1px solid var(--border-light);
+  flex-shrink: 0;
+  cursor: pointer;
+  position: relative;
+  transition: background var(--transition);
+}
+
+.sidebar-footer:hover {
+  background: var(--bg-hover);
+}
+
+.user-info {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+}
+
+.user-avatar-sm {
+  width: 28px;
+  height: 28px;
+  border-radius: var(--radius-sm);
+  background: var(--accent-light);
+  color: var(--accent);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+}
+
+.user-name {
+  font-size: var(--text-sm);
+  font-weight: 500;
+  color: var(--text-primary);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.chevron {
+  flex-shrink: 0;
+  color: var(--text-tertiary);
+  transition: transform 0.15s ease;
+}
+
+.chevron.rotated {
+  transform: rotate(180deg);
+}
+
+/* Dropdown menu */
+.user-menu {
+  position: absolute;
+  bottom: 100%;
+  left: 8px;
+  right: 8px;
+  margin-bottom: 4px;
+  background: var(--bg-primary);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  box-shadow: var(--shadow-lg);
+  z-index: 200;
+  overflow: hidden;
+}
+
+.menu-header {
+  padding: 10px 14px 6px;
+  font-size: var(--text-xs);
+  font-weight: 600;
+  color: var(--text-tertiary);
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+}
+
+.menu-divider {
+  height: 1px;
+  background: var(--border-light);
+  margin: 4px 0;
+}
+
+.menu-item {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+  padding: 8px 14px;
+  background: none;
+  border: none;
+  color: var(--text-primary);
+  font-size: var(--text-sm);
+  font-family: var(--font-ui);
+  cursor: pointer;
+  transition: background var(--transition);
+  text-align: left;
+}
+
+.menu-item:hover {
+  background: var(--bg-hover);
+}
+
+.menu-item:last-child:hover {
+  background: #fef2f2;
+  color: #ef4444;
 }
 </style>

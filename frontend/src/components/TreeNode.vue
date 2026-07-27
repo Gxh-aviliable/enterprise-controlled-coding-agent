@@ -30,6 +30,18 @@
       <span class="node-name">{{ node.name }}</span>
 
       <div v-if="showMenu" class="ctx-menu" @click.stop>
+        <button v-if="node.type === 'file'" @click="emit('download', node); showMenu = false">
+          <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><path d="M21 15v4a2 2 0 01-2 2H5a2 2 0 01-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>
+          Download
+        </button>
+        <button v-if="node.type === 'file'" @click="emit('open', node); showMenu = false">
+          <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5">
+            <path d="M18 13v6a2 2 0 01-2 2H5a2 2 0 01-2-2V8a2 2 0 012-2h6"/>
+            <polyline points="15 3 21 3 21 9"/>
+            <line x1="10" y1="14" x2="21" y2="3"/>
+          </svg>
+          Open workspace
+        </button>
         <button @click="emit('rename', node); showMenu = false">
           <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M17 3a2.83 2.83 0 114 4L7.5 20.5 2 22l1.5-5.5L17 3z"/></svg>
           Rename
@@ -52,6 +64,8 @@
         @select="$emit('select', $event)"
         @delete="$emit('delete', $event)"
         @rename="$emit('rename', $event)"
+        @download="$emit('download', $event)"
+        @open="$emit('open', $event)"
       />
     </template>
   </div>
@@ -65,7 +79,7 @@ defineProps({
   depth: { type: Number, default: 0 },
   selectedPath: { type: String, default: '' }
 })
-const emit = defineEmits(['select', 'delete', 'rename'])
+const emit = defineEmits(['select', 'delete', 'rename', 'download', 'open'])
 
 const expanded = ref(false)
 const showMenu = ref(false)

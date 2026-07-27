@@ -34,9 +34,14 @@ def compress() -> str:
 
 @tool
 def list_transcripts() -> str:
-    """List all saved conversation transcripts.
+    """List all saved conversation compression backup transcripts.
 
-    Transcripts are saved during context compression.
+    CRITICAL: These are COMPRESSION BACKUP files saved during context compression,
+    NOT user long-term memory. Do NOT use this tool when the user asks about their
+    memory, preferences, history, or "what do you remember about me". These transcripts
+    are operational artifacts for debugging compression behavior. For long-term memory
+    queries, use `search_memory` instead — it searches the ChromaDB vector database
+    where actual user memories (conversations, preferences, decisions) are stored.
 
     Returns:
         Formatted list of transcript files with timestamps
@@ -57,7 +62,10 @@ def list_transcripts() -> str:
 
 @tool
 def get_transcript(filename: str) -> str:
-    """Load and display a saved transcript.
+    """Load and display a compression backup transcript file.
+
+    These are operational compression artifacts, NOT user long-term memory.
+    For long-term memory queries, use `search_memory` instead.
 
     Args:
         filename: Transcript filename (e.g., 'transcript_xxx.jsonl')

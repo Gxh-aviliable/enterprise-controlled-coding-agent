@@ -17,8 +17,19 @@ class Permission(str, Enum):
     SESSION_ARCHIVE = "session:archive"
 
     # Admin permissions
+    ADMIN_CONSOLE = "admin:console"
     ADMIN_USERS = "admin:users"
     ADMIN_ANALYTICS = "admin:analytics"
+    ADMIN_QUOTAS_READ = "admin:quotas:read"
+    ADMIN_QUOTAS_WRITE = "admin:quotas:write"
+    ADMIN_WORKSPACE_METADATA = "admin:workspace:metadata"
+    ADMIN_WORKSPACE_CONTENT = "admin:workspace:content"
+    ADMIN_SKILLS_READ = "admin:skills:read"
+    ADMIN_SKILLS_PUBLISH = "admin:skills:publish"
+    ADMIN_TASKS_READ = "admin:tasks:read"
+    ADMIN_TASKS_CANCEL = "admin:tasks:cancel"
+    ADMIN_AUDIT_READ = "admin:audit:read"
+    ADMIN_SYSTEM_READ = "admin:system:read"
 
 
 # Role permission mappings

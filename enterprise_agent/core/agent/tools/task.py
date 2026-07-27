@@ -32,7 +32,7 @@ class TaskManager:
     def __init__(self, workdir: Path = None):
         self.workdir = workdir or get_user_workspace()
         self.tasks_dir = self.workdir / TASKS_DIR_NAME
-        self.tasks_dir.mkdir(exist_ok=True)
+        self.tasks_dir.mkdir(parents=True, exist_ok=True)
 
     def _next_id(self) -> int:
         """Get next available task ID."""
@@ -53,6 +53,10 @@ class TaskManager:
 
     def _save(self, task: dict) -> None:
         """Save task to file."""
+        # The workspace may have been recreated between requests (for example,
+        # after a test fixture or an administrator cleanup).  Re-establish the
+        # storage directory instead of keeping a stale cached manager broken.
+        self.tasks_dir.mkdir(parents=True, exist_ok=True)
         path = self.tasks_dir / f"task_{task['id']}.json"
         path.write_text(json.dumps(task, indent=2), encoding="utf-8")
 
@@ -85,7 +89,9 @@ class TaskManager:
         task = self._load(tid)
 
         if status:
-            valid_statuses = ("pending", "in_progress", "completed", "deleted")
+            valid_statuses = (
+                "pending", "in_progress", "completed", "failed", "cancelled", "deleted"
+            )
             if status not in valid_statuses:
                 raise ValueError(f"Invalid status: {status}")
             task["status"] = status
@@ -133,6 +139,8 @@ class TaskManager:
                 "pending": "[ ]",
                 "in_progress": "[>]",
                 "completed": "[x]",
+                "failed": "[!]",
+                "cancelled": "[-]",
                 "deleted": "[D]"
             }
             marker = status_markers.get(t.get("status", "pending"), "[?]")
@@ -174,7 +182,7 @@ class TodoManager:
             # Validation
             if not content:
                 raise ValueError(f"Item {i}: content required")
-            if status not in ("pending", "in_progress", "completed"):
+            if status not in ("pending", "in_progress", "completed", "failed", "cancelled"):
                 raise ValueError(f"Item {i}: invalid status '{status}'")
             if not active_form:
                 raise ValueError(f"Item {i}: activeForm required")
@@ -206,6 +214,8 @@ class TodoManager:
         for item in self.items:
             markers = {
                 "completed": "[x]",
+                "failed": "[!]",
+                "cancelled": "[-]",
                 "in_progress": "[>]",
                 "pending": "[ ]"
             }
@@ -220,22 +230,36 @@ class TodoManager:
 
     def has_open_items(self) -> bool:
         """Check if there are uncompleted items."""
-        return any(item.get("status") != "completed" for item in self.items)
+        return any(item.get("status") in {"pending", "in_progress"} for item in self.items)
 
 
-# Per-session instances cache (to prevent cross-session todo pollution)
-_task_managers: Dict[int, TaskManager] = {}
+# Per-workspace instances cache.  User ID alone is insufficient because the
+# workspace base can change between deployments/tests while the process stays
+# alive.  Including the resolved path prevents writes through a stale manager.
+_task_managers: Dict[tuple[Optional[int], str], TaskManager] = {}
 _todo_managers: Dict[str, TodoManager] = {}  # Key is session_id, not user_id
 
 
 def get_task_manager() -> TaskManager:
     """Get or create TaskManager instance for current user."""
     from enterprise_agent.core.agent.tools.workspace import get_current_user_id
-    user_id = get_current_user_id()
 
-    if user_id not in _task_managers:
-        _task_managers[user_id] = TaskManager()
-    return _task_managers[user_id]
+    user_id = get_current_user_id()
+    workdir = get_user_workspace(user_id).resolve()
+    cache_key = (user_id, str(workdir))
+
+    if cache_key not in _task_managers:
+        _task_managers[cache_key] = TaskManager(workdir)
+    return _task_managers[cache_key]
+
+
+def clear_task_managers() -> None:
+    """Clear cached task managers.
+
+    Persistent task files are retained; only process-local references are
+    dropped.  This is useful during workspace reconfiguration and shutdown.
+    """
+    _task_managers.clear()
 
 
 def get_todo_manager(session_id: str = None) -> TodoManager:
@@ -320,7 +344,7 @@ def task_update(
 
     Args:
         task_id: Task ID number
-        status: New status (pending, in_progress, completed, deleted)
+        status: New status (pending, in_progress, completed, failed, cancelled, deleted)
         add_blocked_by: Task IDs to add as blockers
         remove_blocked_by: Task IDs to remove from blockers
 
@@ -332,7 +356,13 @@ def task_update(
 
 @tool
 def task_list() -> str:
-    """List all tasks.
+    """List all persistent file-based task-tracking items from the .tasks/ directory.
+
+    CRITICAL: These are OPERATIONAL task-tracking records (created by `task_create`),
+    NOT user long-term memory. Do NOT use this tool when the user asks about their
+    memory, preferences, history, or "what do you remember about me". For long-term
+    memory queries, use `search_memory` instead — it searches the ChromaDB vector
+    database where actual user memories (conversations, preferences, decisions) are stored.
 
     Returns:
         Formatted list of all tasks

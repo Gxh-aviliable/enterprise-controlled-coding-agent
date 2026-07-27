@@ -1,0 +1,90 @@
+{
+  "schema_version": "1.0",
+  "suite_id": "memory-recall-v1",
+  "description": "Offline semantic-retrieval benchmark for durable memory. It uses the configured local embedding model and never calls the chat model.",
+  "threshold": 0.8,
+  "top_k": 3,
+  "max_injected_tokens": 800,
+  "records": [
+    {
+      "id": "python_workflow",
+      "content": "用户的长期 Python 工程偏好：所有 Python 项目默认使用 uv 管理依赖，使用 pytest 编写测试；修改代码后先运行 pytest 和 ruff。",
+      "quality_status": "active",
+      "retrieval_enabled": true,
+      "memory_type": "user_note"
+    },
+    {
+      "id": "frontend_stack",
+      "content": "用户的前端工程长期偏好：使用 Vue 3、Vite 和 Vitest，组件优先采用 Composition API。",
+      "quality_status": "active",
+      "retrieval_enabled": true,
+      "memory_type": "user_note"
+    },
+    {
+      "id": "linux_deployment",
+      "content": "项目部署目标是 Linux 远程服务器，交付方式采用 Docker Compose，并通过反向代理暴露服务。",
+      "quality_status": "active",
+      "retrieval_enabled": true,
+      "memory_type": "task_outcome"
+    },
+    {
+      "id": "legacy_fiction",
+      "content": "用户喜欢仙侠小说，主角名为沈墨。",
+      "quality_status": "legacy",
+      "retrieval_enabled": true,
+      "memory_type": "legacy_summary"
+    },
+    {
+      "id": "disabled_secret",
+      "content": "内部测试账号的临时口令与敏感配置，不允许自动召回。",
+      "quality_status": "active",
+      "retrieval_enabled": false,
+      "memory_type": "user_note"
+    }
+  ],
+  "cases": [
+    {
+      "id": "direct_python_preference",
+      "category": "direct_recall",
+      "query": "请按照我长期保存的 Python 开发习惯修改这个项目。",
+      "relevant_ids": ["python_workflow"],
+      "forbidden_ids": ["legacy_fiction", "disabled_secret"]
+    },
+    {
+      "id": "paraphrased_validation",
+      "category": "paraphrase_recall",
+      "query": "代码改完以后，我通常希望用什么测试和代码检查方式验证？",
+      "relevant_ids": ["python_workflow"],
+      "forbidden_ids": ["legacy_fiction", "disabled_secret"]
+    },
+    {
+      "id": "frontend_preference",
+      "category": "direct_recall",
+      "query": "为这个前端组件补测试，沿用我偏好的技术栈。",
+      "relevant_ids": ["frontend_stack"],
+      "forbidden_ids": ["legacy_fiction", "disabled_secret"]
+    },
+    {
+      "id": "deployment_recall",
+      "category": "task_outcome_recall",
+      "query": "这个项目最终要部署到什么环境，推荐怎样启动？",
+      "relevant_ids": ["linux_deployment"],
+      "forbidden_ids": ["legacy_fiction", "disabled_secret"]
+    },
+    {
+      "id": "unrelated_negative",
+      "category": "negative_recall",
+      "query": "请写一首描写夏日海边的四行诗。",
+      "relevant_ids": [],
+      "forbidden_ids": ["python_workflow", "frontend_stack", "linux_deployment", "legacy_fiction", "disabled_secret"]
+    },
+    {
+      "id": "current_instruction_override",
+      "category": "conflict_recall",
+      "query": "这一次我明确要求不要使用 uv，只在项目虚拟环境里用 pip 安装测试依赖。",
+      "relevant_ids": ["python_workflow"],
+      "forbidden_ids": ["legacy_fiction", "disabled_secret"],
+      "behavior_assertion": "The current explicit request must override the recalled durable preference. This retrieval-only benchmark cannot prove behavioral compliance; verify it in the Agent benchmark or manual run."
+    }
+  ]
+}

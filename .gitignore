@@ -77,3 +77,7 @@ dmypy.json
 
 # Obsidian vault
 obsidian/
+.obsidian/
+
+# Runtime-managed shared Skill materialization
+managed_shared_skills/

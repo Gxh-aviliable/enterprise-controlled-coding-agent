@@ -9,7 +9,6 @@ if os.getenv("ANTHROPIC_BASE_URL") or os.getenv("LLM_BASE_URL"):
     # User is using a custom LLM endpoint, remove Claude Code's auth token
     os.environ.pop("ANTHROPIC_AUTH_TOKEN", None)
 
-from pydantic import model_validator
 from pydantic_settings import BaseSettings
 
 
@@ -43,9 +42,15 @@ class Settings(BaseSettings):
     # Database - Chroma (long-term vector memory)
     CHROMA_PERSIST_DIR: str = str(Path(__file__).resolve().parent.parent.parent / "chroma_data")
 
+    # Workspace
+    WORKSPACE_BASE: str = "/workspaces"
+
     # Skills — shared global skills directory
     SHARED_SKILLS_DIR: str = str(
         Path(__file__).resolve().parent.parent.parent / "shared_skills"
+    )
+    MANAGED_SHARED_SKILLS_DIR: str = str(
+        Path(__file__).resolve().parent.parent.parent / "managed_shared_skills"
     )
     CHROMA_COLLECTION_CONVERSATIONS: str = "conversations"
     CHROMA_COLLECTION_PATTERNS: str = "user_patterns"
@@ -55,6 +60,16 @@ class Settings(BaseSettings):
     JWT_ALGORITHM: str = "HS256"
     ACCESS_TOKEN_EXPIRE_MINUTES: int = 30
     REFRESH_TOKEN_EXPIRE_DAYS: int = 7
+
+    # Password reset email (optional; logs code when SMTP is not configured)
+    SMTP_HOST: str = ""
+    SMTP_PORT: int = 465
+    SMTP_USERNAME: str = ""
+    SMTP_PASSWORD: str = ""
+    SMTP_FROM_EMAIL: str = ""
+    SMTP_USE_SSL: bool = True
+    PASSWORD_RESET_CODE_TTL_SECONDS: int = 600
+    PASSWORD_RESET_CODE_LENGTH: int = 6
 
     # LLM Provider Configuration
     # Supported: "anthropic" | "glm" | "deepseek" | "openai" | "mimo"
@@ -85,13 +100,24 @@ class Settings(BaseSettings):
     NAG_REMINDER_THRESHOLD: int = 3  # Rounds without TodoWrite before reminder
     COMMAND_TIMEOUT_SECONDS: int = 120  # Shell/background command timeout
     AGENT_INVOKE_TIMEOUT_SECONDS: int = 600  # Max seconds for a single graph invocation
-    MAX_AGENT_ROUNDS: int = 50  # Max LLM→tool rounds before forced stop
+    MAX_AGENT_ROUNDS: int = 20  # Fail fast instead of allowing long no-progress loops
+    MAX_TOOL_CALLS_PER_TASK: int = 25  # Framework-enforced tool-call budget
+    TASK_TOKEN_BUDGET: int = 1_000_000  # Per user task; separate from context compaction threshold
+    SESSION_TOKEN_BUDGET: int = 1_000_000  # Cumulative model usage across one chat session
     SUBAGENT_MAX_ROUNDS: int = 30  # Max rounds for subagent execution
     TODO_MAX_ITEMS: int = 20  # Max todo items per session
     TODO_MAX_IN_PROGRESS: int = 1  # Max concurrent in_progress todos
+    VERIFICATION_MAX_ATTEMPTS: int = 2  # Automatic prompts to verify code changes
+    ENABLE_MULTI_AGENT: bool = False  # Single-Agent is the measured/default baseline
+    ENABLE_LONG_TERM_MEMORY: bool = True  # Benchmarks can disable Chroma side effects
 
     # Memory accumulator (task-level storage, replaces per-round fragments)
     MEMORY_ACCUMULATOR_MAX_ROUNDS: int = 20  # Max rounds before forcing flush (safety valve)
+    MEMORY_ADMISSION_MIN_IMPORTANCE: float = 0.65  # 自动长期记忆还需通过确定性准入策略
+    MEMORY_RELEVANCE_MAX_DISTANCE: float = 0.8  # Chroma L2 距离上限，避免注入弱相关记忆
+    MEMORY_CJK_LEXICAL_MIN_SCORE: float = 0.08  # 中文查询最低字符/术语重合率
+    MEMORY_CJK_RELATIVE_SCORE: float = 0.75  # 仅保留接近本次最佳中文候选的记录
+    MEMORY_DEDUP_MAX_DISTANCE: float = 0.3  # 相同用户请求的近重复判定阈值
 
     # LangSmith tracing (optional — if API key is set, tracing auto-enables)
     LANGSMITH_API_KEY: str = ""
@@ -99,6 +125,7 @@ class Settings(BaseSettings):
 
     # Embedding (for Chroma)
     EMBEDDING_MODEL: str = "all-MiniLM-L6-v2"  # Local sentence-transformers model
+    EMBEDDING_ALLOW_DOWNLOAD: bool = True  # 缓存缺失时允许首次下载；已有缓存始终离线加载
 
     # Memory Enhancement (Chroma long-term memory)
     IMPORTANCE_THRESHOLD_STORE: float = 0.5  # 低于此值不存储到 Chroma（提高阈值避免存储低价值信息）
@@ -117,8 +144,22 @@ class Settings(BaseSettings):
     # Human-in-the-loop confirmation (sensitive tool execution)
     # SSE + interrupt integration now supported via astream(stream_mode="updates")
     ENABLE_TOOL_CONFIRMATION: bool = True  # Enable tool confirmation with SSE interrupt support
-    SENSITIVE_TOOLS_LIST: list[str] = ["bash", "write_file", "edit_file", "task_create", "spawn_teammate", "send_message", "broadcast"]  # Tools requiring confirmation
+    SENSITIVE_TOOLS_LIST: list[str] = [
+        "bash",
+        "write_file",
+        "edit_file",
+        "task_create",
+        "spawn_teammate",
+        "send_message",
+        "broadcast",
+    ]  # Tools requiring confirmation
     CONFIRMATION_TIMEOUT_SECONDS: int = 300  # Timeout for user confirmation (5 minutes)
+
+    # Workspace file opening
+    FILE_OPEN_MODE: str = "local-vscode"  # "local-vscode" or "web-vscode"
+    VSCODE_WEB_BASE_URL: str = ""
+    VSCODE_WEB_URL_TEMPLATE: str = ""
+    VSCODE_WORKSPACE_PATH: str = ""
 
     model_config = {
         "env_file": str(Path(__file__).resolve().parent.parent.parent / ".env"),
@@ -126,15 +167,26 @@ class Settings(BaseSettings):
         "extra": "ignore"
     }
 
-    @model_validator(mode="after")
-    def validate_security(self):
-        """Validate security-sensitive settings at startup."""
-        if self.JWT_SECRET_KEY == "change-me-in-production":
-            raise ValueError(
-                "JWT_SECRET_KEY must be set in .env (not the default value). "
+    def validate_runtime_security(self) -> None:
+        """Fail server startup on placeholder production credentials.
+
+        This is deliberately called by the FastAPI lifespan rather than while
+        importing settings, so the offline smoke test works before `.env` is
+        created while an actual server still fails closed.
+        """
+        placeholders = {
+            "",
+            "change-me-in-production",
+            "your-secret-key-change-in-production",
+            "changeme",
+        }
+        if not self.DEBUG and (
+            self.JWT_SECRET_KEY.lower() in placeholders or len(self.JWT_SECRET_KEY) < 32
+        ):
+            raise RuntimeError(
+                "JWT_SECRET_KEY must be a non-placeholder value of at least 32 characters. "
                 "Generate one with: python -c \"import secrets; print(secrets.token_urlsafe(32))\""
             )
-        return self
 
     def get_effective_api_key(self) -> str:
         """Get effective API key based on provider or legacy config."""

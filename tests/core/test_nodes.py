@@ -1,17 +1,21 @@
 """Tests for nodes module (LangGraph agent nodes)."""
 
-import pytest
+import asyncio
 
 from enterprise_agent.core.agent.nodes import (
+    IDEMPOTENT_TOOLS,
     MAIN_SYSTEM_PROMPT,
+    RETRYABLE_ERROR_PATTERNS,
     _build_environment_info,
-    _extract_text,
-    _convert_to_langchain_messages,
     _convert_from_langchain_messages,
+    _convert_to_langchain_messages,
+    _drain_memory_flush_tasks,
+    _extract_text,
+    _memory_flush_tasks,
+    _schedule_memory_flush,
+    init_context_node,
     route_after_llm,
     route_after_tool,
-    IDEMPOTENT_TOOLS,
-    RETRYABLE_ERROR_PATTERNS,
 )
 
 
@@ -27,21 +31,22 @@ class TestMainSystemPrompt:
         """Test that prompt has environment_info placeholder."""
         assert "{environment_info}" in MAIN_SYSTEM_PROMPT
 
-    def test_prompt_mentions_capabilities(self):
-        """Test prompt mentions capabilities."""
-        assert "Capabilities" in MAIN_SYSTEM_PROMPT
+    def test_prompt_mentions_tools(self):
+        """Test prompt mentions tool access."""
+        assert "powerful tools" in MAIN_SYSTEM_PROMPT
 
     def test_prompt_has_decision_framework(self):
         """Test prompt has decision framework section."""
         assert "Decision Framework" in MAIN_SYSTEM_PROMPT
 
-    def test_prompt_mentions_parallelism(self):
-        """Test prompt mentions parallelism."""
-        assert "PARALLELISM" in MAIN_SYSTEM_PROMPT
+    def test_prompt_establishes_single_agent_baseline(self):
+        """Delegation is opt-in until benchmark evidence justifies it."""
+        assert "single-Agent baseline" in MAIN_SYSTEM_PROMPT
+        assert "multi-Agent mode is explicitly enabled" in MAIN_SYSTEM_PROMPT
 
     def test_prompt_mentions_skills(self):
         """Test prompt mentions skills."""
-        assert "SKILLS" in MAIN_SYSTEM_PROMPT
+        assert "Available Skills" in MAIN_SYSTEM_PROMPT
 
     def test_prompt_is_concise(self):
         """Test prompt is concise after simplification."""
@@ -51,11 +56,15 @@ class TestMainSystemPrompt:
     def test_prompt_can_be_formatted(self):
         """Test prompt can be formatted with environment_info."""
         formatted = MAIN_SYSTEM_PROMPT.format(
-            environment_info="Test Environment"
+            environment_info="Test Environment",
+            available_skills="Test Skills",
+            execution_mode_info="SINGLE-AGENT BASELINE",
         )
         assert "Test Environment" in formatted
+        assert "Test Skills" in formatted
         # Placeholder should be replaced
         assert "{environment_info}" not in formatted
+        assert "{available_skills}" not in formatted
 
 
 class TestBuildEnvironmentInfo:
@@ -75,11 +84,79 @@ class TestBuildEnvironmentInfo:
         """Test contains workspace information."""
         result = _build_environment_info()
         assert "Workspace:" in result
+        assert "current shell directory (`.`)" in result
+        assert "- Workspace: /" not in result
+
+    def test_shell_policy_is_actionable(self):
+        result = _build_environment_info()
+
+        assert "relative paths only" in result
+        assert "/dev/null" in result
+        assert "2>&1" in result
 
     def test_contains_python_info(self):
         """Test contains Python version."""
         result = _build_environment_info()
         assert "Python:" in result
+
+
+def test_existing_session_retrieves_memory_for_current_task(monkeypatch):
+    calls = {}
+    trace_events = []
+
+    class FakeMemory:
+        async def search_patterns(self, **kwargs):
+            calls["pattern_query"] = kwargs["query"]
+            return [{
+                "id": "pattern-uv",
+                "pattern_type": "preference",
+                "pattern_key": "dependency_manager",
+                "value": '{"tool":"uv"}',
+                "distance": 0.2,
+                "rank": 1,
+                "eligible": True,
+                "filter_reason": "eligible",
+            }]
+
+        async def search_conversations(self, **kwargs):
+            calls["conversation_query"] = kwargs["query"]
+            return []
+
+        async def update_pattern_access_count(self, pattern_id):
+            calls["updated_pattern"] = pattern_id
+
+    monkeypatch.setattr(
+        "enterprise_agent.memory.long_term.get_long_term_memory",
+        lambda user_id: FakeMemory(),
+    )
+    monkeypatch.setattr(
+        "enterprise_agent.core.agent.nodes._record_trace",
+        lambda state, **event: trace_events.append(event),
+    )
+
+    state = {
+        "session_id": "existing-session",
+        "user_id": 1,
+        "trace_id": "trace-memory",
+        "current_user_request": "初始化一个新的 Python 项目",
+        "messages": [
+            {"role": "user", "content": "检查 Python 版本"},
+            {"role": "assistant", "content": "Python 3.11"},
+            {"role": "user", "content": "初始化一个新的 Python 项目"},
+        ],
+        "todos": [],
+    }
+
+    result = asyncio.run(init_context_node(state))
+
+    assert calls["pattern_query"] == state["current_user_request"]
+    assert calls["conversation_query"] == state["current_user_request"]
+    assert calls["updated_pattern"] == "pattern-uv"
+    assert "memory_id=pattern-uv" in result["retrieved_memory_context"]
+    assert "messages" not in result
+    event = next(item for item in trace_events if item["event_type"] == "memory")
+    assert event["data"]["injected_ids"] == ["pattern-uv"]
+    assert event["data"]["application_status"] == "not_attributed"
 
 
 class TestExtractText:
@@ -185,7 +262,7 @@ class TestRoutingFunctions:
         state = {"pending_tool_calls": [], "round_count": 0, "token_count": 0}
         result = route_after_llm(state)
         assert result == "save_memory"
-        assert state.get("should_end_after_save") == True
+        assert "should_end_after_save" not in state
 
     def test_route_after_llm_returns_tool_call_when_has_tools(self):
         """Test route_after_llm returns 'tool_call' when has tool calls."""
@@ -197,8 +274,8 @@ class TestRoutingFunctions:
         result = route_after_llm(state)
         assert result == "tool_call"
 
-    def test_route_after_llm_ends_at_max_rounds(self):
-        """Test route_after_llm sets end flag at max rounds."""
+    def test_route_after_llm_finishes_pending_tool_protocol_at_max_rounds(self):
+        """A tool_use still needs a tool_result at the round boundary."""
         from enterprise_agent.config.settings import settings
         state = {
             "pending_tool_calls": [{"name": "bash"}],
@@ -206,8 +283,8 @@ class TestRoutingFunctions:
             "token_count": 0
         }
         result = route_after_llm(state)
-        assert result == "save_memory"
-        assert state.get("should_end_after_save") == True
+        assert result == "tool_call"
+        assert "should_end_after_save" not in state
 
     def test_route_after_tool_returns_llm_call(self):
         """Test route_after_tool returns 'llm_call' normally."""
@@ -229,6 +306,34 @@ class TestRoutingFunctions:
         }
         result = route_after_tool(state)
         assert result == "end"
+
+
+class TestMemoryFlushTaskTracking:
+    """Test background memory flush task lifecycle tracking."""
+
+    def test_scheduled_memory_flush_tasks_are_drained(self, monkeypatch):
+        """Scheduled flush tasks should be tracked and drainable on shutdown."""
+        ran = False
+
+        async def fake_background_flush(*args):
+            nonlocal ran
+            await asyncio.sleep(0)
+            ran = True
+
+        monkeypatch.setattr(
+            "enterprise_agent.core.agent.nodes._background_flush",
+            fake_background_flush,
+        )
+
+        async def run():
+            _schedule_memory_flush("acc", {"user_request": "x"}, "session-1", 1, [])
+            assert len(_memory_flush_tasks) == 1
+            await _drain_memory_flush_tasks(timeout=1)
+
+        asyncio.run(run())
+
+        assert ran is True
+        assert len(_memory_flush_tasks) == 0
 
 
 class TestIdempotentTools:

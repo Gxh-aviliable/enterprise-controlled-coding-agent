@@ -17,6 +17,7 @@ class TokenPayload(BaseModel):
     type: str  # 'access' or 'refresh'
     permissions: Optional[list] = None
     jti: Optional[str] = None  # JWT ID for token rotation
+    ver: int = 0  # Server-side revocation generation
 
 
 class JWTHandler:
@@ -27,7 +28,12 @@ class JWTHandler:
         self.algorithm = settings.JWT_ALGORITHM
         self.pwd_context = CryptContext(schemes=["bcrypt"], deprecated="auto")
 
-    def create_tokens(self, user_id: int, permissions: list = None) -> Dict[str, Any]:
+    def create_tokens(
+        self,
+        user_id: int,
+        permissions: list = None,
+        auth_version: int = 0,
+    ) -> Dict[str, Any]:
         """Create access token and refresh token
 
         Args:
@@ -44,7 +50,8 @@ class JWTHandler:
             "iat": now,
             "exp": now + timedelta(minutes=settings.ACCESS_TOKEN_EXPIRE_MINUTES),
             "type": "access",
-            "permissions": permissions or []
+            "permissions": permissions or [],
+            "ver": auth_version,
         }
 
         refresh_payload = {
@@ -53,6 +60,7 @@ class JWTHandler:
             "exp": now + timedelta(days=settings.REFRESH_TOKEN_EXPIRE_DAYS),
             "type": "refresh",
             "jti": str(uuid.uuid4()),
+            "ver": auth_version,
         }
 
         return {
@@ -79,8 +87,8 @@ class JWTHandler:
             )
             if payload.get("type") != token_type:
                 return None
-            payload["exp"] = datetime.fromtimestamp(payload["exp"])
-            payload["iat"] = datetime.fromtimestamp(payload["iat"])
+            payload["exp"] = datetime.fromtimestamp(payload["exp"], timezone.utc)
+            payload["iat"] = datetime.fromtimestamp(payload["iat"], timezone.utc)
             return TokenPayload(**payload)
         except JWTError:
             return None

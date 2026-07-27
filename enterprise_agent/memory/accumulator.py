@@ -12,13 +12,18 @@ Stored documents use role="task_summary" with structured format:
     [Key Findings]: extracted decisions and discoveries
 """
 
-import json
 import logging
-import time
+import re
 from datetime import datetime, timezone
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List
 
 from enterprise_agent.config.settings import settings
+from enterprise_agent.memory.policy import (
+    ACTIVE_QUALITY_STATUS,
+    MEMORY_SCHEMA_VERSION,
+    MemoryAdmissionPolicy,
+    has_durable_pattern_signal,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -31,6 +36,12 @@ SYSTEM_MESSAGE_PATTERNS = [
     "<background-results>",
     "<inbox>",
 ]
+
+USER_NOTE_PREFIX = re.compile(
+    r"^\s*(?:请记住|记住这个|加入长期记忆|保存到长期记忆|以后记得|"
+    r"remember this|remember that|save this to memory)\s*[：:，,\-]?\s*",
+    re.IGNORECASE,
+)
 
 
 def _is_substantive_user_message(content: str) -> bool:
@@ -51,11 +62,21 @@ def _extract_text_from_content(content: Any) -> str:
     if isinstance(content, list):
         parts = []
         for block in content:
-            if isinstance(block, dict) and block.get("type") == "text":
-                parts.append(block.get("text", ""))
+            if isinstance(block, dict):
+                # Content blocks from DeepSeek/Anthropic
+                if block.get("type") == "text":
+                    parts.append(block.get("text", ""))
+                # Skip thinking blocks — they're internal reasoning
+                elif block.get("type") == "thinking":
+                    continue
+                else:
+                    parts.append(str(block))
+            elif isinstance(block, str):
+                # Plain strings in content lists (DeepSeek returns these)
+                parts.append(block)
             elif hasattr(block, "text"):
                 parts.append(block.text)
-        return "\n".join(parts) if parts else str(content)
+        return "\n".join(parts) if parts else ""
     return str(content)
 
 
@@ -133,10 +154,20 @@ class MemoryAccumulator:
 
         accumulator["round_count"] += 1
 
-        # --- Extract user request (first substantive user message) ---
+        # --- Extract the request for THIS task invocation ---
+        #
+        # A checkpoint contains the full chat history. After a completed task
+        # resets the accumulator, scanning messages from the beginning would
+        # bind every later task to the first user message in the session. The
+        # API now supplies current_user_request on every invocation. The
+        # reverse scan remains as a compatibility fallback for old checkpoints.
         if not accumulator.get("user_request"):
-            # Find the first substantive user message in the conversation
-            for msg in messages:
+            current_request = state.get("current_user_request", "")
+            if _is_substantive_user_message(current_request):
+                accumulator["user_request"] = current_request[:500]
+
+        if not accumulator.get("user_request"):
+            for msg in reversed(messages):
                 content = ""
                 if isinstance(msg, dict):
                     if msg.get("role") == "user":
@@ -145,7 +176,6 @@ class MemoryAccumulator:
                     content = _extract_text_from_content(msg.content if hasattr(msg, "content") else "")
 
                 if content and _is_substantive_user_message(content):
-                    # Truncate very long requests for accumulator storage
                     accumulator["user_request"] = content[:500] if len(content) > 500 else content
                     break
 
@@ -231,6 +261,7 @@ class MemoryAccumulator:
         session_id: str,
         user_id: int,
         messages: List[Any] = None,
+        task_context: Dict[str, Any] = None,
     ) -> Dict[str, Any]:
         """Flush accumulated content to Chroma as a task_summary document.
 
@@ -249,21 +280,59 @@ class MemoryAccumulator:
             messages: Full conversation messages (for pattern extraction context)
 
         Returns:
-            Dict with: accumulator_reset (empty dict), stored (bool), importance (float)
+            Dict with accumulator_reset, stored, importance, memory_type and
+            the explainable admission reason.
         """
         user_request = accumulator.get("user_request", "")
         assistant_responses = accumulator.get("assistant_responses", [])
         tool_actions = accumulator.get("tool_actions", [])
         round_count = accumulator.get("round_count", 0)
         context_summary_pre = accumulator.get("context_summary_pre", "")
+        task_context = task_context or {}
 
         if not user_request:
             logger.debug("[accumulator] No user_request to flush, skipping")
-            return {"accumulator_reset": self._new_accumulator(), "stored": False, "importance": 0.0}
+            return {
+                "accumulator_reset": self._new_accumulator(),
+                "stored": False,
+                "importance": 0.0,
+                "memory_type": "task_outcome",
+                "reason": "empty_user_request",
+            }
+
+        policy = MemoryAdmissionPolicy()
+        policy_args = {
+            "user_request": user_request,
+            "task_status": task_context.get("task_status", ""),
+            "tool_execution_records": task_context.get("tool_execution_records", []),
+            "changed_files": task_context.get("changed_files", []),
+            "validation_results": task_context.get("validation_results", []),
+        }
+
+        # Reject failed, cancelled, non-engineering and evidence-free tasks
+        # before spending another model call on summarization/importance.
+        preflight = policy.decide(importance=1.0, **policy_args)
+        if not preflight.accepted:
+            logger.info(
+                "[accumulator] Long-term memory rejected before summarization: %s",
+                preflight.reason,
+            )
+            return {
+                "accumulator_reset": self._new_accumulator(),
+                "stored": False,
+                "importance": 0.0,
+                "memory_type": preflight.memory_type,
+                "reason": preflight.reason,
+            }
 
         # --- Step 1: Format content for storage ---
+        # An explicit user note is already authoritative source material. Do
+        # not ask a model to expand it into invented Actions/Result/Findings.
+        if preflight.memory_type == "user_note":
+            content = self._format_user_note(user_request)
+            importance = 1.0
         # Simple path: for short conversations (1-2 rounds), skip LLM summary generation
-        if round_count <= 2 and len(tool_actions) <= 2:
+        elif round_count <= 2 and len(tool_actions) <= 2:
             content = self._format_simple_content(user_request, assistant_responses, context_summary_pre)
             importance = await self._evaluate_importance(content, user_id, messages)
         else:
@@ -273,9 +342,11 @@ class MemoryAccumulator:
             )
             importance = await self._evaluate_importance(content, user_id, messages)
 
-        # --- Step 2: Store to Chroma if important enough ---
+        # --- Step 2: Apply the final admission gate and store if accepted ---
         stored = False
-        if importance >= settings.IMPORTANCE_THRESHOLD_STORE and user_id:
+        stored_doc_id = ""
+        admission = policy.decide(importance=importance, **policy_args)
+        if admission.accepted and user_id:
             try:
                 from enterprise_agent.memory.long_term import get_long_term_memory
                 memory = get_long_term_memory(user_id)
@@ -284,7 +355,13 @@ class MemoryAccumulator:
                 dedup_skip = await self._check_dedup(memory, user_request)
                 if dedup_skip:
                     logger.debug("[accumulator] Skipped duplicate task summary")
-                    return {"accumulator_reset": self._new_accumulator(), "stored": False, "importance": importance}
+                    return {
+                        "accumulator_reset": self._new_accumulator(),
+                        "stored": False,
+                        "importance": importance,
+                        "memory_type": admission.memory_type,
+                        "reason": "duplicate_active_memory",
+                    }
 
                 doc_id = await memory.store_conversation(
                     session_id=session_id,
@@ -295,26 +372,62 @@ class MemoryAccumulator:
                         "access_count": 0,
                         "rounds": round_count,
                         "has_tool_actions": len(tool_actions) > 0,
+                        "memory_type": admission.memory_type,
+                        "schema_version": MEMORY_SCHEMA_VERSION,
+                        "quality_status": ACTIVE_QUALITY_STATUS,
+                        "task_status": task_context.get("task_status", ""),
+                        "admission_reason": admission.reason,
+                        "source": "finalized_task",
+                        "trace_id": task_context.get("trace_id", ""),
+                        "execution_mode": task_context.get("execution_mode", "single_agent"),
+                        "content_format": (
+                            "atomic_note"
+                            if admission.memory_type == "user_note"
+                            else "structured_task_summary"
+                        ),
+                        "retrieval_enabled": True,
                     },
                 )
                 stored = True
-                logger.info(f"[accumulator] Stored task_summary (importance={importance:.2f}, {round_count} rounds, doc_id={doc_id})")
+                stored_doc_id = doc_id
+                logger.info(
+                    "[accumulator] Stored task_summary "
+                    f"(importance={importance:.2f}, {round_count} rounds, doc_id={doc_id})"
+                )
 
             except Exception as e:
                 logger.warning(f"[accumulator] Chroma storage failed (non-fatal): {e}", exc_info=True)
+        elif not admission.accepted:
+            logger.info(
+                "[accumulator] Long-term memory rejected after scoring: %s",
+                admission.reason,
+            )
 
-        # --- Step 3: Extract patterns if high importance ---
-        if stored and importance >= settings.IMPORTANCE_THRESHOLD_PATTERN and assistant_responses:
+        # --- Step 3: Extract only explicitly durable user patterns ---
+        if (
+            stored
+            and admission.memory_type != "user_note"
+            and importance >= settings.IMPORTANCE_THRESHOLD_PATTERN
+            and assistant_responses
+            and has_durable_pattern_signal(user_request)
+        ):
             try:
                 from enterprise_agent.memory.pattern_extractor import get_pattern_extractor
                 extractor = get_pattern_extractor()
 
                 # Use the original user request + key assistant response
                 key_response = assistant_responses[-1] if assistant_responses else ""
+                # Convert messages to dicts (they may be LangChain objects)
+                context_dicts = []
+                for m in (messages or []):
+                    if hasattr(m, 'type'):
+                        context_dicts.append({'role': m.type, 'content': str(m.content)[:200]})
+                    elif isinstance(m, dict):
+                        context_dicts.append(m)
                 patterns = await extractor.extract_patterns_from_conversation(
                     user_msg=user_request,
                     assistant_msg=key_response,
-                    context=messages[-5:] if messages and len(messages) >= 5 else (messages or []),
+                    context=context_dicts,
                 )
 
                 if patterns:
@@ -325,7 +438,11 @@ class MemoryAccumulator:
                             pattern_type=p.get("type", "preference"),
                             pattern_key=p.get("key", "unknown"),
                             pattern_value=p.get("value", {}),
+                            source_memory_id=stored_doc_id,
                             confidence=p.get("confidence", 0.7),
+                            source="explicit_user_signal",
+                            source_trace_id=task_context.get("trace_id", ""),
+                            source_session_id=session_id,
                         )
                     logger.info(f"[accumulator] Extracted {len(patterns)} patterns from task_summary")
 
@@ -336,7 +453,14 @@ class MemoryAccumulator:
             "accumulator_reset": self._new_accumulator(),
             "stored": stored,
             "importance": importance,
+            "memory_type": admission.memory_type,
+            "reason": admission.reason,
         }
+
+    def _format_user_note(self, user_request: str) -> str:
+        """Keep explicit durable notes canonical and free of model narration."""
+        note = USER_NOTE_PREFIX.sub("", user_request or "", count=1).strip()
+        return f"[User Note]\n{note or user_request.strip()}"
 
     def _format_simple_content(
         self,
@@ -365,14 +489,19 @@ class MemoryAccumulator:
         Reuses the summarization approach from ContextManager.auto_compact
         but formats the output as a structured document for Chroma storage.
         """
-        from enterprise_agent.core.agent.llm_factory import get_llm
         from langchain_core.messages import HumanMessage
+
+        from enterprise_agent.core.agent.llm_factory import get_llm
 
         # Build the input for LLM summarization
         actions_text = "\n".join(f"  - {a}" for a in tool_actions) if tool_actions else "None"
-        responses_text = "\n".join(f"  - {r[:300]}" for r in assistant_responses[-3:]) if assistant_responses else "None"
+        responses_text = (
+            "\n".join(f"  - {response[:300]}" for response in assistant_responses[-3:])
+            if assistant_responses else "None"
+        )
 
-        prompt = f"""Generate a structured task summary for memory storage. This summary will be stored in a vector database for future semantic retrieval.
+        prompt = f"""Generate a structured task summary for memory storage.
+This summary will be stored in a vector database for future semantic retrieval.
 
 {f"[Prior compressed context]: {context_summary_pre}" if context_summary_pre else ""}
 
@@ -394,7 +523,15 @@ Keep total length under 500 words. Be specific (mention actual file paths, comma
 
         try:
             llm = get_llm()
-            response = await llm.ainvoke([HumanMessage(content=prompt)])
+            # Suppress callbacks so LangGraph stream_mode doesn't capture
+            # these internal evaluation tokens as user-facing output.
+            # tags=["memory_internal"] provides an additional hint for
+            # LangGraph 1.0+ to exclude these from message streaming.
+            response = await llm.with_config(
+                {"callbacks": [], "tags": ["memory_internal"]}
+            ).ainvoke(
+                [HumanMessage(content=prompt)]
+            )
             summary = _extract_text_from_content(response.content)
             logger.info(f"[accumulator] Generated task summary ({len(summary)} chars)")
             return summary
@@ -454,12 +591,17 @@ Keep total length under 500 words. Be specific (mention actual file paths, comma
             recent = await memory.search_conversations(
                 query=user_request,  # Use full text for semantic search
                 n_results=3,
+                role="task_summary",
+                active_only=True,
             )
             for r in recent:
                 distance = r.get("distance")
-                # Chroma vector distance < 0.3 = semantically near-duplicate
+                # Configurable L2 threshold for semantically near-identical tasks.
                 # (L2 distance in embedding space, lower = more similar)
-                if distance is not None and distance < 0.3:
+                if (
+                    distance is not None
+                    and distance < settings.MEMORY_DEDUP_MAX_DISTANCE
+                ):
                     return True
             return False
         except Exception:

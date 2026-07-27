@@ -2,7 +2,7 @@
 
 Imports and registers all available tools for use with LangGraph.
 Tools are organized by module:
-- file_ops: read_file, write_file, edit_file
+- file_ops: read_file, write_file, edit_file, delete_paths
 - shell: bash
 - task: todo_update, task_create, task_get, task_update, task_list, claim_task
 - subagent: task (subagent delegation)
@@ -11,7 +11,10 @@ Tools are organized by module:
 - team: spawn_teammate, list_teammates, send_message, read_inbox,
         broadcast, shutdown_request, plan_approval, idle
 - context_tools: compress, list_transcripts, get_transcript, context_status
+- memory: search_memory
 """
+
+from enterprise_agent.config.settings import settings
 
 # File operations
 # Background tasks
@@ -27,11 +30,22 @@ from enterprise_agent.core.agent.tools.context_tools import (
     get_transcript,
     list_transcripts,
 )
+from enterprise_agent.core.agent.tools.contracts import (
+    TOOL_CONTRACTS,
+    RiskLevel,
+    get_tool_contract,
+    resolve_tool_risk,
+    validate_tool_contracts,
+)
 from enterprise_agent.core.agent.tools.file_ops import (
+    delete_paths,
     edit_file,
     read_file,
     write_file,
 )
+
+# Memory query
+from enterprise_agent.core.agent.tools.memory import search_memory
 
 # Shell execution
 from enterprise_agent.core.agent.tools.shell import bash
@@ -44,6 +58,7 @@ from enterprise_agent.core.agent.tools.skills import (
 )
 
 # Subagent delegation
+from enterprise_agent.core.agent.tools.subagent import delegate_task
 from enterprise_agent.core.agent.tools.subagent import task as subagent_task
 
 # Task management
@@ -71,41 +86,35 @@ from enterprise_agent.core.agent.tools.team import (
 # === Human-in-the-loop: Sensitive Tools ===
 # These tools require user confirmation before execution
 SENSITIVE_TOOLS = {
-    "bash",           # Shell commands (delete, modify files, etc.)
-    "write_file",     # Write/create files
-    "edit_file",      # Edit existing files
-    "task_create",    # Create background tasks
-    "spawn_teammate", # Spawn subagent
-    "send_message",   # Send message to teammate
-    "broadcast",      # Broadcast to all teammates
+    name for name, contract in TOOL_CONTRACTS.items()
+    if contract.requires_confirmation
 }
 
 # Read-only tools that never require confirmation
 SAFE_TOOLS = {
-    "read_file",
-    "list_skills",
-    "list_teammates",
-    "list_transcripts",
-    "get_transcript",
-    "context_status",
-    "check_background",
-    "read_inbox",
-    "task_list",
-    "task_get",
-    "todo_update",  # Task tracking is safe
+    name for name, contract in TOOL_CONTRACTS.items()
+    if not contract.requires_confirmation
 }
 
 
-def tool_requires_confirmation(tool_name: str) -> bool:
-    """Check if tool requires user confirmation before execution.
+def tool_requires_confirmation(tool_name: str, tool_args: dict | None = None) -> bool:
+    """Check whether this concrete tool call needs human confirmation.
 
-    Args:
-        tool_name: Name of the tool
-
-    Returns:
-        True if tool requires confirmation
+    Shell commands use argument-level risk: safe calls run automatically,
+    review-level calls require confirmation, and dangerous calls proceed only
+    to the executor where the shell policy blocks and traces them. Other tools
+    retain their static contract policy.
     """
-    return tool_name in SENSITIVE_TOOLS
+    try:
+        contract = get_tool_contract(tool_name)
+    except KeyError:
+        # Unknown tools fail closed if they somehow reach policy evaluation.
+        return True
+    if not contract.requires_confirmation:
+        return False
+    if tool_name in {"bash", "background_run"} and tool_args is not None:
+        return resolve_tool_risk(tool_name, tool_args) == RiskLevel.REVIEW
+    return True
 
 
 def get_sensitive_tool_info(tool_name: str, tool_args: dict) -> str:
@@ -133,9 +142,23 @@ def get_sensitive_tool_info(tool_name: str, tool_args: dict) -> str:
         old = tool_args.get("old_text", "")[:30]
         new = tool_args.get("new_text", "")[:30]
         return f"Edit file: `{path}` (replace `{old}` with `{new}`)"
+    elif tool_name == "delete_paths":
+        paths = [str(path) for path in tool_args.get("paths", [])]
+        shown = ", ".join(f"`{path}`" for path in paths[:10])
+        if len(paths) > 10:
+            shown += f", ... ({len(paths) - 10} more)"
+        reason = str(tool_args.get("reason", ""))[:100]
+        return (
+            f"Move {len(paths)} exact path(s) to protected recovery trash: "
+            f"{shown}. Reason: {reason}"
+        )
     elif tool_name == "task_create":
         desc = tool_args.get("description", "")
         return f"Create background task: {desc[:50]}..."
+    elif tool_name == "delegate_task":
+        role = tool_args.get("role", "specialist")
+        prompt = tool_args.get("prompt", "")[:50]
+        return f"Delegate to real {role} subagent: {prompt}..."
     elif tool_name == "spawn_teammate":
         role = tool_args.get("role", "")
         return f"Spawn teammate agent: {role}"
@@ -157,6 +180,7 @@ ALL_TOOLS = [
     read_file,
     write_file,
     edit_file,
+    delete_paths,
 
     # Shell
     bash,
@@ -171,6 +195,7 @@ ALL_TOOLS = [
 
     # Subagent
     subagent_task,
+    delegate_task,
 
     # Background
     background_run,
@@ -196,10 +221,26 @@ ALL_TOOLS = [
     list_transcripts,
     get_transcript,
     context_status,
+
+    # Memory
+    search_memory,
 ]
 
+# Fail at import/startup when executable tools and their safety metadata drift.
+validate_tool_contracts(ALL_TOOLS)
 
-def get_tools_for_permissions(user_permissions: list) -> list:
+
+MULTI_AGENT_TOOL_NAMES = {
+    "task", "delegate_task", "spawn_teammate", "list_teammates", "send_message", "read_inbox",
+    "broadcast", "shutdown_request", "plan_approval", "idle",
+}
+
+
+def get_tools_for_permissions(
+    user_permissions: list,
+    *,
+    enable_multi_agent: bool | None = None,
+) -> list:
     """Filter tools based on user permissions.
 
     Args:
@@ -211,10 +252,24 @@ def get_tools_for_permissions(user_permissions: list) -> list:
     # Permission mapping
     # Format: 'tools:<category>' grants access to that category
     permission_map = {
-        "tools:file": [read_file, write_file, edit_file],
-        "tools:shell": [bash],
+        # JWT role permissions used by enterprise_agent.auth.permissions.
+        "tools:basic": [
+            read_file, write_file, edit_file, delete_paths,
+            todo_update, task_create, task_get, task_update, task_list, claim_task,
+            load_skill, list_skills,
+            compress, list_transcripts, get_transcript, context_status,
+            search_memory,
+        ],
+        "tools:shell": [bash, background_run, check_background],
+        "tools:advanced": [
+            subagent_task, delegate_task, reload_skills,
+            spawn_teammate, list_teammates, send_message, read_inbox,
+            broadcast, shutdown_request, plan_approval, idle,
+        ],
+        # Legacy category permissions retained for compatibility.
+        "tools:file": [read_file, write_file, edit_file, delete_paths],
         "tools:task": [todo_update, task_create, task_get, task_update, task_list, claim_task],
-        "tools:subagent": [subagent_task],
+        "tools:subagent": [subagent_task, delegate_task],
         "tools:background": [background_run, check_background],
         "tools:skills": [load_skill, list_skills, reload_skills],
         "tools:team": [
@@ -222,13 +277,14 @@ def get_tools_for_permissions(user_permissions: list) -> list:
             broadcast, shutdown_request, plan_approval, idle,
         ],
         "tools:context": [compress, list_transcripts, get_transcript, context_status],
+        "tools:memory": [search_memory],
         "tools:all": ALL_TOOLS,
     }
 
     # If no permissions, return basic tools (file + task + context)
     if not user_permissions:
         return [
-            read_file, write_file, edit_file,
+            read_file, write_file, edit_file, delete_paths,
             todo_update, task_create, task_get, task_update, task_list,
             load_skill, list_skills,
             compress, context_status
@@ -247,6 +303,11 @@ def get_tools_for_permissions(user_permissions: list) -> list:
         if tool.name not in seen:
             seen.add(tool.name)
             unique_tools.append(tool)
+
+    if enable_multi_agent is None:
+        enable_multi_agent = settings.ENABLE_MULTI_AGENT
+    if not enable_multi_agent:
+        unique_tools = [tool for tool in unique_tools if tool.name not in MULTI_AGENT_TOOL_NAMES]
 
     return unique_tools
 
