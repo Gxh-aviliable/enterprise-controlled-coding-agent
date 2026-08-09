@@ -4,13 +4,18 @@ import re
 import shlex
 import subprocess
 import sys
+import tempfile
 from pathlib import Path
 from typing import Optional
 
 from langchain_core.tools import tool
 
 from enterprise_agent.config.settings import settings
-from enterprise_agent.core.agent.tools.workspace import get_user_workspace, is_sensitive_agent_path
+from enterprise_agent.core.agent.tools.workspace import (
+    get_user_workspace,
+    is_operational_agent_path,
+    is_sensitive_agent_path,
+)
 
 BLOCKED_PATTERNS = [
     "rm -rf /",
@@ -211,6 +216,11 @@ def validate_command(command: str) -> Optional[str]:
                 "sensitive credential paths are not available to Agent shell commands.",
                 "continue without reading Agent, Git, environment, or credential metadata.",
             )
+        if is_operational_agent_path(token):
+            return _blocked(
+                "Agent operational paths are not available to generic shell commands.",
+                "use the dedicated task, team, transcript, or read_tool_artifact tool.",
+            )
 
     for position in positions:
         binary = Path(tokens[position]).name.lower()
@@ -275,6 +285,28 @@ def _shell_execution_kwargs() -> dict[str, object]:
     )
 
 
+def _read_captured_stream(handle) -> tuple[str, bool, int]:
+    """Read useful head/tail output from a file-backed subprocess stream."""
+    handle.flush()
+    handle.seek(0, os.SEEK_END)
+    total_bytes = handle.tell()
+    limit = max(1, settings.TOOL_SOURCE_CAPTURE_MAX_BYTES)
+    handle.seek(0)
+    if total_bytes <= limit:
+        payload = handle.read()
+        return payload.decode("utf-8", errors="replace").strip(), False, total_bytes
+
+    marker = f"\n... [source capture clipped {total_bytes - limit} bytes] ...\n".encode()
+    available = max(0, limit - len(marker))
+    head_size = available * 3 // 5
+    tail_size = available - head_size
+    head = handle.read(head_size)
+    handle.seek(max(0, total_bytes - tail_size))
+    tail = handle.read(tail_size)
+    payload = head + marker + tail
+    return payload.decode("utf-8", errors="replace").strip(), True, total_bytes
+
+
 @tool
 def bash(command: str) -> str:
     """Run a command in workspace using Bash on POSIX or cmd.exe on Windows.
@@ -303,30 +335,30 @@ def bash(command: str) -> str:
         # Unicode characters (emoji, Chinese) in Windows GBK consoles
         env = _safe_subprocess_environment(workdir)
 
-        result = subprocess.run(
-            command,
-            cwd=workdir,
-            capture_output=True,
-            encoding="utf-8",
-            errors="replace",
-            timeout=settings.COMMAND_TIMEOUT_SECONDS,
-            env=env,
-            **_shell_execution_kwargs(),
-        )
-        stdout = (result.stdout or "").strip()
-        stderr = (result.stderr or "").strip()
+        with tempfile.TemporaryFile(mode="w+b") as stdout_file, tempfile.TemporaryFile(
+            mode="w+b"
+        ) as stderr_file:
+            result = subprocess.run(
+                command,
+                cwd=workdir,
+                stdout=stdout_file,
+                stderr=stderr_file,
+                timeout=settings.COMMAND_TIMEOUT_SECONDS,
+                env=env,
+                **_shell_execution_kwargs(),
+            )
+            stdout, stdout_truncated, stdout_bytes = _read_captured_stream(stdout_file)
+            stderr, stderr_truncated, stderr_bytes = _read_captured_stream(stderr_file)
 
-        # Truncate long output
-        max_chars = settings.TOOL_OUTPUT_MAX_CHARS
-        if len(stdout) > max_chars:
-            stdout = stdout[:max_chars] + f"\n... (truncated {len(stdout) - max_chars} chars)"
-        if len(stderr) > max_chars:
-            stderr = stderr[:max_chars] + f"\n... (truncated {len(stderr) - max_chars} chars)"
-
+        # Preserve a complete structured envelope and exit code. Individual
+        # streams are bounded at their source before entering API memory.
         output = json.dumps({
             "stdout": stdout if stdout else "(no output)",
             "stderr": stderr,
             "exit_code": result.returncode,
+            "source_truncated": stdout_truncated or stderr_truncated,
+            "stdout_original_bytes": stdout_bytes,
+            "stderr_original_bytes": stderr_bytes,
         }, ensure_ascii=False)
         return output
 

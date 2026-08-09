@@ -42,11 +42,11 @@ def utc_now_iso() -> str:
     return datetime.now(timezone.utc).isoformat()
 
 
-def redact_text(value: str, limit: int = 2000) -> str:
+def redact_text(value: str, limit: int | None = 2000) -> str:
     redacted = value
     for pattern in STRING_SECRET_PATTERNS:
         redacted = pattern.sub(lambda match: f"{match.group(1) if match.lastindex else ''}[REDACTED]", redacted)
-    if len(redacted) > limit:
+    if limit is not None and len(redacted) > limit:
         redacted = redacted[:limit] + "…[truncated]"
     return redacted
 
@@ -140,6 +140,9 @@ class TraceStore:
                 "tool_duration_ms": 0,
                 "retry_count": 0,
                 "confirmation_count": 0,
+                "pause_count": 0,
+                "resume_count": 0,
+                "paused_duration_ms": 0,
                 "safety_interceptions": 0,
                 "memory_retrieval_queries": 0,
                 "memory_candidates": 0,
@@ -173,6 +176,10 @@ class TraceStore:
     ) -> dict[str, Any]:
         with self._lock:
             trace = self._read(user_id, trace_id)
+            terminal_locked = bool(
+                trace.get("finished_at")
+                and trace.get("status") in {"succeeded", "failed", "cancelled"}
+            )
             clean_data = redact_value(data or {})
             event = {
                 "event_id": str(uuid.uuid4()),
@@ -190,10 +197,10 @@ class TraceStore:
                 metrics["node_count"] += 1
                 metrics["node_duration_ms"] += event["duration_ms"]
                 phase = clean_data.get("phase")
-                if phase:
+                if phase and not terminal_locked:
                     trace["current_phase"] = phase
                 task_status = clean_data.get("task_status")
-                if task_status:
+                if task_status and not terminal_locked:
                     trace["status"] = task_status
             elif event_type == "model":
                 metrics["model_calls"] += 1
@@ -212,9 +219,38 @@ class TraceStore:
                     metrics["tool_failures"] += 1
                 if status == "blocked":
                     metrics["safety_interceptions"] += 1
-            elif event_type == "confirmation" and name == "confirmation_requested":
+            elif (
+                event_type == "confirmation"
+                and name == "confirmation_requested"
+                and not terminal_locked
+            ):
                 metrics["confirmation_count"] += 1
                 trace["status"] = "waiting_confirmation"
+            elif event_type == "control" and not terminal_locked:
+                if name == "pause_requested":
+                    trace["status"] = "pause_requested"
+                elif name == "task_paused":
+                    trace["status"] = "paused"
+                    metrics["pause_count"] = metrics.get("pause_count", 0) + 1
+                elif name == "resume_requested":
+                    trace["status"] = "resuming"
+                elif name == "task_resumed":
+                    trace["status"] = "running"
+                    metrics["resume_count"] = metrics.get("resume_count", 0) + 1
+                    for previous in reversed(trace["events"][:-1]):
+                        if previous.get("type") == "control" and previous.get("name") == "task_paused":
+                            try:
+                                paused_at = datetime.fromisoformat(previous["timestamp"])
+                                resumed_at = datetime.fromisoformat(event["timestamp"])
+                                metrics["paused_duration_ms"] = metrics.get(
+                                    "paused_duration_ms", 0
+                                ) + max(
+                                    0,
+                                    int((resumed_at - paused_at).total_seconds() * 1000),
+                                )
+                            except (KeyError, TypeError, ValueError):
+                                pass
+                            break
             elif event_type == "memory" and name == "memory_retrieval":
                 metrics["memory_retrieval_queries"] += 1
                 metrics["memory_candidates"] += len(clean_data.get("candidates") or [])
@@ -223,7 +259,7 @@ class TraceStore:
                     clean_data.get("injected_tokens") or 0
                 )
 
-            if status == "error":
+            if status == "error" and not terminal_locked:
                 trace["error"] = clean_data.get("error") or clean_data.get("message")
             self._write(user_id, trace)
             return event
@@ -239,6 +275,11 @@ class TraceStore:
     ) -> dict[str, Any]:
         with self._lock:
             trace = self._read(user_id, trace_id)
+            if (
+                trace.get("finished_at")
+                and trace.get("status") in {"succeeded", "failed", "cancelled"}
+            ):
+                return trace
             finished = datetime.now(timezone.utc)
             started = datetime.fromisoformat(trace["started_at"])
             trace["status"] = status

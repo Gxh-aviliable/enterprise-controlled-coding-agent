@@ -186,8 +186,45 @@ async def update_assistant_message(
     message = result.scalar_one_or_none()
     if message is None:
         return False
+    # Terminal task outcomes are authoritative. A delayed/disconnected SSE
+    # generator may finish after the graph has already converged, but it must
+    # never downgrade the durable row or append stale output after that point.
+    if message.status in {"completed", "failed", "cancelled"}:
+        await db.commit()
+        return True
     message.content = f"{message.content}{content}" if append else content
     message.status = status
+    message.updated_at = datetime.now(timezone.utc)
+    await db.commit()
+    return True
+
+
+async def mark_assistant_message_cancelled(
+    db: AsyncSession,
+    *,
+    session_id: str,
+    user_id: int,
+    trace_id: str,
+    tombstone: str,
+) -> bool:
+    """Idempotently terminalize one trace's durable assistant message."""
+    result = await db.execute(
+        select(ChatMessage)
+        .where(
+            ChatMessage.session_id == session_id,
+            ChatMessage.user_id == user_id,
+            ChatMessage.trace_id == trace_id,
+            ChatMessage.role == "assistant",
+        )
+        .with_for_update()
+    )
+    message = result.scalar_one_or_none()
+    if message is None:
+        return False
+    if tombstone not in message.content:
+        separator = "\n\n" if message.content else ""
+        message.content = f"{message.content}{separator}{tombstone}"
+    message.status = "cancelled"
     message.updated_at = datetime.now(timezone.utc)
     await db.commit()
     return True

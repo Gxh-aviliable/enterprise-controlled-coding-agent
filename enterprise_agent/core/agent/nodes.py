@@ -28,19 +28,28 @@ import asyncio
 import json
 import logging
 import platform
+import re
 import time
 from contextlib import suppress
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any, Dict, List
 
-from langchain_core.messages import AIMessage, HumanMessage, SystemMessage, ToolMessage
+from langchain_core.messages import (
+    AIMessage,
+    HumanMessage,
+    RemoveMessage,
+    SystemMessage,
+    ToolMessage,
+)
+from langgraph.graph.message import REMOVE_ALL_MESSAGES
 from langgraph.types import interrupt
 
 from enterprise_agent.config.settings import settings
-from enterprise_agent.core.agent.context import get_context_manager
+from enterprise_agent.core.agent.context import ContextCompressionError, get_context_manager
 from enterprise_agent.core.agent.llm_factory import get_llm
 from enterprise_agent.core.agent.state import AgentState
+from enterprise_agent.core.agent.tool_artifacts import ToolArtifactStore, format_tool_output
 from enterprise_agent.core.agent.tools import (
     ALL_TOOLS,
     get_sensitive_tool_info,
@@ -85,7 +94,7 @@ Delegation is permitted only when multi-Agent mode is explicitly enabled for thi
 Before acting, check these questions. If YES, use the indicated tool:
 
 1. Simple chat? → respond directly (skip tools)
-2. **User asks about their memory/preferences/history?** → First, check <long_term_memory> in the first message.
+2. **Durable-memory question?** → Check <long_term_memory> in system context.
    If empty, incomplete, or the user wants a full listing, use `search_memory`.
    **CRITICAL: ONLY `search_memory` accesses long-term memory.**
    `task_list`, `list_transcripts`, .tasks/, .transcripts/, and .team/ are operational artifacts, not memory.
@@ -103,10 +112,42 @@ Before acting, check these questions. If YES, use the indicated tool:
 - Use the shell commands described in the Environment block for this host OS
 - Shell starts at workspace root: use relative paths; never repeat its server path or hide/merge output
 - On `policy_blocked`, follow its remediation once; on `nonzero_exit`, inspect the real stderr/config
+- Compacted tool messages include a workspace-relative artifact handle and checksum;
+  use `read_tool_artifact(path, sha256, ...)` for verified bounded ranges. Artifacts
+  are redacted/bounded evidence and can carry `source_truncated=true`, not unlimited raw.
+- Compression packets contain a transcript handle; `get_transcript` reads its currently
+  available JSONL backup in bounded ranges. Transcripts are operational backups, not
+  immutable audit evidence or long-term memory.
+  Artifacts may be redacted/source-truncated and are operational evidence, not long-term memory.
 - Track multi-step work with `todo_update`
 - Delete only via `delete_paths`; never bypass it with shell/scripts. Stop on protected paths.
 - Be concise and direct in responses
-- Memory questions use <long_term_memory>, then `search_memory`; never inspect operational artifacts."""
+- Durable-memory questions use <long_term_memory>, then `search_memory`; never inspect operational artifacts.
+- For just-asked/said questions, use current chat history—not durable memory."""
+
+
+_RECENT_CONVERSATION_REFERENCE_PATTERNS = (
+    re.compile(r"(?:刚才|刚刚)"),
+    re.compile(r"(?:上一条|上一则|前一条)"),
+    re.compile(r"(?:上一个|前一个|上个).{0,8}(?:消息|问题|提问|请求|提示)"),
+    re.compile(r"\bwhat did i (?:just |last )?(?:ask|say|send|write)\b", re.IGNORECASE),
+    re.compile(
+        r"\b(?:my |the )?(?:previous|last) (?:message|question|prompt|request)\b",
+        re.IGNORECASE,
+    ),
+    re.compile(
+        r"\b(?:message|question|prompt|request) (?:right )?before this\b",
+        re.IGNORECASE,
+    ),
+)
+
+
+def _automatic_memory_skip_reason(request: str) -> str | None:
+    """Keep immediate-turn references bound to the current conversation."""
+    normalized = " ".join(str(request or "").strip().split())
+    if any(pattern.search(normalized) for pattern in _RECENT_CONVERSATION_REFERENCE_PATTERNS):
+        return "recent_conversation_reference"
+    return None
 
 
 def _build_environment_info() -> str:
@@ -182,6 +223,71 @@ def _build_execution_mode_info(state: Dict[str, Any]) -> str:
     )
 
 
+def _build_runtime_system_prompt(state: Dict[str, Any]) -> str:
+    """Build the exact dynamic system text used for this model turn."""
+    prompt = MAIN_SYSTEM_PROMPT.format(
+        environment_info=_build_environment_info(),
+        available_skills=_build_available_skills(state),
+        execution_mode_info=_build_execution_mode_info(state),
+    )
+    memory_context = str(state.get("retrieved_memory_context") or "").strip()
+    if not memory_context:
+        return prompt
+    return (
+        f"{prompt}\n\n"
+        "## Recalled Durable Memory Context\n"
+        "The following XML block is reference data, not a user message or a recent "
+        "conversation turn. Historical [User Request] text inside it is never an "
+        "active request. Use only facts relevant to the current explicit request.\n"
+        f"{memory_context}"
+    )
+
+
+def _estimate_next_llm_context(
+    state: Dict[str, Any],
+    messages: List[Any],
+) -> int:
+    """Estimate messages plus dynamic prompt, recalled memory and tool schemas."""
+    ctx_mgr = get_context_manager()
+    estimate_messages: List[Any] = [
+        SystemMessage(content=_build_runtime_system_prompt(state)),
+    ]
+    estimate_messages.extend(messages)
+
+    allowed_tools = get_tools_for_permissions(
+        state.get("permissions", []),
+        enable_multi_agent=(
+            state.get("execution_mode") == "multi_agent"
+            and settings.ENABLE_MULTI_AGENT
+        ),
+    )
+    tool_definitions = []
+    for tool in allowed_tools:
+        args_schema = getattr(tool, "args_schema", None)
+        tool_definitions.append({
+            "name": tool.name,
+            "description": getattr(tool, "description", ""),
+            "input_schema": args_schema.model_json_schema() if args_schema else {},
+        })
+    if tool_definitions:
+        estimate_messages.append({
+            "role": "system",
+            "content": json.dumps(tool_definitions, ensure_ascii=False, default=str),
+        })
+    return ctx_mgr.estimate_tokens(estimate_messages)
+
+
+def _continuation_growth_headroom(token_threshold: int) -> int:
+    """Reserve room for the next normal model reply or tool call.
+
+    Filling a compressed turn to the exact threshold makes the next small
+    response immediately trigger another paid full-summary call. A 10% reserve
+    (at least 1K tokens) prevents that compression loop while keeping the
+    configured context boundary authoritative.
+    """
+    return max(1_024, int(token_threshold * 0.10))
+
+
 def get_llm_with_tools(
     permissions: List[str] | None = None,
     execution_mode: str = "single_agent",
@@ -242,7 +348,8 @@ def _convert_to_langchain_messages(messages: List[Any]) -> List[Any]:
             elif role == "tool":
                 result.append(ToolMessage(
                     content=content,
-                    tool_call_id=msg.get("tool_call_id", "")
+                    tool_call_id=msg.get("tool_call_id", ""),
+                    artifact=msg.get("artifact"),
                 ))
             else:
                 result.append(HumanMessage(content=content))
@@ -285,6 +392,9 @@ def _convert_from_langchain_messages(messages: List[Any]) -> List[Dict]:
             entry = {"role": role, "content": content}
             if tool_call_id:
                 entry["tool_call_id"] = tool_call_id
+            artifact = getattr(msg, "artifact", None)
+            if artifact:
+                entry["artifact"] = artifact
 
             # Extract tool calls from AIMessage
             if hasattr(msg, "tool_calls") and msg.tool_calls:
@@ -365,7 +475,38 @@ def _record_tool_trace(
             "attempt_count": record.attempt_count,
             "error_code": record.error_code,
             "exit_code": record.exit_code,
+            "artifact_path": record.artifact_path,
+            "artifact_sha256": record.artifact_sha256,
+            "artifact_bytes": record.artifact_bytes,
+            "original_chars": record.original_chars,
+            "model_chars": record.model_chars,
+            "source_truncated": record.source_truncated,
+            "model_truncated": record.model_truncated,
+            "artifact_redacted": record.artifact_redacted,
+            "artifact_error": record.artifact_error,
             **contract_data,
+        },
+    )
+
+
+def _record_summary_model_trace(
+    state: AgentState,
+    compression_result: Dict[str, Any],
+) -> None:
+    """Account for the otherwise hidden LLM call used to summarize context."""
+    _record_trace(
+        state,
+        event_type="model",
+        name="context_summary",
+        duration_ms=compression_result.get("summary_duration_ms", 0),
+        data={
+            "message_count": 1,
+            "input_summary": "Context continuity summarization",
+            "output_summary": str(compression_result.get("context_summary", ""))[:1000],
+            "input_tokens": compression_result.get("summary_input_tokens", 0),
+            "output_tokens": compression_result.get("summary_output_tokens", 0),
+            "total_tokens": compression_result.get("summary_usage_tokens", 0),
+            "retry_count": 0,
         },
     )
 
@@ -403,6 +544,149 @@ async def task_parse_node(state: AgentState) -> Dict[str, Any]:
 async def plan_task_node(state: AgentState) -> Dict[str, Any]:
     """Mark the planning phase before the first model decision."""
     return {"execution_phase": ExecutionPhase.PLANNING.value}
+
+
+async def pause_gate_node(
+    state: AgentState,
+    resume_target: str,
+) -> Dict[str, Any]:
+    """Acknowledge an exact Redis pause request at a safe graph boundary.
+
+    This node deliberately does *not* call :func:`interrupt`.  Its returned
+    ``paused`` status must first be committed by the graph checkpointer; the
+    following ``user_pause`` node then creates the resumable interrupt.  This
+    mirrors the existing prepare-confirm/confirm split used by HITL.
+    """
+    if state.get("task_status") != TaskStatus.RUNNING.value:
+        return {}
+
+    user_id = state.get("user_id")
+    session_id = state.get("session_id", "")
+    trace_id = state.get("trace_id", "")
+    if user_id is None or not session_id or not trace_id:
+        return {}
+
+    from enterprise_agent.core.execution.pause_control import get_task_pause_request
+
+    request = await get_task_pause_request(
+        int(user_id),
+        str(session_id),
+        str(trace_id),
+    )
+    if request is None:
+        return {}
+
+    paused_at = _utc_now_iso()
+    _record_trace(
+        state,
+        event_type="control",
+        name="task_paused",
+        status="paused",
+        data={
+            "task_status": TaskStatus.PAUSED.value,
+            "requested_at": request.get("requested_at"),
+            "paused_at": paused_at,
+            "reason": request.get("reason"),
+            "resume_target": resume_target,
+        },
+    )
+    return {
+        "task_status": transition_task_status(
+            state.get("task_status"),
+            TaskStatus.PAUSED,
+        ),
+        "pause_requested_at": request.get("requested_at"),
+        "paused_at": paused_at,
+        "pause_reason": request.get("reason") or "Paused by user",
+        "pause_resume_target": resume_target,
+    }
+
+
+async def user_pause_node(state: AgentState) -> Dict[str, Any]:
+    """Interrupt a checkpointed pause and apply an authenticated resume action."""
+    if state.get("task_status") != TaskStatus.PAUSED.value:
+        return {}
+
+    trace_id = str(state.get("trace_id", ""))
+    response = interrupt({
+        "type": "user_pause",
+        "trace_id": trace_id,
+        "requested_at": state.get("pause_requested_at"),
+        "paused_at": state.get("paused_at"),
+        "reason": state.get("pause_reason"),
+        "resume_target": state.get("pause_resume_target"),
+    })
+
+    if not isinstance(response, dict):
+        raise ValueError("Invalid user-pause resume payload")
+    if str(response.get("trace_id", "")) != trace_id:
+        raise ValueError("User-pause resume trace does not match checkpoint")
+
+    action = str(response.get("action", ""))
+    if action not in {"continue", "cancel"}:
+        raise ValueError("User-pause action must be 'continue' or 'cancel'")
+
+    from enterprise_agent.core.execution.pause_control import clear_task_pause_request
+
+    await clear_task_pause_request(
+        int(state["user_id"]),
+        str(state["session_id"]),
+        trace_id,
+    )
+
+    if action == "cancel":
+        reason = str(response.get("reason") or "Cancelled by user while paused")[:500]
+        _record_trace(
+            state,
+            event_type="control",
+            name="paused_task_cancelled",
+            status="cancelled",
+            data={"reason": reason, "resume_target": state.get("pause_resume_target")},
+        )
+        return {
+            "task_status": transition_task_status(
+                state.get("task_status"),
+                TaskStatus.CANCELLED,
+            ),
+            "failure_reason": reason,
+            "should_end_after_save": True,
+            "pause_requested_at": None,
+            "paused_at": None,
+            "pause_reason": None,
+            "pause_resume_target": None,
+        }
+
+    _record_trace(
+        state,
+        event_type="control",
+        name="task_resumed",
+        status="running",
+        data={
+            "task_status": TaskStatus.RUNNING.value,
+            "paused_at": state.get("paused_at"),
+            "resume_target": state.get("pause_resume_target"),
+        },
+    )
+    return {
+        "task_status": transition_task_status(
+            state.get("task_status"),
+            TaskStatus.RUNNING,
+        ),
+        "pause_requested_at": None,
+        "paused_at": None,
+        "pause_reason": None,
+        "pause_resume_target": None,
+    }
+
+
+def route_after_pause_gate(state: AgentState) -> str:
+    """Enter the pause interrupt only after ``paused`` was checkpointed."""
+    return "pause" if state.get("task_status") == TaskStatus.PAUSED.value else "continue"
+
+
+def route_after_user_pause(state: AgentState) -> str:
+    """A cancelled paused task terminalizes; a continued task resumes its edge."""
+    return "cancel" if state.get("task_status") == TaskStatus.CANCELLED.value else "continue"
 
 
 async def prepare_tool_execution_node(state: AgentState) -> Dict[str, Any]:
@@ -459,7 +743,7 @@ CODE_FILE_SUFFIXES = {
 }
 CODE_FILE_NAMES = {"Dockerfile", "Makefile", "pyproject.toml", "package.json"}
 VALIDATION_MARKERS = (
-    "pytest", "unittest", "ruff", "mypy", "pyright", "compileall",
+    "pytest", "unittest", "ruff", "mypy", "pyright", "compileall", "py_compile",
     "npm test", "npm run test", "npm run build", "npm run lint",
     "pnpm test", "pnpm run build", "pnpm run lint", "yarn test", "yarn build",
     "cargo test", "go test", "make test", "gradle test", "mvn test",
@@ -644,6 +928,7 @@ async def init_context_node(state: AgentState) -> Dict[str, Any]:
         "created_task_ids": [],
         "round_count": 0,
         "should_compress": False,
+        "context_overflow_recovery_attempts": 0,
         "should_end": False,
         "should_end_after_save": False,  # Reset - will be set by llm_call_node if no tool calls
         # TodoWrite nag reminder state
@@ -654,6 +939,10 @@ async def init_context_node(state: AgentState) -> Dict[str, Any]:
         "validation_results": [],
         "verification_attempts": 0,
         "confirmation_deadline": None,
+        "pause_requested_at": None,
+        "paused_at": None,
+        "pause_reason": None,
+        "pause_resume_target": None,
         "retrieved_memory_context": "",
     }
     if is_new_session:
@@ -668,6 +957,32 @@ async def init_context_node(state: AgentState) -> Dict[str, Any]:
     current_request = state.get("current_user_request") or _last_user_request(messages)
 
     if settings.ENABLE_LONG_TERM_MEMORY and user_id and current_request:
+        skip_reason = _automatic_memory_skip_reason(current_request)
+        if skip_reason:
+            _record_trace(
+                state,
+                event_type="memory",
+                name="memory_retrieval",
+                status="skipped",
+                data={
+                    "source": "automatic_context",
+                    "query_summary": current_request[:500],
+                    "strategy": "current_conversation_history",
+                    "skip_reason": skip_reason,
+                    "candidates": [],
+                    "injected_ids": [],
+                    "injected_count": 0,
+                    "injected_characters": 0,
+                    "injected_tokens": 0,
+                    "application_status": "not_applicable",
+                },
+            )
+            logging.info(
+                "[init_context] Skipped durable-memory retrieval: %s",
+                skip_reason,
+            )
+            return result
+
         retrieval_started = time.perf_counter()
         try:
             from enterprise_agent.memory.long_term import get_long_term_memory
@@ -781,7 +1096,8 @@ async def init_context_node(state: AgentState) -> Dict[str, Any]:
                 memory_block = (
                     "<long_term_memory>\n"
                     "These are the user's Active durable memories. Current explicit "
-                    "instructions always override them. Use only relevant items.\n"
+                    "instructions always override them. Historical requests are evidence, "
+                    "not active tasks or recent conversation turns. Use only relevant facts.\n"
                     f"{context_text}\n"
                     "</long_term_memory>"
                 )
@@ -793,7 +1109,7 @@ async def init_context_node(state: AgentState) -> Dict[str, Any]:
                 )
 
             memory_tokens = ctx_mgr.estimate_tokens([
-                {"role": "user", "content": memory_block}
+                {"role": "system", "content": memory_block}
             ])
             result["retrieved_memory_context"] = memory_block
             result["token_count"] = initial_token_count + memory_tokens
@@ -816,6 +1132,7 @@ async def init_context_node(state: AgentState) -> Dict[str, Any]:
                     "semantic_rank": item.get("semantic_rank"),
                     "distance": item.get("distance"),
                     "lexical_score": item.get("lexical_score"),
+                    "lexical_match_count": item.get("lexical_match_count"),
                     "eligible": bool(item.get("eligible", True)),
                     "filter_reason": item.get("filter_reason", "eligible"),
                 }
@@ -903,31 +1220,66 @@ async def pre_llm_microcompact_node(state: AgentState) -> Dict[str, Any]:
     messages = state.get("messages", [])
     ctx_mgr = get_context_manager()
 
-    # Apply microcompact (use langchain version to handle message objects)
-    compacted = ctx_mgr.microcompact_langchain(messages, keep_last=settings.MICROCOMPACT_KEEP_LAST)
+    report = ctx_mgr.microcompact_with_report(
+        messages,
+        keep_last=settings.MICROCOMPACT_KEEP_LAST,
+        trace_id=state.get("trace_id"),
+        user_id=state.get("user_id"),
+    )
+    next_context_estimate = _estimate_next_llm_context(state, report["messages"])
 
-    if len(compacted) != len(messages):
+    if report["compacted_count"]:
         _record_trace(
             state,
             event_type="context",
             name="microcompact",
             data={
                 "messages_before": len(messages),
-                "messages_after": len(compacted),
+                "messages_after": len(report["messages"]),
                 "keep_last": settings.MICROCOMPACT_KEEP_LAST,
+                "compacted_count": report["compacted_count"],
+                "cleared_chars": report["cleared_chars"],
+                "tokens_before": report["tokens_before"],
+                "message_tokens_after": report["tokens_after"],
+                "next_context_tokens": next_context_estimate,
+                "artifact_paths": report["artifact_paths"],
             },
         )
+    if report["artifact_errors"]:
+        _record_trace(
+            state,
+            event_type="context",
+            name="microcompact_artifact_validation",
+            status="error",
+            data={"errors": report["artifact_errors"]},
+        )
+    if not report["compacted_count"]:
+        return {"token_count": next_context_estimate}
 
-    return {"messages": compacted}
+    changed_messages = report["changed_messages"]
+    missing_ids = any(
+        (isinstance(message, dict) and not message.get("id"))
+        or (not isinstance(message, dict) and not getattr(message, "id", None))
+        for message in changed_messages
+    )
+    message_updates = (
+        [RemoveMessage(id=REMOVE_ALL_MESSAGES), *report["messages"]]
+        if missing_ids
+        else changed_messages
+    )
+    return {
+        "messages": message_updates,
+        "token_count": next_context_estimate,
+    }
 
 
 async def llm_call_node(state: AgentState) -> Dict[str, Any]:
     """LLM call node - Invoke LLM with tools bound.
 
     Handles both text responses and tool use requests.
-    Intermediate system-level context uses role="user" with XML tags so
-    MAIN_SYSTEM_PROMPT stays the sole SystemMessage. Long-term recall is held
-    in an ephemeral state field rather than persisted in chat history.
+    MAIN_SYSTEM_PROMPT stays the sole SystemMessage and includes ephemeral
+    long-term recall. Recalled memory is never persisted in chat history or
+    represented as a user-authored message.
     """
     task_tokens_used = max(0, int(state.get("task_token_count", 0) or 0))
     session_tokens_used = max(0, int(state.get("session_token_count", 0) or 0))
@@ -982,16 +1334,9 @@ async def llm_call_node(state: AgentState) -> Dict[str, Any]:
     # Convert to LangChain format for invocation
     lc_messages = _convert_to_langchain_messages(messages)
 
-    # Insert system prompt as the sole SystemMessage at the beginning.
-    # Inject live environment info, available skills
-    lc_messages.insert(0, SystemMessage(content=MAIN_SYSTEM_PROMPT.format(
-        environment_info=_build_environment_info(),
-        available_skills=_build_available_skills(state),
-        execution_mode_info=_build_execution_mode_info(state),
-    )))
-    memory_context = state.get("retrieved_memory_context", "")
-    if memory_context:
-        lc_messages.insert(1, HumanMessage(content=memory_context))
+    # Insert the sole SystemMessage at the beginning. It contains live
+    # environment information, available skills and ephemeral recalled memory.
+    lc_messages.insert(0, SystemMessage(content=_build_runtime_system_prompt(state)))
 
     # Log: entering LLM call
     msg_count = len(lc_messages)
@@ -1015,6 +1360,43 @@ async def llm_call_node(state: AgentState) -> Dict[str, Any]:
         except Exception as e:
             # Don't retry on permanent errors (auth, bad request, not found)
             error_msg = str(e).lower()
+            context_overflow = any(pattern in error_msg for pattern in (
+                "context length",
+                "context_length",
+                "maximum context",
+                "too many tokens",
+                "prompt is too long",
+                "input is too long",
+            ))
+            recovery_attempts = max(
+                0,
+                int(state.get("context_overflow_recovery_attempts", 0) or 0),
+            )
+            if context_overflow and recovery_attempts < 1:
+                _record_trace(
+                    state,
+                    event_type="context",
+                    name="provider_context_overflow",
+                    status="error",
+                    duration_ms=int((time.perf_counter() - model_started) * 1000),
+                    data={
+                        "message_count": msg_count,
+                        "input_chars": total_chars,
+                        "active_token_estimate": state.get("token_count", 0),
+                        "recovery_attempt": recovery_attempts + 1,
+                    },
+                )
+                return {
+                    "pending_tool_calls": [],
+                    "should_compress": True,
+                    "should_end_after_save": False,
+                    "token_count": max(
+                        int(state.get("token_count", 0) or 0),
+                        get_context_manager().token_threshold,
+                    ),
+                    "context_overflow_recovery_attempts": recovery_attempts + 1,
+                    "execution_phase": ExecutionPhase.EXECUTING.value,
+                }
             non_retryable = any(code in error_msg for code in (
                 '401', '403', '400', '404', 'invalid', 'unauthorized',
                 'authentication', 'permission', 'not found'
@@ -1061,22 +1443,30 @@ async def llm_call_node(state: AgentState) -> Dict[str, Any]:
         logging.info(f"[llm_call] → text response: {text_preview}")
 
     # Track token usage
-    token_count = state.get("token_count", 0)
     task_token_count = state.get("task_token_count", 0)
     session_token_count = state.get("session_token_count", 0)
     usage = getattr(response, "usage_metadata", {})
+    ctx_mgr = get_context_manager()
     if usage:
-        usage_tokens = usage.get("total_tokens", 0)
-        token_count += usage_tokens
+        usage_tokens = int(usage.get("total_tokens", 0) or 0)
+        input_tokens = int(usage.get("input_tokens", 0) or 0)
+        output_tokens = int(usage.get("output_tokens", 0) or 0)
+        context_token_count = input_tokens + output_tokens
+        if context_token_count <= 0:
+            context_token_count = ctx_mgr.estimate_tokens([*lc_messages, response])
+        if usage_tokens <= 0:
+            usage_tokens = context_token_count
         task_token_count += usage_tokens
         session_token_count += usage_tokens
     else:
-        # Estimate if not provided
-        ctx_mgr = get_context_manager()
-        estimated_tokens = ctx_mgr.estimate_tokens([response])
-        token_count += estimated_tokens
-        task_token_count += estimated_tokens
-        session_token_count += estimated_tokens
+        # Estimate both the current active window and cumulative cost when the
+        # provider does not return usage metadata.
+        context_token_count = ctx_mgr.estimate_tokens([*lc_messages, response])
+        usage_tokens = context_token_count
+        input_tokens = 0
+        output_tokens = 0
+        task_token_count += usage_tokens
+        session_token_count += usage_tokens
 
     # Convert response back to dict format
     response_dict = _convert_from_langchain_messages([response])[0]
@@ -1100,9 +1490,10 @@ async def llm_call_node(state: AgentState) -> Dict[str, Any]:
             "input_summary": _last_user_request(messages)[-500:],
             "output_summary": _extract_text(getattr(response, "content", ""))[:1000],
             "tool_calls": [call.get("name") for call in tool_calls],
-            "input_tokens": usage.get("input_tokens", 0) if usage else 0,
-            "output_tokens": usage.get("output_tokens", 0) if usage else 0,
-            "total_tokens": usage_tokens if usage else estimated_tokens,
+            "input_tokens": input_tokens,
+            "output_tokens": output_tokens,
+            "total_tokens": usage_tokens,
+            "context_token_estimate": context_token_count,
             "retry_count": attempt,
         },
     )
@@ -1110,11 +1501,13 @@ async def llm_call_node(state: AgentState) -> Dict[str, Any]:
     return {
         "messages": [response_dict],
         "pending_tool_calls": tool_calls,
-        "token_count": token_count,
+        "token_count": context_token_count,
         "task_token_count": task_token_count,
         "session_token_count": session_token_count,
         "round_count": round_count,
         "should_end_after_save": should_end_after_save,  # Signal to route_after_tool
+        "should_compress": False,
+        "context_overflow_recovery_attempts": 0,
         "execution_phase": (
             ExecutionPhase.EXECUTING.value if tool_calls else ExecutionPhase.SUMMARIZING.value
         ),
@@ -1144,6 +1537,28 @@ def _should_retry_tool(tool_name: str, error: Exception) -> bool:
     return any(pattern in error_str for pattern in RETRYABLE_ERROR_PATTERNS)
 
 
+def _serialize_tool_result(result: Any) -> str:
+    """Create deterministic artifact/model text without changing result semantics."""
+    if isinstance(result, str):
+        return result
+    if isinstance(result, (dict, list, tuple)):
+        return json.dumps(result, ensure_ascii=False, default=str)
+    return str(result)
+
+
+def _tool_result_source_truncated(result: Any, serialized: str) -> bool:
+    if isinstance(result, dict):
+        return bool(result.get("source_truncated"))
+    if isinstance(result, str) and result.lstrip().startswith("{"):
+        try:
+            parsed = json.loads(result)
+        except json.JSONDecodeError:
+            parsed = None
+        if isinstance(parsed, dict) and parsed.get("source_truncated"):
+            return True
+    return "source_truncated=true" in serialized or "[source capture clipped " in serialized
+
+
 async def tool_executor_node(state: AgentState) -> Dict[str, Any]:
     """Tool executor node - Execute pending tool calls.
 
@@ -1161,10 +1576,12 @@ async def tool_executor_node(state: AgentState) -> Dict[str, Any]:
     session_id = state.get("session_id", "")
     user_id = state.get("user_id")
     set_current_session_id(session_id)
-    if user_id:
+    if user_id is not None:
         set_current_user_id(user_id)
 
     results = {}
+    raw_results = {}
+    abort_remaining_tools = False
     all_tool_map = {tool.name: tool for tool in ALL_TOOLS}
     allowed_tools = get_tools_for_permissions(
         state.get("permissions", []),
@@ -1206,6 +1623,23 @@ async def tool_executor_node(state: AgentState) -> Dict[str, Any]:
 
         # Auto-increment tool call stats (framework counts, no LLM hallucination)
         tool_call_stats[tool_name] = tool_call_stats.get(tool_name, 0) + 1
+
+        if abort_remaining_tools:
+            record = ToolExecutionRecord(
+                tool_name=tool_name or "unknown",
+                tool_call_id=tool_id or "unknown",
+                status=ToolResultStatus.ERROR,
+                ok=False,
+                output="Error: Tool was not executed after artifact evidence failure.",
+                duration_ms=0,
+                attempt_count=1,
+                error_code="prior_artifact_write_failed",
+                artifact_error="artifact_write_failed",
+            )
+            results[tool_id] = record.output
+            execution_records.append(record.to_dict())
+            _record_tool_trace(state, record, tool_input)
+            continue
 
         if tool_call_count > settings.MAX_TOOL_CALLS_PER_TASK:
             failure_reason = (
@@ -1332,37 +1766,112 @@ async def tool_executor_node(state: AgentState) -> Dict[str, Any]:
                     updated_todos = tool_input.get("todos", [])
                     logging.info(f"[tool_exec] todo_update: saved {len(updated_todos)} todos to AgentState")
 
-                # Special handling for compress tool
-                if tool_name == "compress":
-                    compress_requested = True
-                    result_str = str(result)
-                else:
-                    # Limit output size
-                    result_str = str(result)
-                    if len(result_str) > settings.TOOL_OUTPUT_MAX_CHARS:
-                        result_str = result_str[:settings.TOOL_OUTPUT_MAX_CHARS] + "\n... (truncated, see transcript)"
-
-                final_record = normalize_tool_result(
+                raw_result = result
+                raw_result_str = _serialize_tool_result(raw_result)
+                source_already_truncated = _tool_result_source_truncated(
+                    raw_result,
+                    raw_result_str,
+                )
+                raw_record = normalize_tool_result(
                     tool_name=tool_name,
                     tool_call_id=tool_id,
-                    raw_result=result_str,
+                    raw_result=raw_result,
                     duration_ms=int((time.perf_counter() - started) * 1000),
                     attempt_count=attempt + 1,
                 )
                 if (
-                    not final_record.ok
+                    not raw_record.ok
                     and attempt < max_attempts - 1
                     and contract.idempotent
-                    and any(pattern in result_str.lower() for pattern in RETRYABLE_ERROR_PATTERNS)
+                    and any(pattern in raw_result_str.lower() for pattern in RETRYABLE_ERROR_PATTERNS)
                 ):
                     await asyncio.sleep(1.0 * (attempt + 1))
                     continue
 
-                results[tool_id] = result_str
-                result_preview = result_str[:120].replace("\n", " ")
+                if tool_name == "compress":
+                    compress_requested = True
+
+                receipt = None
+                artifact_error = None
+                # Any payload large enough to be eligible for later
+                # microcompaction must have recoverable evidence first.
+                if len(raw_result_str) > 100:
+                    try:
+                        receipt = ToolArtifactStore(user_id=user_id).save(
+                            raw_result_str,
+                            trace_id=state.get("trace_id") or f"session-{session_id}",
+                            tool_call_id=str(tool_id or tool_name or "tool"),
+                            source_already_truncated=source_already_truncated,
+                        )
+                    except Exception as exc:
+                        artifact_error = "artifact_write_failed"
+                        logging.warning(
+                            "Failed to persist tool artifact for %s/%s: %s",
+                            tool_name,
+                            tool_id,
+                            exc,
+                        )
+
+                if artifact_error and len(raw_result_str) > settings.TOOL_OUTPUT_MAX_CHARS:
+                    # A large preview may only be truncated after recoverable
+                    # evidence exists. Fail the task rather than silently lose
+                    # the tail while continuing with a misleading success.
+                    display_output = (
+                        "Error: Tool output evidence could not be persisted; "
+                        "execution stopped (artifact_write_failed)."
+                    )
+                    model_truncated = False
+                    final_record = ToolExecutionRecord(
+                        tool_name=tool_name,
+                        tool_call_id=tool_id,
+                        status=ToolResultStatus.ERROR,
+                        ok=False,
+                        output=display_output,
+                        duration_ms=raw_record.duration_ms,
+                        attempt_count=attempt + 1,
+                        error_code="artifact_write_failed",
+                        exit_code=raw_record.exit_code,
+                        original_chars=len(raw_result_str),
+                        model_chars=len(display_output),
+                        artifact_error="artifact_write_failed",
+                    )
+                    failure_reason = (
+                        f"Tool evidence persistence failed for {tool_name}; "
+                        "large output was not passed back to the model."
+                    )
+                    task_status = transition_task_status(task_status, TaskStatus.FAILED)
+                    abort_remaining_tools = True
+                elif receipt is not None:
+                    display_output, model_truncated = format_tool_output(
+                        raw_result_str,
+                        receipt=receipt,
+                        status=raw_record.status.value,
+                        error_code=raw_record.error_code,
+                        exit_code=raw_record.exit_code,
+                    )
+                else:
+                    display_output = raw_result_str
+                    model_truncated = False
+
+                if final_record is None:
+                    final_record = normalize_tool_result(
+                        tool_name=tool_name,
+                        tool_call_id=tool_id,
+                        raw_result=raw_result,
+                        display_output=display_output,
+                        duration_ms=raw_record.duration_ms,
+                        attempt_count=attempt + 1,
+                        artifact=receipt.to_dict() if receipt else None,
+                        model_truncated=model_truncated,
+                        artifact_error=artifact_error,
+                    )
+                raw_results[tool_id] = raw_result_str
+                results[tool_id] = display_output
+                result_preview = display_output[:120].replace("\n", " ")
                 marker = "✓" if final_record.ok else "✗"
                 logging.info(
-                    f"[tool_exec] {marker} {tool_name} ({len(result_str)} chars): {result_preview}..."
+                    f"[tool_exec] {marker} {tool_name} "
+                    f"({len(raw_result_str)} raw/{len(display_output)} model chars): {result_preview}..."
                 )
                 break
             except asyncio.TimeoutError:
@@ -1432,7 +1941,7 @@ async def tool_executor_node(state: AgentState) -> Dict[str, Any]:
 
         if final_record.ok and tool_name == "task_create":
             try:
-                created_task_ids.add(int(json.loads(final_record.output)["id"]))
+                created_task_ids.add(int(json.loads(raw_results.get(tool_id, final_record.output))["id"]))
             except (KeyError, TypeError, ValueError, json.JSONDecodeError):
                 logging.warning("Could not extract created task ID from task_create output")
 
@@ -1455,12 +1964,40 @@ async def tool_executor_node(state: AgentState) -> Dict[str, Any]:
 
     # Build tool result messages
     tool_result_messages = []
+    current_records = {}
+    current_ids = {str(tool_id) for tool_id in results}
+    for record in reversed(execution_records):
+        record_id = str(record.get("tool_call_id"))
+        if record_id in current_ids and record_id not in current_records:
+            current_records[record_id] = record
     for tool_id, result in results.items():
-        tool_result_messages.append({
+        record = current_records.get(str(tool_id), {})
+        message = {
             "role": "tool",
             "content": result,
             "tool_call_id": tool_id
-        })
+        }
+        if record.get("artifact_path"):
+            message["artifact"] = {
+                "path": record["artifact_path"],
+                "sha256": record.get("artifact_sha256"),
+                "stored_bytes": record.get("artifact_bytes"),
+                "original_chars": record.get("original_chars"),
+                "source_truncated": bool(record.get("source_truncated")),
+                "redacted": bool(record.get("artifact_redacted")),
+                "storage_status": "stored",
+            }
+        elif record.get("artifact_error"):
+            message["artifact"] = {
+                "storage_status": "failed",
+                "error_code": record["artifact_error"],
+            }
+        tool_result_messages.append(message)
+
+    context_token_estimate = get_context_manager().estimate_tokens([
+        *state.get("messages", []),
+        *tool_result_messages,
+    ])
 
     # Check if there are open todos for nag reminder
     # Use updated_todos if available, otherwise check existing TodoManager
@@ -1480,6 +2017,7 @@ async def tool_executor_node(state: AgentState) -> Dict[str, Any]:
         "tool_call_stats": tool_call_stats,  # Framework auto-counted stats
         "tool_execution_records": execution_records,
         "tool_call_count": tool_call_count,
+        "token_count": context_token_estimate,
         "created_task_ids": sorted(created_task_ids),
         "changed_files": sorted(changed_files),
         "validation_results": validation_results,
@@ -1705,44 +2243,103 @@ async def compress_context_node(state: AgentState) -> Dict[str, Any]:
     token_count = state.get("token_count", 0)
 
     # Check if compression needed
-    if token_count > settings.TOKEN_THRESHOLD:
+    if token_count >= ctx_mgr.token_threshold:
         messages = state.get("messages", [])
         session_id = state.get("session_id", "unknown")
+        runtime_overhead = _estimate_next_llm_context(state, [])
+        continuation_headroom = _continuation_growth_headroom(ctx_mgr.token_threshold)
+        continuation_budget = (
+            ctx_mgr.token_threshold - runtime_overhead - continuation_headroom
+        )
         # Perform full compression
-        compression_result = await ctx_mgr.auto_compact(messages, session_id)
+        try:
+            compression_result = await ctx_mgr.auto_compact(
+                messages,
+                session_id,
+                continuity_state=state,
+                continuation_token_budget=continuation_budget,
+            )
+        except ContextCompressionError as exc:
+            _record_trace(
+                state,
+                event_type="context",
+                name="auto_compact",
+                status="error",
+                data={
+                    "error": str(exc),
+                    "token_count_before": token_count,
+                    "message_count_before": len(messages),
+                    "transcript_path": exc.transcript_path,
+                    "state_preserved": True,
+                },
+            )
+            raise
 
         summary = compression_result.get("context_summary")
 
-        # Append explicit continuation instruction so the LLM doesn't just
-        # echo the summary and stop — it receives a clear prompt to act.
-        compressed_msgs = compression_result["compressed_messages"]
-        compressed_msgs.append({
-            "role": "user",
-            "content": (
-                "<system-reminder>Context has been compressed. Continue the task immediately. "
-                "Take the next concrete action using a tool — do NOT summarize or repeat "
-                "what was in the compressed context.</system-reminder>"
-            ),
-        })
+        # The schema-v2 packet already carries one explicit continuation
+        # instruction. Keep a single authoritative compressed message.
+        compressed_msgs = list(compression_result["compressed_messages"])
+        compressed_token_count = _estimate_next_llm_context(state, compressed_msgs)
+        safe_continuation_limit = ctx_mgr.token_threshold - continuation_headroom
+        if compressed_token_count > safe_continuation_limit:
+            error = ContextCompressionError(
+                "Compressed context still exceeds the safe next-turn threshold.",
+                transcript_path=compression_result["transcript_path"],
+            )
+            _record_trace(
+                state,
+                event_type="context",
+                name="auto_compact",
+                status="error",
+                data={
+                    "error": str(error),
+                    "token_count_after": compressed_token_count,
+                    "safe_threshold": ctx_mgr.token_threshold,
+                    "safe_continuation_limit": safe_continuation_limit,
+                    "runtime_overhead": runtime_overhead,
+                    "continuation_budget": continuation_budget,
+                    "continuation_headroom": continuation_headroom,
+                    "transcript_path": compression_result["transcript_path"],
+                    "state_preserved": True,
+                },
+            )
+            raise error
 
+        _record_summary_model_trace(state, compression_result)
         _record_trace(
             state,
             event_type="context",
             name="auto_compact",
             data={
                 "token_count_before": token_count,
-                "token_count_after": compression_result["token_count_reset"],
+                "token_count_after": compressed_token_count,
                 "message_count_before": len(messages),
                 "message_count_after": len(compressed_msgs),
                 "transcript_path": compression_result["transcript_path"],
+                "summary_schema_version": compression_result["summary_schema_version"],
+                "summary_usage_tokens": compression_result["summary_usage_tokens"],
+                "continuation_budget": continuation_budget,
+                "continuation_headroom": continuation_headroom,
+                "continuation_packet_truncated": compression_result[
+                    "continuation_packet_truncated"
+                ],
             },
         )
 
         return {
-            "messages": compressed_msgs,
+            "messages": [RemoveMessage(id=REMOVE_ALL_MESSAGES), *compressed_msgs],
             "context_summary": summary,
             "transcript_path": compression_result["transcript_path"],
-            "token_count": compression_result["token_count_reset"],
+            "token_count": compressed_token_count,
+            "task_token_count": (
+                state.get("task_token_count", 0)
+                + compression_result["summary_usage_tokens"]
+            ),
+            "session_token_count": (
+                state.get("session_token_count", 0)
+                + compression_result["summary_usage_tokens"]
+            ),
             "should_compress": False,
             # Reset accumulator but preserve pre-compression summary for future flush
             "memory_accumulator": {
@@ -1766,19 +2363,106 @@ async def manual_compress_node(state: AgentState) -> Dict[str, Any]:
     ctx_mgr = get_context_manager()
     messages = state.get("messages", [])
     session_id = state.get("session_id", "unknown")
+    runtime_overhead = _estimate_next_llm_context(state, [])
+    continuation_headroom = _continuation_growth_headroom(ctx_mgr.token_threshold)
+    continuation_budget = (
+        ctx_mgr.token_threshold - runtime_overhead - continuation_headroom
+    )
     # Always compress when manually triggered
-    compression_result = await ctx_mgr.manual_compress(messages, session_id)
+    try:
+        compression_result = await ctx_mgr.manual_compress(
+            messages,
+            session_id,
+            continuity_state=state,
+            continuation_token_budget=continuation_budget,
+        )
+    except ContextCompressionError as exc:
+        _record_trace(
+            state,
+            event_type="context",
+            name="manual_compact",
+            status="error",
+            data={
+                "error": str(exc),
+                "message_count_before": len(messages),
+                "transcript_path": exc.transcript_path,
+                "state_preserved": True,
+            },
+        )
+        raise
 
     summary = compression_result.get("context_summary")
+    compressed_token_count = _estimate_next_llm_context(
+        state,
+        compression_result["compressed_messages"],
+    )
+    safe_continuation_limit = ctx_mgr.token_threshold - continuation_headroom
+    if compressed_token_count > safe_continuation_limit:
+        error = ContextCompressionError(
+            "Compressed context still exceeds the safe next-turn threshold.",
+            transcript_path=compression_result["transcript_path"],
+        )
+        _record_trace(
+            state,
+            event_type="context",
+            name="manual_compact",
+            status="error",
+            data={
+                "error": str(error),
+                "token_count_after": compressed_token_count,
+                "safe_threshold": ctx_mgr.token_threshold,
+                "safe_continuation_limit": safe_continuation_limit,
+                "runtime_overhead": runtime_overhead,
+                "continuation_budget": continuation_budget,
+                "continuation_headroom": continuation_headroom,
+                "transcript_path": compression_result["transcript_path"],
+                "state_preserved": True,
+            },
+        )
+        raise error
+
+    _record_summary_model_trace(state, compression_result)
+    _record_trace(
+        state,
+        event_type="context",
+        name="manual_compact",
+        data={
+            "message_count_before": len(messages),
+            "message_count_after": len(compression_result["compressed_messages"]),
+            "token_count_before": state.get("token_count", 0),
+            "token_count_after": compressed_token_count,
+            "transcript_path": compression_result["transcript_path"],
+            "summary_schema_version": compression_result["summary_schema_version"],
+            "summary_usage_tokens": compression_result["summary_usage_tokens"],
+            "continuation_budget": continuation_budget,
+            "continuation_headroom": continuation_headroom,
+            "continuation_packet_truncated": compression_result[
+                "continuation_packet_truncated"
+            ],
+        },
+    )
 
     return {
-        "messages": compression_result["compressed_messages"],
+        "messages": [
+            RemoveMessage(id=REMOVE_ALL_MESSAGES),
+            *compression_result["compressed_messages"],
+        ],
         "context_summary": summary,
         "transcript_path": compression_result["transcript_path"],
-        "token_count": compression_result["token_count_reset"],
+        "token_count": compressed_token_count,
+        "task_token_count": (
+            state.get("task_token_count", 0)
+            + compression_result["summary_usage_tokens"]
+        ),
+        "session_token_count": (
+            state.get("session_token_count", 0)
+            + compression_result["summary_usage_tokens"]
+        ),
         "should_compress": False,
-        "should_end": True,  # End this invocation after manual compress
-        # Reset accumulator — manual compress ends the invocation
+        "should_end": False,
+        "should_end_after_save": False,
+        # Reset the accumulator, then continue the same invocation from the
+        # schema-v2 continuation packet.
         "memory_accumulator": {
             "user_request": "",
             "assistant_responses": [],
@@ -1796,13 +2480,15 @@ def route_after_llm(state: AgentState) -> str:
     Determines next node based on:
     - Max rounds exceeded -> save_memory (will end due to round_count check in route_after_tool)
     - Has tool calls -> tool_executor
-    - Exceeds token threshold -> compress_context
     - Otherwise -> save_memory (will end due to should_end_after_save=True from llm_call_node)
 
     Note: DO NOT modify state in routing functions - state changes must come from node returns.
     """
     if state.get("task_status") == TaskStatus.FAILED.value:
         return "save_memory"
+
+    if state.get("should_compress"):
+        return "compress"
 
     # Check for tool calls first
     if state.get("pending_tool_calls"):
@@ -1814,13 +2500,16 @@ def route_after_llm(state: AgentState) -> str:
         logging.warning(f"[route_after_llm] max rounds ({settings.MAX_AGENT_ROUNDS}) reached, ending")
         return "save_memory"
 
-    # Check for auto compression threshold
-    if state.get("token_count", 0) > settings.TOKEN_THRESHOLD:
-        return "compress"
-
     # No tool calls and no compression needed -> save memory then end
     # llm_call_node already set should_end_after_save=True
     return "save_memory"
+
+
+def route_after_microcompact(state: AgentState) -> str:
+    """Run full compression only if cheap artifact-backed cleanup was insufficient."""
+    if state.get("token_count", 0) >= get_context_manager().token_threshold:
+        return "compress"
+    return "llm_call"
 
 
 def route_after_tool(state: AgentState) -> str:
@@ -1830,8 +2519,8 @@ def route_after_tool(state: AgentState) -> str:
     - should_end_after_save is set -> end (text response completed)
     - Max rounds exceeded -> end
     - Manual compression was requested via compress tool
-    - Auto compression threshold exceeded
-    before going back to LLM.
+    before going through microcompact and back to the LLM. Automatic full
+    compression is decided after microcompact so cheap cleanup gets priority.
     """
     if state.get("task_status") in (TaskStatus.FAILED.value, TaskStatus.CANCELLED.value):
         return "end"
@@ -1853,12 +2542,6 @@ def route_after_tool(state: AgentState) -> str:
     # Check for manual compression request first
     if state.get("should_compress"):
         return "manual_compress"
-
-    token_count = state.get("token_count", 0)
-
-    # Check threshold after tool execution (tool outputs can be large)
-    if token_count > settings.TOKEN_THRESHOLD:
-        return "compress"
 
     return "llm_call"
 
@@ -1882,10 +2565,22 @@ async def check_background_node(state: AgentState) -> Dict[str, Any]:
     notifications = bg_mgr.drain_notifications()
 
     if notifications:
-        notification_text = "\n".join(
-            f"[Background:{n['task_id']}] {n['status']}: {n['result'][:500]}"
-            for n in notifications
-        )
+        notification_lines = []
+        for notification in notifications:
+            line = (
+                f"[Background:{notification['task_id']}] "
+                f"{notification['status']}: {notification['result'][:500]}"
+            )
+            artifact = notification.get("artifact")
+            if isinstance(artifact, dict) and artifact.get("path"):
+                line += (
+                    f"\n[restricted artifact: {artifact['path']}; "
+                    f"sha256={artifact.get('sha256', '')}]"
+                )
+            elif notification.get("artifact_error"):
+                line += "\n[artifact unavailable: artifact_write_failed]"
+            notification_lines.append(line)
+        notification_text = "\n".join(notification_lines)
         return {
             "messages": [{
                 "role": "user",
@@ -1970,7 +2665,6 @@ async def tool_confirm_node(state: AgentState) -> Dict[str, Any]:
         tool_descriptions.append({
             "id": tc.get("id", ""),
             "name": tool_name,
-            "args": tool_args,
             "description": desc,
             "risk": resolve_tool_risk(tool_name, tool_args).value,
         })

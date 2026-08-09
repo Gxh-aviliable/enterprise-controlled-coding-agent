@@ -5,7 +5,7 @@ description = "Controlled engineering agent platform for enterprise intranet dep
 requires-python = ">=3.11"
 dependencies = [
     # Core
-    "langgraph>=0.2.0",
+    "langgraph>=1.1.10",
     "langchain>=0.3.0",
     "langchain-anthropic>=0.3.0",
     "langchain-openai>=1.2.1",
@@ -30,6 +30,7 @@ dependencies = [
     "pydantic-settings>=2.0.0",
     # Utils
     "python-dotenv>=1.0.0",
+    "filelock>=3.16.0",
     "langgraph-checkpoint-redis>=0.4.1",
     "bcrypt<4.1",
     "socksio>=1.0.0",

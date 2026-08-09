@@ -1,5 +1,7 @@
 """Portable trace persistence and metric tests."""
 
+import pytest
+
 from enterprise_agent.observability.trace_store import TraceStore, redact_value
 
 
@@ -137,3 +139,146 @@ def test_confirmation_pause_updates_trace_without_recording_an_error(monkeypatch
     trace = store.get_trace(4, "trace-waiting")
     assert trace["status"] == "waiting_confirmation"
     assert trace["error"] is None
+
+
+def test_user_pause_control_events_are_non_terminal_and_not_confirmations(
+    monkeypatch,
+    tmp_path,
+):
+    """A user pause is control flow, not HITL confirmation or task completion."""
+    monkeypatch.setenv("WORKSPACE_BASE", str(tmp_path))
+    store = TraceStore()
+    store.start_trace(
+        trace_id="trace-user-pause",
+        session_id="session-user-pause",
+        user_id=5,
+        request_summary="Run a long engineering task",
+    )
+    store.record_event(
+        user_id=5,
+        trace_id="trace-user-pause",
+        event_type="node",
+        name="llm_call",
+        data={"task_status": "running", "phase": "executing"},
+    )
+    store.record_event(
+        user_id=5,
+        trace_id="trace-user-pause",
+        event_type="control",
+        name="pause_requested",
+        status="requested",
+        data={"task_status": "running"},
+    )
+    store.record_event(
+        user_id=5,
+        trace_id="trace-user-pause",
+        event_type="control",
+        name="task_paused",
+        status="paused",
+        data={"task_status": "paused", "resume_target": "tool_executor"},
+    )
+
+    paused = store.get_trace(5, "trace-user-pause")
+    assert paused["status"] == "paused"
+    assert paused["finished_at"] is None
+    assert paused["duration_ms"] is None
+    assert paused["error"] is None
+    assert paused["metrics"]["confirmation_count"] == 0
+    assert [event["name"] for event in paused["events"]][-2:] == [
+        "pause_requested",
+        "task_paused",
+    ]
+    assert store.aggregate_metrics(5)["task_count"] == 0
+
+    store.record_event(
+        user_id=5,
+        trace_id="trace-user-pause",
+        event_type="control",
+        name="resume_requested",
+        status="requested",
+        data={"task_status": "paused", "resume_target": "tool_executor"},
+    )
+    resuming = store.get_trace(5, "trace-user-pause")
+    assert resuming["status"] == "resuming"
+    assert resuming["finished_at"] is None
+
+    store.record_event(
+        user_id=5,
+        trace_id="trace-user-pause",
+        event_type="control",
+        name="task_resumed",
+        status="success",
+        data={"task_status": "running", "resume_target": "tool_executor"},
+    )
+    resumed = store.get_trace(5, "trace-user-pause")
+    assert resumed["status"] == "running"
+    assert resumed["finished_at"] is None
+    assert resumed["metrics"]["confirmation_count"] == 0
+
+    store.finish_trace(
+        user_id=5,
+        trace_id="trace-user-pause",
+        status="succeeded",
+        result_summary="Task completed after resume",
+    )
+    metrics = store.aggregate_metrics(5)
+    assert metrics["task_count"] == 1
+    assert metrics["human_intervention_rate"] == 0.0
+    assert metrics["confirmation_count"] == 0
+
+
+@pytest.mark.parametrize("terminal_status", ["succeeded", "failed", "cancelled"])
+def test_finished_trace_keeps_terminal_status_when_late_running_events_arrive(
+    monkeypatch,
+    tmp_path,
+    terminal_status,
+):
+    """Late worker events remain auditable without reopening a finished task."""
+    monkeypatch.setenv("WORKSPACE_BASE", str(tmp_path))
+    store = TraceStore()
+    store.start_trace(
+        trace_id=f"trace-sticky-{terminal_status}",
+        session_id="session-sticky",
+        user_id=6,
+        request_summary="Complete exactly once",
+        mode="multi_agent",
+    )
+    finished = store.finish_trace(
+        user_id=6,
+        trace_id=f"trace-sticky-{terminal_status}",
+        status=terminal_status,
+        result_summary="Terminal result",
+    )
+    terminal_finished_at = finished["finished_at"]
+    event_count = len(finished["events"])
+
+    store.record_event(
+        user_id=6,
+        trace_id=f"trace-sticky-{terminal_status}",
+        event_type="node",
+        name="late_worker_update",
+        status="success",
+        data={"task_status": "running", "phase": "executing"},
+    )
+    after_node = store.get_trace(6, f"trace-sticky-{terminal_status}")
+    assert after_node["status"] == terminal_status
+    assert after_node["finished_at"] == terminal_finished_at
+    assert len(after_node["events"]) == event_count + 1
+    assert after_node["events"][-1]["name"] == "late_worker_update"
+
+    store.record_event(
+        user_id=6,
+        trace_id=f"trace-sticky-{terminal_status}",
+        event_type="control",
+        name="task_resumed",
+        status="success",
+        data={"task_status": "running", "resume_target": "tool_executor"},
+    )
+    after_resume = store.get_trace(6, f"trace-sticky-{terminal_status}")
+    assert after_resume["status"] == terminal_status
+    assert after_resume["finished_at"] == terminal_finished_at
+    assert len(after_resume["events"]) == event_count + 2
+    assert [event["name"] for event in after_resume["events"][-2:]] == [
+        "late_worker_update",
+        "task_resumed",
+    ]

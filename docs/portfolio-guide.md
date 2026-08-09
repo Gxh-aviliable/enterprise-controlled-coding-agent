@@ -5,17 +5,17 @@
 | 维度 | 早期状态 | 当前状态 |
 |---|---|---|
 | 执行 | 响应式模型/工具循环 | 显式解析、规划、执行、检查点、验证、总结 |
-| 状态 | 从消息推断完成 | 六态任务状态机和合法迁移 |
+| 状态 | 从消息推断完成 | 七态任务状态机、合法迁移和可恢复 `paused` checkpoint |
 | 工具 | 字符串结果、粗粒度敏感列表 | Contract、权限、参数风险、HITL、规范化结果 |
 | 安全 | 路径保护和简单命令匹配 | 用户隔离、复合命令解析、敏感路径、环境净化、原子写入、可恢复删除 |
-| 恢复 | Redis checkpoint 但策略隐式 | 确认、拒绝、超时、取消、失败收敛和验证门 |
+| 恢复 | Redis checkpoint 但策略隐式 | HITL 确认、协作式 Pause/Continue、拒绝、超时、取消、失败收敛和验证门 |
 | 观测 | 日志和 SSE 分散 | Trace ID 串联节点、模型、工具、审批、token 和终态 |
 | 评测 | 只有模块测试 | Platform、Memory、Agent 三层版本化 benchmark |
 | 部署 | 后端服务为主 | Vue/Nginx、API、MySQL、Redis 四服务 Compose |
 
 ## 当前量化结果
 
-- 381 项后端测试、23 项前端测试、Ruff 0 findings。
+- 495 项后端测试、36 项前端测试、Ruff 0 findings。
 - Platform benchmark 10/10；这是确定性平台分，不是模型智能分。
 - Memory benchmark 6/6；这是小型检索/过滤分，不证明模型正确使用。
 - `deepseek-chat` single-Agent 8/10，基础设施错误 0。
@@ -30,9 +30,9 @@
 核心工作：
 
 - 基于 `LangGraph StateGraph` 构建“代码检索 → Todo 规划 → 文件/Shell 工具执行 → 结果观察 → 失败诊断 → 修改后验证”的多轮 Agent 闭环；将非零退出、策略拦截和超时结构化反馈给模型，并通过 verification gate 阻止未验证代码被标记为成功。
-- 使用 Redis checkpoint 持久化完整 Agent 状态，引入后台命令、轮次/工具/token 预算、工具输出 microcompact、完整 transcript 和 LLM 摘要续跑，并结合受准入控制的 Chroma 长期记忆与按需 Skill 加载支持长任务和工程经验复用。
+- 使用 Redis checkpoint 持久化完整 Agent 状态，实现精确到用户/会话/Trace 的协作式 Pause/Continue、后台命令、轮次/工具/token 预算、工具输出 microcompact、完整 transcript 和 LLM 摘要续跑，并结合受准入控制的 Chroma 长期记忆与按需 Skill 加载支持长任务和工程经验复用。
 - 设计 Contract-driven 工具运行时，统一文件、Shell、任务、记忆和子 Agent 的权限、风险、超时、幂等、副作用与结果协议，实现参数级 HITL、多租户 Workspace 隔离、凭据净化、原子写入和可恢复删除。
-- 建立覆盖模型、节点、工具、审批、token、错误和终态的 Trace 与版本化 Agent benchmark；真实 `deepseek-chat` single-Agent 在代码理解、文件操作、测试、失败修复、安全拒绝和中断恢复等 10 个任务中完成 8/10，并保持 381 项后端和 23 项前端回归。
+- 建立覆盖模型、节点、工具、暂停/审批、token、错误和终态的 Trace 与版本化 Agent benchmark；真实 `deepseek-chat` single-Agent 在代码理解、文件操作、测试、失败修复、安全拒绝和中断恢复等 10 个任务中完成 8/10，并保持 495 项后端和 36 项前端回归。
 
 ## 20 个常见追问与回答要点
 
@@ -45,14 +45,16 @@
 3. **任务成功如何定义？**
    由合法终态和确定性断言定义；修改代码后没有成功测试、构建、Lint 或编译记录就不能成功。
 
-4. **为什么需要六种状态？**
-   `pending/running/waiting_confirmation/succeeded/failed/cancelled` 分离排队、执行、人工阻塞和三种终态，避免 UI、Trace 与 checkpoint 互相矛盾。
+4. **为什么需要七种状态？**
+   `pending/running/paused/waiting_confirmation/succeeded/failed/cancelled` 分离排队、执行、用户暂停、人工审批和三种终态；`paused` 可恢复但 `cancelled` 不可恢复，避免 UI、Trace 与 checkpoint 互相矛盾。
 
 5. **工具重试怎么防止重复副作用？**
    只有契约声明为幂等的只读工具可有限重试；文件写入、Shell 和协作副作用不会盲目重放。
 
 6. **HITL 如何恢复？**
    LangGraph interrupt 保存 checkpoint；会话所有者批准或拒绝后，以 `Command(resume=...)` 从中断点继续。
+
+   用户 Pause 使用另一种 typed `user_pause` interrupt，只能由同一用户、会话和 Trace 的 Continue 恢复，不会被 HITL 审批接口误消费。
 
 7. **用户一直不确认怎么办？**
    超时任务用确定性拒绝恢复图并记录 Trace。多副本生产环境需要把调度迁移到持久队列。

@@ -9,9 +9,22 @@
           </svg>
           {{ activeId ? activeId.slice(0, 8) : 'New conversation' }}
         </span>
-        <span v-if="streaming" class="status-badge streaming">
+        <span
+          v-if="taskStatus === 'running' || taskStatus === 'resuming'"
+          :class="['status-badge', taskStatus === 'resuming' ? 'resuming' : 'streaming']"
+          role="status"
+          aria-live="polite"
+        >
           <span class="pulse-dot"></span>
-          Generating
+          {{ taskStatus === 'resuming' ? 'Resuming' : 'Generating' }}
+        </span>
+        <span v-else-if="taskStatus === 'pause_requested'" class="status-badge pausing" role="status" aria-live="polite">
+          <span class="pulse-dot"></span>
+          Pausing at next safe boundary
+        </span>
+        <span v-else-if="taskStatus === 'paused'" class="status-badge paused" role="status" aria-live="polite">
+          <svg width="12" height="12" viewBox="0 0 24 24" fill="currentColor"><rect x="6" y="5" width="4" height="14" rx="1"/><rect x="14" y="5" width="4" height="14" rx="1"/></svg>
+          Paused
         </span>
         <span v-if="currentTool && !streaming" class="status-badge tool">
           <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 00.33 1.82l.06.06a2 2 0 010 2.83 2 2 0 01-2.83 0l-.06-.06a1.65 1.65 0 00-1.82-.33 1.65 1.65 0 00-1 1.51V21a2 2 0 01-4 0v-.09A1.65 1.65 0 009 19.4a1.65 1.65 0 00-1.82.33l-.06.06a2 2 0 01-2.83-2.83l.06-.06A1.65 1.65 0 004.68 15a1.65 1.65 0 00-1.51-1H3a2 2 0 010-4h.09A1.65 1.65 0 004.6 9a1.65 1.65 0 00-.33-1.82l-.06-.06a2 2 0 012.83-2.83l.06.06A1.65 1.65 0 009 4.68a1.65 1.65 0 001-1.51V3a2 2 0 014 0v.09a1.65 1.65 0 001 1.51 1.65 1.65 0 001.82-.33l.06-.06a2 2 0 012.83 2.83l-.06.06A1.65 1.65 0 0019.4 9a1.65 1.65 0 001.51 1H21a2 2 0 010 4h-.09a1.65 1.65 0 00-1.51 1z"/></svg>
@@ -33,7 +46,12 @@
 
     <!-- Messages -->
     <div class="messages-region">
-    <div class="messages" ref="msgContainer" @scroll.passive="handleMessagesScroll">
+    <div
+      class="messages"
+      ref="msgContainer"
+      @scroll.passive="handleMessagesScroll"
+      @wheel.passive="handleMessagesWheel"
+    >
       <div v-if="messages.length === 0 && !streaming" class="welcome">
         <div class="welcome-icon">
           <svg width="48" height="48" viewBox="0 0 32 32" fill="none">
@@ -194,26 +212,58 @@
           <span v-if="executionMode === 'multi_agent'">Real specialist delegation is required and traced.</span>
           <span v-else>Reliable single-Agent baseline; collaboration is never simulated.</span>
         </div>
-        <div class="mode-switch" aria-label="Agent execution mode" data-testid="execution-mode-switch">
-          <button
-            type="button"
-            :class="['mode-option', { active: executionMode === 'single_agent' }]"
-            :disabled="streaming || pendingConfirm"
-            @click="executionMode = 'single_agent'"
+        <div class="execution-mode-actions">
+          <div
+            class="mode-switch"
+            role="group"
+            aria-label="Agent execution mode"
+            data-testid="execution-mode-switch"
           >
-            Single
+            <button
+              type="button"
+              :class="['mode-option', { active: executionMode === 'single_agent' }]"
+              :disabled="taskInputLocked || pendingConfirm"
+              @click="executionMode = 'single_agent'"
+            >
+              Single
+            </button>
+            <button
+              type="button"
+              :class="['mode-option', { active: executionMode === 'multi_agent' }]"
+              :disabled="taskInputLocked || pendingConfirm || !multiAgentAvailable"
+              :title="multiAgentAvailable ? 'Use real specialist subagents' : multiAgentReason"
+              @click="executionMode = 'multi_agent'"
+            >
+              Multi <span class="experimental-label">EXP</span>
+            </button>
+          </div>
+          <button
+            v-if="['running', 'resuming', 'pause_requested'].includes(taskStatus) && !pendingConfirm"
+            type="button"
+            class="task-secondary task-secondary-pause"
+            data-testid="pause-task"
+            :disabled="taskStatus === 'pause_requested' || !activeTraceId"
+            :aria-label="taskStatus === 'pause_requested' ? 'Pause requested' : 'Pause task at the next safe boundary'"
+            :title="taskStatus === 'pause_requested' ? 'Pause requested' : 'Pause at the next safe boundary'"
+            @click="pauseGeneration"
+          >
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><rect x="6" y="5" width="4" height="14" rx="1"/><rect x="14" y="5" width="4" height="14" rx="1"/></svg>
+            {{ taskStatus === 'pause_requested' ? 'Pausing…' : 'Pause' }}
           </button>
           <button
+            v-else-if="taskStatus === 'paused' && !pendingConfirm"
             type="button"
-            :class="['mode-option', { active: executionMode === 'multi_agent' }]"
-            :disabled="streaming || pendingConfirm || !multiAgentAvailable"
-            :title="multiAgentAvailable ? 'Use real specialist subagents' : multiAgentReason"
-            @click="executionMode = 'multi_agent'"
+            class="task-secondary task-secondary-cancel"
+            data-testid="cancel-paused-task"
+            aria-label="Cancel paused task permanently"
+            title="Cancel this task; it cannot be continued afterwards"
+            @click="stopGeneration"
           >
-            Multi <span class="experimental-label">EXP</span>
+            Cancel task
           </button>
         </div>
       </div>
+      <p v-if="controlError" class="control-error" role="alert">{{ controlError }}</p>
       <div class="input-wrapper">
         <textarea
           ref="inputEl"
@@ -222,27 +272,52 @@
           @compositionstart="handleCompositionStart"
           @compositionend="handleCompositionEnd"
           placeholder="Send a message... (Enter to send, Shift+Enter for new line)"
-          :disabled="streaming || !!pendingConfirm || !!pendingModeRequest"
+          :disabled="taskInputLocked || !!pendingConfirm || !!pendingModeRequest"
           rows="1"
           @input="autoResize"
         ></textarea>
-        <!-- Stop button (shown during generation, hidden during tool confirmation) -->
         <button
-          v-if="streaming && !pendingConfirm"
-          @click="stopGeneration"
+          v-if="['running', 'pause_requested', 'resuming', 'cancelling'].includes(taskStatus) && !pendingConfirm"
+          type="button"
           class="btn-send btn-stop"
-          title="Stop generation"
+          data-testid="stop-task"
+          :disabled="taskStatus === 'cancelling'"
+          :aria-label="taskStatus === 'cancelling' ? 'Cancelling task' : 'Stop current task'"
+          :title="taskStatus === 'cancelling' ? 'Cancelling task' : 'Stop current task permanently'"
+          @click="stopGeneration"
         >
-          <svg width="18" height="18" viewBox="0 0 24 24" fill="currentColor">
-            <rect x="6" y="6" width="12" height="12" rx="1.5"/>
-          </svg>
+          <svg width="18" height="18" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><rect x="6" y="6" width="12" height="12" rx="1.5"/></svg>
         </button>
-        <!-- Send button (shown when idle or during tool confirmation) -->
+        <button
+          v-else-if="taskStatus === 'paused' && !pendingConfirm"
+          type="button"
+          class="btn-send btn-continue"
+          data-testid="continue-task"
+          aria-label="Continue paused task"
+          title="Continue paused task"
+          @click="continueGeneration"
+        >
+          <svg width="18" height="18" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><path d="M8 5v14l11-7z"/></svg>
+        </button>
+        <button
+          v-else-if="taskStatus === 'waiting_confirmation' && !pendingConfirm"
+          type="button"
+          class="btn-send btn-stop"
+          data-testid="stop-task"
+          aria-label="Cancel task awaiting confirmation"
+          title="Cancel task awaiting confirmation"
+          @click="stopGeneration"
+        >
+          <svg width="18" height="18" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><rect x="6" y="6" width="12" height="12" rx="1.5"/></svg>
+        </button>
+        <!-- Send button (shown only when no task owns this session) -->
         <button
           v-else
+          type="button"
           @click="send"
-          :disabled="streaming || pendingConfirm || pendingModeRequest || !input.trim()"
+          :disabled="taskInputLocked || pendingConfirm || pendingModeRequest || !input.trim()"
           class="btn-send"
+          aria-label="Send message"
           title="Send message"
         >
           <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
@@ -313,6 +388,7 @@ const currentTool = ref('')
 const emptyHistory = ref(false)
 const historyStatus = ref('empty')
 const autoFollow = ref(true)
+const lastMessagesScrollTop = ref(0)
 const msgContainer = ref(null)
 const inputEl = ref(null)
 const activeId = ref(props.sessionId)
@@ -320,8 +396,12 @@ const pendingConfirm = ref(null)
 const pendingModeRequest = ref('')
 const streamMsgRef = ref(null)
 const abortController = ref(null)
+const activeTraceId = ref('')
+const taskStatus = ref('idle')
+const controlError = ref('')
 const executionMode = ref('single_agent')
 const agentCapabilities = ref(null)
+const taskInputLocked = computed(() => taskStatus.value !== 'idle')
 const multiAgentAvailable = computed(() =>
   agentCapabilities.value?.available_modes?.includes('multi_agent') === true
 )
@@ -354,9 +434,74 @@ function getAbortSignal() {
   return abortController.value.signal
 }
 
+function statusValue(data) {
+  return String(data?.task_status || data?.status || '').toLowerCase()
+}
+
+function markTaskPaused(data = {}) {
+  if (data.trace_id) activeTraceId.value = data.trace_id
+  taskStatus.value = 'paused'
+  streaming.value = false
+  currentTool.value = ''
+  controlError.value = ''
+  if (streamMsgRef.value) streamMsgRef.value.streaming = false
+}
+
+async function pauseGeneration() {
+  const sessionId = activeId.value
+  const traceId = activeTraceId.value
+  if (!sessionId || !traceId || !['running', 'resuming'].includes(taskStatus.value)) return
+
+  taskStatus.value = 'pause_requested'
+  controlError.value = ''
+  try {
+    const result = await api.pauseStream({ session_id: sessionId, trace_id: traceId })
+    const requestIsCurrent = (
+      activeId.value === sessionId &&
+      activeTraceId.value === traceId &&
+      taskStatus.value === 'pause_requested'
+    )
+    if (requestIsCurrent && statusValue(result) === 'paused') markTaskPaused(result)
+  } catch (error) {
+    const requestIsCurrent = (
+      activeId.value === sessionId &&
+      activeTraceId.value === traceId &&
+      taskStatus.value === 'pause_requested'
+    )
+    if (requestIsCurrent) {
+      taskStatus.value = 'running'
+      controlError.value = error.message
+      messages.value.push({ role: 'assistant', content: `❌ **Pause failed:** ${error.message}` })
+      scrollBottom()
+    }
+  }
+}
+
+async function continueGeneration() {
+  const sessionId = activeId.value
+  const traceId = activeTraceId.value
+  if (!sessionId || !traceId || taskStatus.value !== 'paused') return
+
+  controlError.value = ''
+  taskStatus.value = 'resuming'
+  streaming.value = true
+  ensureAssistantStreamMessage()
+  const signal = getAbortSignal()
+  api.continuePausedStream({
+    session_id: sessionId,
+    trace_id: traceId,
+    signal,
+    ...createStreamHandlers(sessionId, false)
+  })
+}
+
 async function stopGeneration() {
   const sid = activeId.value
   if (!sid) return
+  const traceId = activeTraceId.value
+  const previousStatus = taskStatus.value
+  taskStatus.value = 'cancelling'
+  controlError.value = ''
 
   // 1. Abort the SSE fetch immediately (stops receiving tokens)
   if (abortController.value) {
@@ -389,9 +534,15 @@ async function stopGeneration() {
 
   // 5. Send cancel request to backend (fire-and-forget)
   try {
-    await api.cancelStream(sid)
+    await api.cancelStream(sid, traceId)
+    activeTraceId.value = ''
+    taskStatus.value = 'idle'
+    pendingConfirm.value = null
   } catch (e) {
-    console.warn('[stop] Backend cancel request failed (non-fatal):', e)
+    console.warn('[stop] Backend cancel request failed:', e)
+    controlError.value = e.message
+    taskStatus.value = previousStatus === 'paused' ? 'paused' : 'idle'
+    messages.value.push({ role: 'assistant', content: `❌ **Cancel failed:** ${e.message}` })
   }
 
   scrollBottom()
@@ -403,9 +554,30 @@ function isNearBottom(element) {
   return element.scrollHeight - element.scrollTop - element.clientHeight <= AUTO_FOLLOW_THRESHOLD_PX
 }
 
+function handleMessagesWheel(event) {
+  // A trackpad often moves less than AUTO_FOLLOW_THRESHOLD_PX per gesture.
+  // Record the upward reading intent before the next SSE delta can pull the
+  // viewport back to the bottom.
+  if (event.deltaY < 0) autoFollow.value = false
+}
+
 function handleMessagesScroll() {
   const element = msgContainer.value
-  if (element) autoFollow.value = isNearBottom(element)
+  if (!element) return
+
+  const currentScrollTop = element.scrollTop
+  const movedUp = currentScrollTop < lastMessagesScrollTop.value
+  lastMessagesScrollTop.value = currentScrollTop
+
+  if (movedUp) {
+    autoFollow.value = false
+    return
+  }
+
+  // Scrolling down only resumes following after the viewport reaches the
+  // bottom zone. Reading an older section must remain stable while tokens
+  // continue to arrive.
+  if (isNearBottom(element)) autoFollow.value = true
 }
 
 function scrollBottom(force = false) {
@@ -413,6 +585,7 @@ function scrollBottom(force = false) {
     const el = msgContainer.value
     if (!el || (!force && !autoFollow.value)) return
     el.scrollTop = el.scrollHeight
+    lastMessagesScrollTop.value = el.scrollTop
     autoFollow.value = true
   })
 }
@@ -441,7 +614,7 @@ function extractTitle(content) {
 
 async function send() {
   const content = input.value.trim()
-  if (!content || streaming.value || pendingConfirm.value) return
+  if (!content || taskInputLocked.value || pendingConfirm.value) return
 
   if (executionMode.value === 'single_agent' && requestsMultiAgentExecution(content)) {
     if (multiAgentAvailable.value) {
@@ -537,6 +710,9 @@ async function submitContent(content) {
   messages.value.push(streamMsg)
   streamMsgRef.value = streamMsg
   streaming.value = true
+  taskStatus.value = 'running'
+  activeTraceId.value = ''
+  controlError.value = ''
   scrollBottom(true)
 
   const signal = getAbortSignal()
@@ -616,13 +792,31 @@ function markConfirmationWaiting(data) {
   }
 }
 
-function startStream(sessionId, content, isNewSession, signal) {
-  api.streamMessage({
-    session_id: sessionId,
-    signal,
-    content,
-    mode: executionMode.value,
+function ensureAssistantStreamMessage() {
+  if (!streamMsgRef.value) {
+    streamMsgRef.value = messages.value.findLast(message => message.role === 'assistant') || null
+  }
+  if (!streamMsgRef.value) {
+    const streamMessage = { role: 'assistant', content: '', streaming: true }
+    messages.value.push(streamMessage)
+    streamMsgRef.value = streamMessage
+  }
+  streamMsgRef.value.streaming = true
+  return streamMsgRef.value
+}
+
+function createStreamHandlers(sessionId, isNewSession) {
+  const isCurrentSession = () => activeId.value === sessionId
+  return {
+    onTaskStarted: (data) => {
+      if (!isCurrentSession() || (data.session_id && data.session_id !== sessionId)) return
+      if (data.trace_id) activeTraceId.value = data.trace_id
+      taskStatus.value = 'running'
+      streaming.value = true
+    },
     onDelta: (delta) => {
+      if (!isCurrentSession()) return
+      if (taskStatus.value === 'resuming') taskStatus.value = 'running'
       if (streamMsgRef.value) {
         streamMsgRef.value.content += delta
         scheduleHighlight()
@@ -630,18 +824,23 @@ function startStream(sessionId, content, isNewSession, signal) {
       }
     },
     onToolStart: (name, id) => {
+      if (!isCurrentSession()) return
+      if (taskStatus.value === 'resuming') taskStatus.value = 'running'
       currentTool.value = name
       startToolCard(name, id)
       scrollBottom()
     },
     onToolEnd: (name, metadata) => {
+      if (!isCurrentSession()) return
       currentTool.value = ''
       finishToolCard(name, metadata)
     },
     onToolResult: (id, result, metadata) => {
+      if (!isCurrentSession()) return
       applyToolResult(id, result, metadata)
     },
     onInterrupt: (data) => {
+      if (!isCurrentSession()) return
       markConfirmationWaiting(data)
       const tools = (data.tools || []).map(t => ({ ...t, approved: true }))
       pendingConfirm.value = {
@@ -650,24 +849,45 @@ function startStream(sessionId, content, isNewSession, signal) {
         tools,
         isNewSession
       }
+      taskStatus.value = 'waiting_confirmation'
       streaming.value = false
       currentTool.value = ''
       if (streamMsgRef.value) {
         streamMsgRef.value.streaming = false
       }
     },
+    onPaused: (data) => {
+      if (!isCurrentSession()) return
+      markTaskPaused(data)
+      scrollBottom()
+    },
+    onCancelled: (data) => {
+      if (!isCurrentSession()) return
+      streaming.value = false
+      currentTool.value = ''
+      taskStatus.value = 'idle'
+      activeTraceId.value = ''
+      failUnresolvedTools(data.message || 'Task cancelled')
+      if (streamMsgRef.value) streamMsgRef.value.streaming = false
+    },
     onError: (err) => {
+      if (!isCurrentSession()) return
       if (streamMsgRef.value) {
         streamMsgRef.value.content += `\n\n❌ **Error:** ${err}`
       }
       streaming.value = false
       currentTool.value = ''
+      taskStatus.value = 'idle'
+      activeTraceId.value = ''
       failUnresolvedTools(`Stream failed: ${err}`)
       if (streamMsgRef.value) streamMsgRef.value.streaming = false
     },
     onDone: () => {
+      if (!isCurrentSession()) return
       streaming.value = false
       currentTool.value = ''
+      taskStatus.value = 'idle'
+      activeTraceId.value = ''
       failUnresolvedTools('Stream ended before an authoritative tool result was received')
       if (streamMsgRef.value) streamMsgRef.value.streaming = false
       if (isNewSession && !pendingConfirm.value) {
@@ -675,6 +895,16 @@ function startStream(sessionId, content, isNewSession, signal) {
       }
       scrollBottom()
     }
+  }
+}
+
+function startStream(sessionId, content, isNewSession, signal) {
+  api.streamMessage({
+    session_id: sessionId,
+    signal,
+    content,
+    mode: executionMode.value,
+    ...createStreamHandlers(sessionId, isNewSession)
   })
 }
 
@@ -713,11 +943,9 @@ function resumeAfterConfirm(approvedIds, approved) {
   }
   pendingConfirm.value = null
   streaming.value = true
+  taskStatus.value = 'running'
   currentTool.value = ''
-
-  if (streamMsgRef.value) {
-    streamMsgRef.value.streaming = true
-  }
+  ensureAssistantStreamMessage()
 
   const signal = getAbortSignal()
   api.resumeStream({
@@ -725,58 +953,67 @@ function resumeAfterConfirm(approvedIds, approved) {
     approved,
     approved_ids: approvedIds,
     signal,
-    onDelta: (delta) => {
-      if (streamMsgRef.value) {
-        streamMsgRef.value.content += delta
-        scheduleHighlight()
-        scrollBottom()
-      }
-    },
-    onToolStart: (name, id) => {
-      currentTool.value = name
-      startToolCard(name, id)
-      scrollBottom()
-    },
-    onToolEnd: (name, metadata) => {
-      currentTool.value = ''
-      finishToolCard(name, metadata)
-    },
-    onToolResult: (id, result, metadata) => {
-      applyToolResult(id, result, metadata)
-    },
-    onInterrupt: (data) => {
-      markConfirmationWaiting(data)
-      const tools = (data.tools || []).map(t => ({ ...t, approved: true }))
-      pendingConfirm.value = {
-        session_id: sessionId,
-        message: data.message || 'Confirm tool execution?',
-        tools,
-        isNewSession
-      }
-      streaming.value = false
-      currentTool.value = ''
-      if (streamMsgRef.value) {
-        streamMsgRef.value.streaming = false
-      }
-    },
-    onError: (err) => {
-      if (streamMsgRef.value) {
-        streamMsgRef.value.content += `\n\n❌ **Error:** ${err}`
-      }
-      streaming.value = false
-      currentTool.value = ''
-      failUnresolvedTools(`Stream failed: ${err}`)
-      if (streamMsgRef.value) streamMsgRef.value.streaming = false
-    },
-    onDone: () => {
-      streaming.value = false
-      currentTool.value = ''
-      failUnresolvedTools('Stream ended before an authoritative tool result was received')
-      if (streamMsgRef.value) streamMsgRef.value.streaming = false
-      if (isNewSession) emit('session-created', sessionId)
-      scrollBottom()
-    }
+    ...createStreamHandlers(sessionId, isNewSession)
   })
+}
+
+function resetTaskControlState() {
+  streaming.value = false
+  currentTool.value = ''
+  pendingConfirm.value = null
+  streamMsgRef.value = null
+  activeTraceId.value = ''
+  taskStatus.value = 'idle'
+  controlError.value = ''
+}
+
+async function restoreStreamStatus(sessionId, requestId) {
+  try {
+    const data = await api.getStreamStatus(sessionId)
+    if (requestId !== historyLoadRequestId || activeId.value !== sessionId) return
+
+    const rawStatus = statusValue(data)
+    const checkpointStatus = String(data.task_status || '').toLowerCase()
+    const status = rawStatus === 'active' ? (checkpointStatus || 'running') : rawStatus
+    const traceId = data.trace_id || data.active_trace_id || ''
+
+    if (['paused', 'pause_requested', 'running', 'pending', 'resuming'].includes(status) && traceId) {
+      activeTraceId.value = traceId
+      if (status === 'paused') {
+        markTaskPaused(data)
+      } else {
+        taskStatus.value = status === 'pending' ? 'running' : status
+        // A restored task has no browser SSE attached yet. The lifecycle is
+        // active, but `streaming` remains false until Continue opens a stream.
+        streaming.value = false
+      }
+      return
+    }
+
+    if (['waiting', 'waiting_confirmation'].includes(status) && traceId) {
+      activeTraceId.value = traceId
+      taskStatus.value = 'waiting_confirmation'
+      streaming.value = false
+      const interrupt = data.interrupt || data.interrupt_data || data.data
+      if (interrupt && Array.isArray(interrupt.tools)) {
+        const tools = interrupt.tools.map(tool => ({ ...tool, approved: true }))
+        pendingConfirm.value = {
+          session_id: sessionId,
+          message: interrupt.message || 'Confirm tool execution?',
+          tools,
+          isNewSession: false
+        }
+      }
+      return
+    }
+
+    activeTraceId.value = ''
+    taskStatus.value = 'idle'
+  } catch (error) {
+    if (requestId !== historyLoadRequestId || activeId.value !== sessionId) return
+    // History remains usable even if the optional control-state lookup fails.
+    console.warn('[stream-status] Failed to restore task control state:', error)
+  }
 }
 
 async function loadSessionMessages(sessionId) {
@@ -787,6 +1024,8 @@ async function loadSessionMessages(sessionId) {
     emptyHistory.value = false
     historyStatus.value = 'empty'
     autoFollow.value = true
+    lastMessagesScrollTop.value = 0
+    resetTaskControlState()
     return
   }
 
@@ -804,6 +1043,7 @@ async function loadSessionMessages(sessionId) {
     emptyHistory.value = messages.value.length === 0 && data.message_count === 0
     scheduleHighlight()
     scrollBottom(true)
+    await restoreStreamStatus(sessionId, requestId)
   } catch (e) {
     if (requestId !== historyLoadRequestId || activeId.value !== sessionId) return
 
@@ -816,48 +1056,26 @@ async function loadSessionMessages(sessionId) {
 
 watch(() => props.sessionId, async (newId) => {
   if (newId !== activeId.value) {
-    // Abort any in-progress SSE stream to prevent memory leak
+    // Detach this browser from the old SSE stream. Navigation is not an
+    // explicit cancellation request; only the red Stop button may cancel.
     if (abortController.value) {
       abortController.value.abort()
       abortController.value = null
     }
-    // Cancel the backend stream for the old session (fire-and-forget)
-    const oldId = activeId.value
-    if (oldId) {
-      api.cancelStream(oldId).catch(() => {})
-    }
     activeId.value = newId
-    streaming.value = false
-    currentTool.value = ''
-    pendingConfirm.value = null
     pendingModeRequest.value = ''
-    streamMsgRef.value = null
+    resetTaskControlState()
     emptyHistory.value = false
     historyStatus.value = 'empty'
     autoFollow.value = true
+    lastMessagesScrollTop.value = 0
 
     // Load existing messages from backend, or start fresh.
     await loadSessionMessages(newId)
   }
 })
 
-// Best-effort cancellation on tab close / refresh.
-// Uses sendBeacon because the browser may cancel in-flight fetch requests
-// during page unload. Not all browsers send Authorization headers with
-// sendBeacon, so this is best-effort — the 24h TTL on Redis handles
-// cleanup if the beacon fails.
-const _handleBeforeUnload = () => {
-  if (activeId.value && streaming.value) {
-    const BASE = import.meta.env.VITE_API_BASE || '/api'
-    // sendBeacon with no body — session_id is in the query param
-    navigator.sendBeacon(
-      `${BASE}/chat/stream/cancel?session_id=${encodeURIComponent(activeId.value)}`
-    )
-  }
-}
-
 onMounted(() => {
-  window.addEventListener('beforeunload', _handleBeforeUnload)
   api.getAgentCapabilities()
     .then(data => {
       agentCapabilities.value = data
@@ -879,8 +1097,8 @@ onMounted(() => {
 onUnmounted(() => {
   // Invalidate any history response that may still be in flight.
   historyLoadRequestId += 1
-  window.removeEventListener('beforeunload', _handleBeforeUnload)
   if (compositionEndTimer) window.clearTimeout(compositionEndTimer)
+  if (abortController.value) abortController.value.abort()
 })
 </script>
 
@@ -980,6 +1198,28 @@ onUnmounted(() => {
   border: 1px solid #fde68a;
 }
 
+.status-badge.resuming {
+  color: #0369a1;
+  background: #f0f9ff;
+  border: 1px solid #bae6fd;
+}
+
+.status-badge.resuming .pulse-dot {
+  background: #0284c7;
+}
+
+.status-badge.pausing {
+  color: #b45309;
+  background: #fffbeb;
+  border: 1px solid #fcd34d;
+}
+
+.status-badge.paused {
+  color: #4338ca;
+  background: #eef2ff;
+  border: 1px solid #c7d2fe;
+}
+
 .pulse-dot {
   width: 6px;
   height: 6px;
@@ -1030,9 +1270,76 @@ onUnmounted(() => {
   color: white;
 }
 
-.btn-send.btn-stop:hover {
+.btn-send.btn-stop:hover:not(:disabled) {
   background: #dc2626;
   transform: translateY(-1px);
+}
+
+.execution-mode-actions {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 8px;
+  flex-shrink: 0;
+}
+
+.task-secondary {
+  min-height: 32px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 5px;
+  padding: 0 10px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--bg-primary);
+  font-family: var(--font-ui);
+  font-size: var(--text-xs);
+  font-weight: 650;
+  white-space: nowrap;
+  cursor: pointer;
+  transition: background var(--transition), border-color var(--transition), color var(--transition);
+}
+
+.task-secondary-pause {
+  border-color: #fcd34d;
+  color: #b45309;
+}
+
+.task-secondary-pause:hover:not(:disabled) {
+  border-color: #f59e0b;
+  background: color-mix(in srgb, #f59e0b 10%, var(--bg-primary));
+  color: #92400e;
+}
+
+.task-secondary-cancel {
+  border-color: #fecaca;
+  color: #dc2626;
+}
+
+.task-secondary-cancel:hover:not(:disabled) {
+  border-color: #f87171;
+  background: color-mix(in srgb, #ef4444 10%, var(--bg-primary));
+  color: #b91c1c;
+}
+
+.task-secondary:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+
+.task-secondary:disabled {
+  opacity: 0.55;
+  cursor: not-allowed;
+}
+
+.btn-send.btn-continue {
+  background: #10b981;
+  color: white;
+}
+
+.btn-send.btn-continue:hover:not(:disabled) {
+  background: #059669;
 }
 
 /* Messages */
@@ -1598,6 +1905,13 @@ onUnmounted(() => {
   transition: border-color var(--transition), box-shadow var(--transition);
 }
 
+.control-error {
+  max-width: 772px;
+  margin: 0 auto 8px;
+  color: #dc2626;
+  font-size: var(--text-xs);
+}
+
 .input-wrapper:focus-within {
   border-color: var(--accent);
   box-shadow: 0 0 0 3px var(--accent-light);
@@ -1665,6 +1979,14 @@ onUnmounted(() => {
   .input-area {
     padding-left: 12px;
     padding-right: 12px;
+  }
+
+  .execution-mode-bar {
+    gap: 8px;
+  }
+
+  .execution-mode-actions {
+    gap: 6px;
   }
 }
 </style>

@@ -4,9 +4,11 @@ Provides tools for running long-running commands in background threads
 and checking their status later.
 """
 
+import logging
 import os
 import signal
 import subprocess
+import tempfile
 import threading
 import uuid
 from pathlib import Path
@@ -16,7 +18,9 @@ from typing import Dict, Optional
 from langchain_core.tools import tool
 
 from enterprise_agent.config.settings import settings
+from enterprise_agent.core.agent.tool_artifacts import ToolArtifactStore, format_tool_output
 from enterprise_agent.core.agent.tools.shell import (
+    _read_captured_stream,
     _safe_subprocess_environment,
     _shell_execution_kwargs,
     validate_command,
@@ -31,12 +35,14 @@ class BackgroundManager:
     Notifications queue for completed task alerts.
     """
 
-    def __init__(self):
+    def __init__(self, *, session_id: str | None = None, user_id: int | None = None):
         self.tasks: dict = {}
         self.notifications: Queue = Queue()
         self._threads: dict[str, threading.Thread] = {}
         self._processes: dict[str, subprocess.Popen] = {}
         self._lock = threading.Lock()
+        self.session_id = session_id or "background"
+        self.user_id = user_id
 
     def run(self, command: str, timeout: int = None) -> str:
         """Start a background task.
@@ -99,28 +105,77 @@ class BackgroundManager:
                 if os.name == "nt"
                 else {"start_new_session": True}
             )
-            process = subprocess.Popen(
-                command,
-                cwd=workdir,
-                env=_safe_subprocess_environment(workdir),
-                stdout=subprocess.PIPE,
-                stderr=subprocess.PIPE,
-                text=True,
-                **_shell_execution_kwargs(),
-                **process_group_args,
-            )
-            with self._lock:
-                self._processes[task_id] = process
-            if self.tasks[task_id].get("status") == "cancelled":
-                self._terminate_process(task_id)
-                return
-            stdout, stderr = process.communicate(timeout=timeout)
-            output = ((stdout or "") + (stderr or "")).strip()
+            with tempfile.TemporaryFile(mode="w+b") as stdout_file, tempfile.TemporaryFile(
+                mode="w+b"
+            ) as stderr_file:
+                process = subprocess.Popen(
+                    command,
+                    cwd=workdir,
+                    env=_safe_subprocess_environment(workdir),
+                    stdout=stdout_file,
+                    stderr=stderr_file,
+                    **_shell_execution_kwargs(),
+                    **process_group_args,
+                )
+                with self._lock:
+                    self._processes[task_id] = process
+                if self.tasks[task_id].get("status") == "cancelled":
+                    self._terminate_process(task_id)
+                    return
+                process.communicate(timeout=timeout)
+                stdout, stdout_truncated, _ = _read_captured_stream(stdout_file)
+                stderr, stderr_truncated, _ = _read_captured_stream(stderr_file)
+            output = "\n".join(part for part in (stdout, stderr) if part).strip() or "(no output)"
+            source_truncated = stdout_truncated or stderr_truncated
             if self.tasks[task_id].get("status") != "cancelled":
+                status = "success" if process.returncode == 0 else "error"
+                receipt = None
+                artifact_error = None
+                if len(output) > 100:
+                    try:
+                        receipt = ToolArtifactStore(workdir=workdir).save(
+                            output,
+                            trace_id=f"background-{self.session_id}",
+                            tool_call_id=task_id,
+                            source_already_truncated=source_truncated,
+                        )
+                    except Exception:
+                        artifact_error = "artifact_write_failed"
+                        logging.exception(
+                            "Background artifact persistence failed for task %s",
+                            task_id,
+                        )
+                if artifact_error and len(output) > settings.TOOL_OUTPUT_MAX_CHARS:
+                    # A large result may only be shortened after its recoverable
+                    # evidence is persisted. Fail closed if that prerequisite fails.
+                    self.tasks[task_id].update({
+                        "status": "error",
+                        "result": (
+                            "Background result withheld because its evidence artifact "
+                            "could not be stored (artifact_write_failed)."
+                        ),
+                        "exit_code": process.returncode,
+                        "artifact": None,
+                        "artifact_error": artifact_error,
+                    })
+                    return
+                if receipt is not None or len(output) > settings.TOOL_OUTPUT_MAX_CHARS or artifact_error:
+                    model_output, _ = format_tool_output(
+                        output,
+                        receipt=receipt,
+                        status=status,
+                        error_code="nonzero_exit" if process.returncode else None,
+                        exit_code=process.returncode,
+                        artifact_error=artifact_error,
+                    )
+                else:
+                    model_output = output
                 self.tasks[task_id].update({
                     "status": "completed" if process.returncode == 0 else "error",
-                    "result": output[:settings.TOOL_OUTPUT_MAX_CHARS] or "(no output)",
+                    "result": model_output,
                     "exit_code": process.returncode,
+                    "artifact": receipt.to_dict() if receipt else None,
+                    "artifact_error": artifact_error,
                 })
         except subprocess.TimeoutExpired:
             self._terminate_process(task_id)
@@ -143,7 +198,9 @@ class BackgroundManager:
             self.notifications.put({
                 "task_id": task_id,
                 "status": self.tasks[task_id]["status"],
-                "result": self.tasks[task_id]["result"][:500]
+                "result": self.tasks[task_id]["result"][:500],
+                "artifact": self.tasks[task_id].get("artifact"),
+                "artifact_error": self.tasks[task_id].get("artifact_error"),
             })
 
     def _terminate_process(self, task_id: str) -> None:
@@ -223,8 +280,8 @@ class BackgroundManager:
         return notifications
 
 
-# Per-session instances cache (to prevent cross-session pollution)
-_bg_managers: Dict[str, BackgroundManager] = {}  # Key is session_id
+# Per-user/session instances cache (session IDs alone are not a tenant boundary).
+_bg_managers: Dict[tuple[int | None, str], BackgroundManager] = {}
 
 
 def get_background_manager(session_id: str = None) -> BackgroundManager:
@@ -240,25 +297,41 @@ def get_background_manager(session_id: str = None) -> BackgroundManager:
         from enterprise_agent.core.agent.tools.workspace import get_current_session_id
         session_id = get_current_session_id()
 
-    if session_id is None:
-        # Return empty manager for operations that don't need session context
-        return BackgroundManager()
+    from enterprise_agent.core.agent.tools.workspace import get_current_user_id
 
-    if session_id not in _bg_managers:
-        _bg_managers[session_id] = BackgroundManager()
-    return _bg_managers[session_id]
+    user_id = get_current_user_id()
+
+    # Keep a deterministic default bucket for CLI/tests that do not install a
+    # session ContextVar. Returning a fresh manager here made background_run and
+    # check_background observe different task registries and left orphan threads.
+    session_id = session_id or "__default__"
+
+    key = (user_id, session_id)
+    if key not in _bg_managers:
+        _bg_managers[key] = BackgroundManager(session_id=session_id, user_id=user_id)
+    return _bg_managers[key]
 
 
-def clear_background_manager(session_id: str) -> None:
+def clear_background_manager(session_id: str | None) -> None:
     """Clear BackgroundManager for a session.
 
     Called when starting a new session or when background tasks should be reset.
     """
-    if session_id in _bg_managers:
-        bg_mgr = _bg_managers[session_id]
+    from enterprise_agent.core.agent.tools.workspace import get_current_user_id
+
+    key = (get_current_user_id(), session_id or "__default__")
+    if key in _bg_managers:
+        bg_mgr = _bg_managers[key]
         bg_mgr.shutdown()
         # Remove from cache
-        del _bg_managers[session_id]
+        del _bg_managers[key]
+
+
+def shutdown_background_managers() -> None:
+    """Cancel/reap every cached worker, used by process and test shutdown."""
+    for manager in list(_bg_managers.values()):
+        manager.shutdown()
+    _bg_managers.clear()
 
 
 # === Tool Definitions ===

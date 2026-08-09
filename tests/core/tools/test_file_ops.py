@@ -1,6 +1,7 @@
 """Tests for file_ops module (read_file, write_file, edit_file)."""
 
 import json
+from contextlib import contextmanager
 from pathlib import Path
 from unittest.mock import patch
 
@@ -77,6 +78,28 @@ class TestReadFile:
         # Should either read or return error gracefully
         assert isinstance(result, str)
 
+    @pytest.mark.parametrize(
+        "path",
+        [
+            ".agent/tool-artifacts/trace/call.txt",
+            ".transcripts/transcript.jsonl",
+            ".tasks/task_1.json",
+            ".team/inbox/lead.jsonl",
+        ],
+    )
+    def test_generic_file_tools_reject_operational_paths(self, path):
+        read_result = read_file.invoke({"path": path})
+        write_result = write_file.invoke({"path": path, "content": "tamper"})
+        edit_result = edit_file.invoke({
+            "path": path,
+            "old_text": "before",
+            "new_text": "after",
+        })
+
+        assert "dedicated" in read_result
+        assert "dedicated" in write_result
+        assert "dedicated" in edit_result
+
 
 class TestWriteFile:
     """Test write_file tool."""
@@ -138,6 +161,24 @@ class TestWriteFile:
         assert "Wrote" in result
         assert test_file.read_text() == unicode_content
 
+    @patch('enterprise_agent.core.agent.tools.file_ops.resolve_path')
+    def test_write_takes_global_workspace_lock(self, mock_resolve, monkeypatch, temp_workspace):
+        from enterprise_agent.core.agent.tools import file_ops
+
+        target = temp_workspace / "locked.txt"
+        mock_resolve.return_value = target
+        lock_entries = []
+
+        @contextmanager
+        def recording_lock():
+            lock_entries.append("entered")
+            yield
+
+        monkeypatch.setattr(file_ops, "workspace_write_lock", recording_lock)
+
+        assert "Wrote" in write_file.invoke({"path": "locked.txt", "content": "safe"})
+        assert lock_entries == ["entered"]
+
 
 class TestEditFile:
     """Test edit_file tool."""
@@ -196,6 +237,37 @@ class TestEditFile:
             "new_text": "bar"
         })
         assert test_file.read_text() == "bar foo foo"
+
+    @patch('enterprise_agent.core.agent.tools.file_ops.resolve_path')
+    def test_edit_read_modify_write_holds_global_lock(
+        self,
+        mock_resolve,
+        monkeypatch,
+        temp_workspace,
+    ):
+        from enterprise_agent.core.agent.tools import file_ops
+
+        target = temp_workspace / "locked-edit.txt"
+        target.write_text("before", encoding="utf-8")
+        mock_resolve.return_value = target
+        lock_entries = []
+
+        @contextmanager
+        def recording_lock():
+            lock_entries.append("entered")
+            yield
+
+        monkeypatch.setattr(file_ops, "workspace_write_lock", recording_lock)
+
+        result = edit_file.invoke({
+            "path": "locked-edit.txt",
+            "old_text": "before",
+            "new_text": "after",
+        })
+
+        assert "Edited" in result
+        assert target.read_text(encoding="utf-8") == "after"
+        assert lock_entries == ["entered"]
 
 
 class TestPathSecurity:
@@ -264,6 +336,28 @@ class TestDeletePaths:
         trash_items = manifest_path.parent / "items"
         assert (trash_items / "obsolete.txt").read_text(encoding="utf-8") == "old"
         assert (trash_items / "generated" / "result.txt").exists()
+
+    def test_delete_holds_global_workspace_lock(self, deletion_workspace, monkeypatch):
+        from enterprise_agent.core.agent.tools import file_ops
+
+        target = deletion_workspace / "locked-delete.txt"
+        target.write_text("old", encoding="utf-8")
+        lock_entries = []
+
+        @contextmanager
+        def recording_lock():
+            lock_entries.append("entered")
+            yield
+
+        monkeypatch.setattr(file_ops, "workspace_write_lock", recording_lock)
+
+        receipt = json.loads(delete_paths.invoke({
+            "paths": ["locked-delete.txt"],
+            "reason": "Verify serialized deletion",
+        }))
+
+        assert receipt["status"] == "moved_to_recovery_trash"
+        assert lock_entries == ["entered"]
 
     @pytest.mark.parametrize(
         "path",

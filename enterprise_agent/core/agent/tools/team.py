@@ -22,6 +22,8 @@ Architecture:
 
 import asyncio
 import json
+import logging
+import re
 import time
 import uuid
 from datetime import datetime, timezone
@@ -42,6 +44,7 @@ VALID_MSG_TYPES = {
     "broadcast",
     "shutdown_request",
     "shutdown_response",
+    "plan_approval_request",
     "plan_approval_response",
     "auto_claimed_task"
 }
@@ -50,12 +53,38 @@ VALID_MSG_TYPES = {
 IDLE_TIMEOUT_SECONDS = 60
 POLL_INTERVAL_SECONDS = 5
 MAX_WORK_ROUNDS = 50
+VALID_AGENT_NAME = re.compile(r"^[A-Za-z0-9_-]{1,64}$")
+AUTONOMOUS_TEAM_TOOL_NAMES = {
+    "bash",
+    "read_file",
+    "task_get",
+    "task_list",
+    "load_skill",
+    "list_skills",
+    "list_teammates",
+    "read_tool_artifact",
+    "context_status",
+    "search_memory",
+    # These three are intercepted by TeammateRunner and never dispatched to
+    # their lead-Agent wrappers.
+    "claim_task",
+    "send_message",
+    "idle",
+}
 
 # System prompt template for team agents (concise version)
 TEAMMATE_SYSTEM_PROMPT_TEMPLATE = """You are '{name}' (role: {role}). Part of a multi-agent team.
 
-Focus on your role. Use available tools as needed. Report progress to lead.
+Focus on your role. Tools are read-only/safe; report requested mutations to lead.
 When done, call `idle()` to signal availability. Check inbox for messages."""
+
+
+def _validate_agent_name(name: str) -> str:
+    """Reject model-controlled names before they become inbox filenames."""
+    value = str(name or "")
+    if not VALID_AGENT_NAME.fullmatch(value):
+        raise ValueError("Agent name must match [A-Za-z0-9_-]{1,64}")
+    return value
 
 
 class AsyncMessageBus:
@@ -75,9 +104,17 @@ class AsyncMessageBus:
 
     def _get_lock(self, name: str) -> asyncio.Lock:
         """Get or create lock for inbox access."""
+        name = _validate_agent_name(name)
         if name not in self._locks:
             self._locks[name] = asyncio.Lock()
         return self._locks[name]
+
+    def _inbox_path(self, name: str) -> Path:
+        name = _validate_agent_name(name)
+        path = (self.inbox_dir / f"{name}.jsonl").resolve()
+        if not path.is_relative_to(self.inbox_dir.resolve()):
+            raise ValueError("Agent inbox path escapes the team directory")
+        return path
 
     async def send(
         self,
@@ -101,6 +138,8 @@ class AsyncMessageBus:
         """
         if msg_type not in VALID_MSG_TYPES:
             return f"Error: Invalid msg_type '{msg_type}'"
+        sender = _validate_agent_name(sender)
+        to = _validate_agent_name(to)
 
         msg = {
             "type": msg_type,
@@ -110,9 +149,13 @@ class AsyncMessageBus:
             "datetime": datetime.now(timezone.utc).isoformat()
         }
         if extra:
-            msg.update(extra)
+            # Coordination metadata may add request IDs, but cannot forge the
+            # authenticated envelope chosen by this method.
+            for key, value in extra.items():
+                if key not in msg:
+                    msg[key] = value
 
-        inbox_path = self.inbox_dir / f"{to}.jsonl"
+        inbox_path = self._inbox_path(to)
         lock = self._get_lock(to)
 
         async with lock:
@@ -130,7 +173,8 @@ class AsyncMessageBus:
         Returns:
             List of messages (inbox is cleared after reading)
         """
-        inbox_path = self.inbox_dir / f"{name}.jsonl"
+        name = _validate_agent_name(name)
+        inbox_path = self._inbox_path(name)
         lock = self._get_lock(name)
 
         async with lock:
@@ -198,6 +242,7 @@ class TeammateConfig:
 
     async def find_member(self, name: str) -> Optional[dict]:
         """Find member by name."""
+        name = _validate_agent_name(name)
         config = await self.load()
         for member in config.get("members", []):
             if member.get("name") == name:
@@ -206,6 +251,7 @@ class TeammateConfig:
 
     async def update_member_status(self, name: str, status: str) -> None:
         """Update member status."""
+        name = _validate_agent_name(name)
         config = await self.load()
         for member in config.get("members", []):
             if member.get("name") == name:
@@ -215,6 +261,7 @@ class TeammateConfig:
 
     async def add_member(self, name: str, role: str, status: str = "working") -> None:
         """Add new member."""
+        name = _validate_agent_name(name)
         config = await self.load()
         member = {"name": name, "role": role, "status": status}
         config["members"].append(member)
@@ -222,6 +269,7 @@ class TeammateConfig:
 
     async def remove_member(self, name: str) -> None:
         """Remove member."""
+        name = _validate_agent_name(name)
         config = await self.load()
         config["members"] = [
             m for m in config.get("members", [])
@@ -253,7 +301,7 @@ class TeammateRunner:
         bus: AsyncMessageBus,
         config: TeammateConfig
     ):
-        self.name = name
+        self.name = _validate_agent_name(name)
         self.role = role
         self.bus = bus
         self.config = config
@@ -345,7 +393,10 @@ class TeammateRunner:
         from enterprise_agent.core.agent.tools import ALL_TOOLS
 
         llm = get_llm()
-        llm_with_tools = llm.bind_tools(ALL_TOOLS)
+        autonomous_tools = [
+            tool for tool in ALL_TOOLS if tool.name in AUTONOMOUS_TEAM_TOOL_NAMES
+        ]
+        llm_with_tools = llm.bind_tools(autonomous_tools)
 
         ctx_mgr = get_context_manager()
 
@@ -425,11 +476,84 @@ class TeammateRunner:
                     else:
                         # Execute regular tool
                         result = await self._execute_tool(tool_name, tool_input)
-                        tool_results.append({
+                        raw_output = (
+                            json.dumps(result, ensure_ascii=False, sort_keys=True, default=str)
+                            if isinstance(result, (dict, list))
+                            else str(result)
+                        )
+                        from enterprise_agent.core.agent.tool_artifacts import (
+                            ToolArtifactStore,
+                            format_tool_output,
+                        )
+                        from enterprise_agent.core.agent.tools.contracts import (
+                            normalize_tool_result,
+                        )
+                        from enterprise_agent.core.agent.tools.workspace import (
+                            get_current_session_id,
+                            get_current_user_id,
+                        )
+
+                        normalized = normalize_tool_result(
+                            tool_name=tool_name,
+                            tool_call_id=tool_id or tool_name,
+                            raw_result=result,
+                            duration_ms=0,
+                            attempt_count=1,
+                        )
+                        receipt = None
+                        artifact_error = None
+                        if len(raw_output) > 100:
+                            try:
+                                receipt = ToolArtifactStore(
+                                    user_id=get_current_user_id(),
+                                ).save(
+                                    raw_output,
+                                    trace_id=(
+                                        f"team-{get_current_session_id() or self.name}"
+                                    ),
+                                    tool_call_id=tool_id or tool_name,
+                                )
+                            except Exception:
+                                logging.exception("Teammate tool artifact persistence failed")
+                                artifact_error = "artifact_write_failed"
+                        if (
+                            artifact_error
+                            and len(raw_output) > settings.TOOL_OUTPUT_MAX_CHARS
+                        ):
+                            model_output = (
+                                "Error: artifact_write_failed; large teammate output "
+                                "was not continued."
+                            )
+                            tool_results.append({
+                                "role": "tool",
+                                "content": model_output,
+                                "tool_call_id": tool_id,
+                                "artifact": {"storage_status": "failed"},
+                            })
+                            continue
+                        if (
+                            receipt is not None
+                            or len(raw_output) > settings.TOOL_OUTPUT_MAX_CHARS
+                            or artifact_error
+                        ):
+                            model_output = format_tool_output(
+                                raw_output,
+                                receipt=receipt,
+                                status=normalized.status.value,
+                                error_code=normalized.error_code,
+                                exit_code=normalized.exit_code,
+                                artifact_error=artifact_error,
+                            )[0]
+                        else:
+                            model_output = raw_output
+                        tool_message = {
                             "role": "tool",
-                            "content": str(result)[:settings.TOOL_OUTPUT_MAX_CHARS],
+                            "content": model_output,
                             "tool_call_id": tool_id
-                        })
+                        }
+                        if receipt is not None:
+                            tool_message["artifact"] = receipt.to_dict()
+                        tool_results.append(tool_message)
 
             if tool_results:
                 self.messages.append({"role": "user", "content": tool_results})
@@ -523,8 +647,23 @@ class TeammateRunner:
         return unclaimed
 
     async def _execute_tool(self, tool_name: str, tool_input: Dict) -> str:
-        """Execute a tool by name."""
+        """Execute only tools that cannot bypass lead-Agent governance."""
         from enterprise_agent.core.agent.tools import get_tool_by_name
+        from enterprise_agent.core.agent.tools.contracts import RiskLevel, resolve_tool_risk
+
+        if tool_name not in AUTONOMOUS_TEAM_TOOL_NAMES:
+            return f"Blocked: autonomous teammate tool is not allowed: {tool_name}"
+        if tool_name in {"claim_task", "send_message", "idle"}:
+            return f"Blocked: {tool_name} must use the teammate coordination handler"
+        try:
+            risk = resolve_tool_risk(tool_name, tool_input)
+        except (KeyError, ValueError):
+            return f"Blocked: autonomous teammate tool has no safe contract: {tool_name}"
+        if risk is not RiskLevel.SAFE:
+            return (
+                "Blocked: autonomous teammates may execute only policy-classified "
+                f"safe tools; return '{tool_name}' to the lead Agent."
+            )
 
         tool = get_tool_by_name(tool_name)
         if not tool:
@@ -535,8 +674,9 @@ class TeammateRunner:
                 return await tool.ainvoke(tool_input)
             else:
                 return tool.invoke(tool_input)
-        except Exception as e:
-            return f"Error: {e}"
+        except Exception:
+            logging.exception("Autonomous teammate tool execution failed")
+            return "Error: teammate_tool_execution_failed"
 
 
 class TeammateManager:
@@ -560,6 +700,7 @@ class TeammateManager:
         Returns:
             Spawn confirmation
         """
+        name = _validate_agent_name(name)
         # Create runner
         runner = TeammateRunner(name, role, self.bus, self.config)
         self.runners[name] = runner

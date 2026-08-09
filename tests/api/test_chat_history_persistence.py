@@ -1,5 +1,6 @@
 from datetime import datetime, timezone
 from types import SimpleNamespace
+from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
@@ -89,3 +90,40 @@ def test_partial_history_status_is_exposed_after_a_legacy_gap():
     )
 
     assert _history_status(session, durable_count=2) == "partial"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("terminal_status", ["completed", "failed", "cancelled"])
+@pytest.mark.parametrize("late_status", ["interrupted", "completed"])
+@pytest.mark.parametrize("append", [True, False], ids=["append", "replace"])
+async def test_terminal_assistant_message_ignores_late_stream_persistence(
+    terminal_status,
+    late_status,
+    append,
+):
+    """A stale SSE finalizer cannot rewrite or append to a terminal response."""
+    assistant = SimpleNamespace(
+        content="authoritative terminal response",
+        status=terminal_status,
+        updated_at=None,
+    )
+    result = MagicMock()
+    result.scalar_one_or_none.return_value = assistant
+    db = MagicMock()
+    db.execute = AsyncMock(return_value=result)
+    db.commit = AsyncMock()
+
+    updated = await chat_history.update_assistant_message(
+        db,
+        message_id=17,
+        user_id=7,
+        content=" stale late segment",
+        status=late_status,
+        append=append,
+    )
+
+    assert updated is True
+    assert assistant.content == "authoritative terminal response"
+    assert assistant.status == terminal_status
+    assert assistant.updated_at is None
+    db.commit.assert_awaited_once()

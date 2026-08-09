@@ -42,6 +42,19 @@ def run() -> dict:
         graph_nodes = set(graph.get_graph().nodes)
         routes = {route.path for route in app.routes}
         workspace_file = Path(tmpdir) / "user_4242" / "smoke" / "hello.txt"
+        pause_nodes = {
+            "pause_before_llm_gate",
+            "user_pause_before_llm",
+            "pause_before_tool_execution_gate",
+            "user_pause_before_tool_execution",
+            "pause_before_finalize_gate",
+            "user_pause_before_finalize",
+        }
+        pause_routes = {
+            "/chat/stream/pause",
+            "/chat/stream/continue",
+            "/chat/stream/status",
+        }
 
         checks = {
             "workspace_file_created": workspace_file.exists(),
@@ -51,6 +64,8 @@ def run() -> dict:
             "dangerous_shell_blocked": blocked_result["exit_code"] != 0,
             "graph_compiled": {"init_context", "llm_call", "tool_executor"}.issubset(graph_nodes),
             "api_routes_loaded": {"/health", "/chat/stream", "/workspace/tree"}.issubset(routes),
+            "pause_graph_compiled": pause_nodes.issubset(graph_nodes),
+            "pause_api_routes_loaded": pause_routes.issubset(routes),
         }
 
         if not all(checks.values()):

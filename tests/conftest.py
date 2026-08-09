@@ -23,6 +23,9 @@ def mock_workspace_env(temp_workspace: Path) -> Generator[None, None, None]:
     original = os.environ.get("WORKSPACE_BASE")
     os.environ["WORKSPACE_BASE"] = str(temp_workspace)
     yield
+    from enterprise_agent.core.agent.tools.background import shutdown_background_managers
+
+    shutdown_background_managers()
     if original:
         os.environ["WORKSPACE_BASE"] = original
     else:

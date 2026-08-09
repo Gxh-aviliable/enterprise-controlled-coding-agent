@@ -15,6 +15,10 @@ from enterprise_agent.core.execution.state_machine import (
     [
         (TaskStatus.PENDING, TaskStatus.RUNNING),
         (TaskStatus.PENDING, TaskStatus.CANCELLED),
+        (TaskStatus.RUNNING, TaskStatus.PAUSED),
+        (TaskStatus.PAUSED, TaskStatus.RUNNING),
+        (TaskStatus.PAUSED, TaskStatus.FAILED),
+        (TaskStatus.PAUSED, TaskStatus.CANCELLED),
         (TaskStatus.RUNNING, TaskStatus.WAITING_CONFIRMATION),
         (TaskStatus.WAITING_CONFIRMATION, TaskStatus.RUNNING),
         (TaskStatus.WAITING_CONFIRMATION, TaskStatus.FAILED),

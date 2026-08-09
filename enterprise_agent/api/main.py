@@ -73,6 +73,16 @@ async def lifespan(app: FastAPI):
     except Exception as e:
         logger.warning("Error draining memory flush tasks: %s", e)
 
+    try:
+        from enterprise_agent.core.agent.tools.background import (
+            shutdown_background_managers,
+        )
+
+        shutdown_background_managers()
+        logger.info("Background Agent processes drained")
+    except Exception as e:
+        logger.warning("Error draining background Agent processes: %s", e)
+
     cleanup_task.cancel()  # Stop memory cleanup task
 
     # Close Redis checkpointer connection pool

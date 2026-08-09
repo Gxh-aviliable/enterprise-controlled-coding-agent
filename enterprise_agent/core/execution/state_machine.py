@@ -11,6 +11,7 @@ from enum import Enum
 class TaskStatus(str, Enum):
     PENDING = "pending"
     RUNNING = "running"
+    PAUSED = "paused"
     WAITING_CONFIRMATION = "waiting_confirmation"
     SUCCEEDED = "succeeded"
     FAILED = "failed"
@@ -35,12 +36,18 @@ TERMINAL_STATUSES = {
 ALLOWED_TRANSITIONS = {
     TaskStatus.PENDING: {TaskStatus.RUNNING, TaskStatus.CANCELLED},
     TaskStatus.RUNNING: {
+        TaskStatus.PAUSED,
         TaskStatus.WAITING_CONFIRMATION,
         TaskStatus.SUCCEEDED,
         TaskStatus.FAILED,
         TaskStatus.CANCELLED,
     },
     TaskStatus.WAITING_CONFIRMATION: {
+        TaskStatus.RUNNING,
+        TaskStatus.FAILED,
+        TaskStatus.CANCELLED,
+    },
+    TaskStatus.PAUSED: {
         TaskStatus.RUNNING,
         TaskStatus.FAILED,
         TaskStatus.CANCELLED,

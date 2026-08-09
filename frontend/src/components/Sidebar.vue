@@ -99,7 +99,9 @@
       <FileTree
         ref="fileTreeRef"
         :selected-path="selectedFilePath"
+        :before-mutation="beforeFileMutation"
         @select="handleFileSelect"
+        @mutated="$emit('workspace-mutated', $event)"
       />
     </div>
 
@@ -144,9 +146,13 @@ import { auth } from '../stores/auth.js'
 defineProps({
   sessions: { type: Array, default: () => [] },
   activeId: { type: String, default: '' },
-  selectedFilePath: { type: String, default: '' }
+  selectedFilePath: { type: String, default: '' },
+  beforeFileMutation: { type: Function, default: null }
 })
-const emit = defineEmits(['select', 'delete', 'new-session', 'file-select', 'tab-change', 'open-admin'])
+const emit = defineEmits([
+  'select', 'delete', 'new-session', 'file-select', 'tab-change', 'open-admin',
+  'logout', 'workspace-mutated'
+])
 
 // User menu
 const showUserMenu = ref(false)
@@ -171,11 +177,15 @@ function openAdminConsole() {
 
 function handleLogout() {
   showUserMenu.value = false
-  auth.logout()
+  emit('logout')
 }
 
 const activeTab = ref('sessions')
 const fileTreeRef = ref(null)
+
+function setActiveTab(tab) {
+  activeTab.value = tab
+}
 
 // Auto-refresh file tree + notify App when tab changes
 watch(activeTab, async (tab) => {
@@ -189,6 +199,8 @@ watch(activeTab, async (tab) => {
 function handleFileSelect(node) {
   emit('file-select', node)
 }
+
+defineExpose({ setActiveTab })
 </script>
 
 <style scoped>

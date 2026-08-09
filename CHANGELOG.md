@@ -6,6 +6,12 @@ All notable project changes are recorded here. Benchmark and performance claims 
 
 ### Added
 
+- Guarded Workspace Preview/Edit with sanitized Markdown rendering, syntax-highlighted code, 500-line incremental preview, dirty/save/discard states, `Cmd/Ctrl+S`, unsaved-navigation protection, and actionable inline VS Code errors. Browser writes use SHA-256 optimistic locking and atomic replacement, return a structured 409 conflict, and reject sensitive or Agent-owned paths, symlinks, binary files, new files, and UTF-8 files above 1 MiB.
+- Redis-coordinated cooperative Pause/Continue with exact user/session/Trace control keys, a checkpointed `paused` lifecycle, safe-boundary pause gates, typed `user_pause` interrupts, duplicate-resume locking, refreshed-page status recovery, same-Trace continuation, and a separate terminal Stop/Cancel path. In-flight model and foreground-tool calls are not forcibly preempted; Pause takes effect at the next boundary.
+- Workspace-scoped tool-output artifacts with sanitized content-addressed paths, redacted bounded evidence, SHA-256 receipts, atomic/private writes, authenticated UTF-8-safe range reads, Trace/SSE linkage, and independent model-preview limits.
+- Schema-v2 context continuation packets that combine deterministic task facts (goal, status, failure, Todo, changed files, validation and tool receipts) with an explicitly supplemental model narrative.
+- Whole-summary prompt/output limits, next-main-turn continuation budgets with growth headroom, conservative Unicode/high-entropy token estimation, and one-shot recovery for provider context-length errors.
+- Fail-closed legacy child-Agent boundaries: autonomous subagents/teammates are read-only, non-safe tools return to the governed lead runtime, and team inbox names cannot traverse the Workspace.
 - Source-grounded Chinese “backend Agent from zero” reading guide with a 20-station, code-block-by-code-block route covering startup, API/SSE, AgentState, LangGraph nodes and routing, model/tool loops, HITL recovery, validation, context budgets, memory, Trace, Single/Multi boundaries, tests, and a seven-day study path.
 - Canonical documentation index and current-code walkthrough replacing four overlapping, line-number-sensitive beginner guides.
 - Canonical benchmark artifact policy retaining one final platform report, one memory report, and one real single-Agent report.
@@ -21,7 +27,7 @@ All notable project changes are recorded here. Benchmark and performance claims 
 - Architecture baseline, current capability matrix, canonical documentation index, and code walkthrough.
 - Dependency-light smoke test covering application imports, graph compilation, workspace isolation, file tools, safe shell execution, and dangerous-command rejection.
 - Regression coverage for task-manager cache isolation across workspace changes.
-- Validated six-state task lifecycle and explicit parse/plan/execute/checkpoint/validate/summarize graph phases.
+- Validated seven-state task lifecycle, including non-terminal `paused`, and explicit parse/plan/execute/checkpoint/validate/summarize graph phases.
 - Uniform contract metadata for every registered tool: input schema, risk, timeout, retries, idempotency, confirmation policy, side-effect class, and normalized result records.
 - Per-task token/tool-call budgets, code-change validation gate, and single-Agent-by-default configuration.
 - Automatic confirmation expiry that resumes an interrupted graph with a deterministic rejection.
@@ -40,10 +46,20 @@ All notable project changes are recorded here. Benchmark and performance claims 
 
 ### Changed
 
+- The chat composer now exposes exactly one state-aware primary action: Send while idle, Stop while running, and Continue while paused. Cooperative Pause and paused-task Cancel remain available as labelled secondary controls in the execution bar, and late Pause responses can no longer revive an already cancelled UI state.
+- Replaced the previously documented Pause target design with the implemented Redis `pause_requested` control flow, pre-interrupt `paused` checkpoint ordering, typed interrupt isolation, safe-boundary semantics, same-Trace authorization and explicit Stop/Cancel separation.
+- Context reduction now runs artifact-backed microcompact before paid full summarization, uses a provider-window-aware effective threshold, and separates current active-context estimates from cumulative task/session token spend.
 - Renamed the public GitHub repository from `my_mini_claude_code` to `enterprise-controlled-coding-agent` to match the README product identity, and updated current clone/directory examples.
 
 ### Fixed
 
+- Multi-Agent tasks that validate Python files with `python -m py_compile` now record that successful command as verification evidence instead of exhausting the validation budget and ending as `failed`. The final LangGraph task state is now the single terminal source for Trace, SSE and MySQL projections; only real `succeeded` tasks emit `[DONE]`, terminal rows/traces resist late-event regression, and missing or non-terminal checkpoints fail closed.
+- Streaming chat now treats any upward wheel/scroll movement as reading intent, so small macOS trackpad gestures are not immediately pulled back to the bottom by the next SSE token; `Latest` explicitly resumes following.
+- Stop/Cancel now closes the cancelled Redis checkpoint turn with an idempotent Assistant tombstone (and cancelled ToolMessages when required), synchronizes the exact Trace's MySQL assistant row, resists late SSE status regression, and keeps administrator cancellation bound to the selected Trace. A stopped HumanMessage can remain available for conversational reference without being merged with the next request as `Human -> Human`.
+- Immediate conversation references such as “刚才/上一条/previous message” now bypass cross-session Chroma recall. Chinese memory ranking enforces the semantic-distance hard gate, removes generic bigram evidence, requires meaningful lexical overlap, and injects accepted memory as system reference context instead of a synthetic HumanMessage.
+- Full and manual context compression now use LangGraph's all-message removal sentinel before adding continuation messages, so `add_messages` no longer silently appends summaries while retaining the entire checkpoint history.
+- Context transcripts are normalized, atomically written with unique safe names, exposed through workspace-relative handles, and resolved per current user instead of pinning a process-wide manager to the first tenant.
+- Long structured Shell results are normalized before any preview limit, preserving non-zero exit status; microcompact never replaces an old tool body unless a real artifact receipt can be verified.
 - Removed the unreferenced legacy Vue file manager, standalone 739-line prototype, empty utility package, obsolete Claude workflow rules, and duplicate pytest configuration source.
 - Removed completed implementation plans, obsolete audits, misleading issue reports, raw LangSmith dumps, duplicate benchmark runs, and stale beginner guides from the active documentation tree.
 - POSIX foreground/background commands now use an explicit Bash executable instead of the host's implicit `/bin/sh`; the Agent no longer receives the tenant's absolute workspace path, and policy failures provide actionable relative-path, captured-output, or `delete_paths` remediation without weakening existing blocks.
@@ -102,6 +118,8 @@ All notable project changes are recorded here. Benchmark and performance claims 
 
 ### Baseline verification
 
+- Current code verification (2026-08-10): backend 561 passed; Ruff passed; frontend 77/77 passed; production build, 9/9 local smoke and Compose configuration passed. Multi regression coverage proves real delegation, mutation, `py_compile` validation and terminal Trace/MySQL consistency without calling a third-party model. The prior Preview/Edit Docker and browser smoke remains valid for its recorded code state.
+- Current code verification (2026-08-08): backend 442 passed; Ruff passed; frontend 23/23 passed; production build, Compose configuration and 7-check local smoke passed; the offline Platform benchmark remained 10/10. No third-party model was called for this verification.
 - Current milestone (2026-07-23): backend 381 passed; Ruff passed; frontend 23/23 passed; production build passed with a 76.99 kB largest chunk; Compose configuration and local smoke passed.
 - Real `deepseek-chat` single-Agent benchmark: 8/10 tasks, 82.9% tool success, 5.285 s average duration, 19,339.9 average tokens, 50.0% human intervention, 6 safety interceptions, and 0 infrastructure errors.
 - Rebuilt API/frontend images passed against the existing MySQL volume; Alembic reached `20260722_0002`, 13 readable Redis messages migrated to MySQL, all 12 non-deleted user-1 sessions were returned after refresh (1 durable, 11 honestly expired), and all four Compose services were healthy.

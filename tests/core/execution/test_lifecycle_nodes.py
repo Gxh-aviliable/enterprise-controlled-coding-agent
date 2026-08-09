@@ -1,6 +1,9 @@
 """Reliable LangGraph lifecycle-node behavior tests."""
 
+import json
+
 from enterprise_agent.config.settings import settings
+from enterprise_agent.core.agent.graph import _traced_node
 from enterprise_agent.core.agent.nodes import (
     finalize_task_node,
     prepare_tool_execution_node,
@@ -8,6 +11,8 @@ from enterprise_agent.core.agent.nodes import (
     task_parse_node,
     tool_executor_node,
 )
+from enterprise_agent.core.agent.tool_artifacts import ToolArtifactStore
+from enterprise_agent.observability.trace_store import get_trace_store
 
 
 async def test_task_parse_starts_pending_task():
@@ -56,7 +61,11 @@ async def test_review_shell_command_waits_for_confirmation():
     assert result["confirmation_deadline"] is not None
 
 
-async def test_dangerous_shell_skips_confirmation_and_is_policy_blocked():
+async def test_dangerous_shell_skips_confirmation_and_is_policy_blocked(
+    monkeypatch,
+    tmp_path,
+):
+    monkeypatch.setenv("WORKSPACE_BASE", str(tmp_path))
     state = {
         "session_id": "dangerous-shell-test",
         "user_id": 103,
@@ -228,8 +237,335 @@ async def test_executor_tracks_code_change_and_successful_validation(monkeypatch
     assert final["task_status"] == "succeeded"
 
 
-async def test_search_memory_tool_records_the_same_retrieval_trace(monkeypatch):
+async def test_py_compile_exit_zero_is_recorded_as_code_validation(monkeypatch, tmp_path):
+    """A narrow Python syntax check is valid evidence when its exit code is zero."""
+    monkeypatch.setenv("WORKSPACE_BASE", str(tmp_path))
+
+    class SuccessfulBash:
+        name = "bash"
+
+        async def ainvoke(self, _tool_input):
+            return {"stdout": "", "stderr": "", "exit_code": 0}
+
+    fake_bash = SuccessfulBash()
+    monkeypatch.setattr("enterprise_agent.core.agent.nodes.ALL_TOOLS", [fake_bash])
+    monkeypatch.setattr(
+        "enterprise_agent.core.agent.nodes.get_tools_for_permissions",
+        lambda *_args, **_kwargs: [fake_bash],
+    )
+
+    result = await tool_executor_node({
+        "session_id": "py-compile-success",
+        "user_id": 109,
+        "permissions": ["tools:shell"],
+        "task_status": "running",
+        "changed_files": ["src/example.py"],
+        "pending_tool_calls": [{
+            "id": "validate-py-success",
+            "name": "bash",
+            "args": {"command": "python -m py_compile src/example.py"},
+        }],
+        "messages": [],
+    })
+
+    assert len(result["validation_results"]) == 1
+    validation = result["validation_results"][0]
+    assert validation["command"] == "python -m py_compile src/example.py"
+    assert validation["ok"] is True
+    assert validation["status"] == "success"
+    assert validation["exit_code"] == 0
+    assert validation["duration_ms"] >= 0
+    final = await finalize_task_node(result)
+    assert final["task_status"] == "succeeded"
+    assert final["failure_reason"] is None
+
+
+async def test_py_compile_nonzero_exit_is_failed_validation_evidence(monkeypatch, tmp_path):
+    """Recognizing py_compile must never turn a non-zero exit into success."""
+    monkeypatch.setenv("WORKSPACE_BASE", str(tmp_path))
+
+    class FailedBash:
+        name = "bash"
+
+        async def ainvoke(self, _tool_input):
+            return {
+                "stdout": "",
+                "stderr": "SyntaxError: invalid syntax",
+                "exit_code": 1,
+            }
+
+    fake_bash = FailedBash()
+    monkeypatch.setattr("enterprise_agent.core.agent.nodes.ALL_TOOLS", [fake_bash])
+    monkeypatch.setattr(
+        "enterprise_agent.core.agent.nodes.get_tools_for_permissions",
+        lambda *_args, **_kwargs: [fake_bash],
+    )
+
+    result = await tool_executor_node({
+        "session_id": "py-compile-failure",
+        "user_id": 110,
+        "permissions": ["tools:shell"],
+        "task_status": "running",
+        "changed_files": ["src/broken.py"],
+        "pending_tool_calls": [{
+            "id": "validate-py-failure",
+            "name": "bash",
+            "args": {"command": "python -m py_compile src/broken.py"},
+        }],
+        "messages": [],
+    })
+
+    assert len(result["validation_results"]) == 1
+    assert result["validation_results"][0]["ok"] is False
+    assert result["validation_results"][0]["exit_code"] == 1
+    final = await finalize_task_node(result)
+    assert final["task_status"] == "failed"
+    assert "not successfully validated" in final["failure_reason"]
+
+
+async def test_successful_delegate_execution_and_final_trace_status_agree(
+    monkeypatch,
+    tmp_path,
+):
+    """Multi-Agent success must come from an executed delegate tool and reach Trace."""
+    monkeypatch.setenv("WORKSPACE_BASE", str(tmp_path))
+    monkeypatch.setattr(settings, "ENABLE_MULTI_AGENT", True)
+
+    class FakeDelegate:
+        name = "delegate_task"
+
+        async def ainvoke(self, _tool_input):
+            return "Independent reviewer confirmed the proposed design."
+
+    class FakeWrite:
+        name = "write_file"
+
+        async def ainvoke(self, _tool_input):
+            return "Successfully wrote src/demo.py"
+
+    class FakeBash:
+        name = "bash"
+
+        async def ainvoke(self, _tool_input):
+            return {"stdout": "", "stderr": "", "exit_code": 0}
+
+    delegate = FakeDelegate()
+    writer = FakeWrite()
+    bash = FakeBash()
+    executable_tools = [delegate, writer, bash]
+    monkeypatch.setattr("enterprise_agent.core.agent.nodes.ALL_TOOLS", executable_tools)
+    monkeypatch.setattr(
+        "enterprise_agent.core.agent.nodes.get_tools_for_permissions",
+        lambda *_args, **_kwargs: executable_tools,
+    )
+
+    trace_id = "trace-real-delegation"
+    user_id = 111
+    store = get_trace_store()
+    store.start_trace(
+        trace_id=trace_id,
+        session_id="multi-agent-trace",
+        user_id=user_id,
+        request_summary="Ask an independent specialist to review the design",
+        mode="multi_agent",
+    )
+    base_state = {
+        "session_id": "multi-agent-trace",
+        "trace_id": trace_id,
+        "user_id": user_id,
+        "permissions": ["tools:advanced"],
+        "execution_mode": "multi_agent",
+        "task_status": "running",
+        "pending_tool_calls": [
+            {
+                "id": "delegate-review",
+                "name": "delegate_task",
+                "args": {"role": "reviewer", "prompt": "Review the design"},
+            },
+            {
+                "id": "write-demo",
+                "name": "write_file",
+                "args": {"path": "src/demo.py", "content": "VALUE = 1\n"},
+            },
+            {
+                "id": "validate-demo",
+                "name": "bash",
+                "args": {"command": "python3 -m py_compile src/demo.py"},
+            },
+        ],
+        "messages": [{"role": "assistant", "content": "Specialist review incorporated."}],
+        "changed_files": [],
+        "validation_results": [],
+    }
+    executed = await tool_executor_node(base_state)
+    records = {record["tool_name"]: record for record in executed["tool_execution_records"]}
+    assert records["delegate_task"]["ok"] is True
+    assert records["write_file"]["ok"] is True
+    assert records["bash"]["ok"] is True
+    assert executed["changed_files"] == ["src/demo.py"]
+    assert executed["validation_results"][0]["ok"] is True
+
+    final_state = {**base_state, **executed, "pending_tool_calls": []}
+    finalized = await _traced_node("finalize_task", finalize_task_node)(final_state)
+    trace = store.get_trace(user_id, trace_id)
+    delegate_event = next(
+        event
+        for event in trace["events"]
+        if event["type"] == "tool" and event["name"] == "delegate_task"
+    )
+
+    assert finalized["task_status"] == "succeeded"
+    assert delegate_event["status"] == "success"
+    assert trace["status"] == finalized["task_status"]
+    assert trace["events"][-1]["name"] == "task_finished"
+    assert trace["events"][-1]["status"] == finalized["task_status"]
+
+
+async def test_long_failed_shell_output_is_normalized_before_artifact_preview(
+    monkeypatch,
+    tmp_path,
+):
+    """A truncated JSON preview must never hide the real non-zero exit code."""
+    monkeypatch.setenv("WORKSPACE_BASE", str(tmp_path))
+    monkeypatch.setattr(settings, "TOOL_OUTPUT_MAX_CHARS", 2_000)
+
+    class FakeBash:
+        name = "bash"
+
+        async def ainvoke(self, _tool_input):
+            return json.dumps({
+                "stdout": "x" * 20_000,
+                "stderr": "FACT_FAILURE=tests failed at the tail",
+                "exit_code": 2,
+            })
+
+    fake_bash = FakeBash()
+    monkeypatch.setattr(
+        "enterprise_agent.core.agent.nodes.ALL_TOOLS",
+        [fake_bash],
+    )
+    monkeypatch.setattr(
+        "enterprise_agent.core.agent.nodes.get_tools_for_permissions",
+        lambda *_args, **_kwargs: [fake_bash],
+    )
+
+    result = await tool_executor_node({
+        "session_id": "long-shell",
+        "trace_id": "trace-long-shell",
+        "user_id": 106,
+        "permissions": ["tools:shell"],
+        "task_status": "running",
+        "pending_tool_calls": [{
+            "id": "long-call",
+            "name": "bash",
+            "args": {"command": "pytest -q"},
+        }],
+        "messages": [],
+    })
+
+    record = result["tool_execution_records"][0]
+    assert record["ok"] is False
+    assert record["status"] == "error"
+    assert record["error_code"] == "nonzero_exit"
+    assert record["exit_code"] == 2
+    assert record["model_truncated"] is True
+    assert len(result["tool_results"]["long-call"]) <= settings.TOOL_OUTPUT_MAX_CHARS
+    artifact = tmp_path / "user_106" / record["artifact_path"]
+    raw = json.loads(artifact.read_text(encoding="utf-8"))
+    assert raw["exit_code"] == 2
+    assert raw["stderr"] == "FACT_FAILURE=tests failed at the tail"
+    assert result["messages"][0]["artifact"]["path"] == record["artifact_path"]
+
+
+async def test_dict_tool_result_preserves_nonzero_exit_semantics(monkeypatch, tmp_path):
+    monkeypatch.setenv("WORKSPACE_BASE", str(tmp_path))
+
+    class DictBash:
+        name = "bash"
+
+        async def ainvoke(self, _tool_input):
+            return {"stdout": "", "stderr": "dict failure", "exit_code": 2}
+
+    fake_bash = DictBash()
+    monkeypatch.setattr("enterprise_agent.core.agent.nodes.ALL_TOOLS", [fake_bash])
+    monkeypatch.setattr(
+        "enterprise_agent.core.agent.nodes.get_tools_for_permissions",
+        lambda *_args, **_kwargs: [fake_bash],
+    )
+
+    result = await tool_executor_node({
+        "session_id": "dict-shell",
+        "trace_id": "trace-dict-shell",
+        "user_id": 107,
+        "permissions": ["tools:shell"],
+        "task_status": "running",
+        "pending_tool_calls": [{
+            "id": "dict-call",
+            "name": "bash",
+            "args": {"command": "pytest -q"},
+        }],
+        "messages": [],
+    })
+
+    record = result["tool_execution_records"][0]
+    assert record["status"] == "error"
+    assert record["error_code"] == "nonzero_exit"
+    assert record["exit_code"] == 2
+
+
+async def test_large_output_fails_closed_when_artifact_write_fails(
+    monkeypatch,
+    tmp_path,
+):
+    monkeypatch.setenv("WORKSPACE_BASE", str(tmp_path))
+    monkeypatch.setattr(settings, "TOOL_OUTPUT_MAX_CHARS", 1_000)
+
+    class FakeRead:
+        name = "read_file"
+
+        async def ainvoke(self, _tool_input):
+            return "UNRECOVERABLE_RAW=" + ("x" * 5_000)
+
+    def fail_save(*_args, **_kwargs):
+        raise OSError("/private/server/path is unavailable")
+
+    fake_read = FakeRead()
+    monkeypatch.setattr(ToolArtifactStore, "save", fail_save)
+    monkeypatch.setattr("enterprise_agent.core.agent.nodes.ALL_TOOLS", [fake_read])
+    monkeypatch.setattr(
+        "enterprise_agent.core.agent.nodes.get_tools_for_permissions",
+        lambda *_args, **_kwargs: [fake_read],
+    )
+
+    result = await tool_executor_node({
+        "session_id": "artifact-failure",
+        "trace_id": "trace-artifact-failure",
+        "user_id": 108,
+        "permissions": ["tools:basic"],
+        "task_status": "running",
+        "pending_tool_calls": [{
+            "id": "failed-artifact",
+            "name": "read_file",
+            "args": {"path": "large.log"},
+        }],
+        "messages": [],
+    })
+
+    record = result["tool_execution_records"][0]
+    assert result["task_status"] == "failed"
+    assert record["error_code"] == "artifact_write_failed"
+    assert record["artifact_error"] == "artifact_write_failed"
+    assert "UNRECOVERABLE_RAW" not in result["messages"][0]["content"]
+    assert "/private/server/path" not in result["messages"][0]["content"]
+    assert result["messages"][0]["artifact"] == {
+        "storage_status": "failed",
+        "error_code": "artifact_write_failed",
+    }
+
+
+async def test_search_memory_tool_records_the_same_retrieval_trace(monkeypatch, tmp_path):
     """Active tool lookup must be visible in Trace and retrieval counters."""
+    monkeypatch.setenv("WORKSPACE_BASE", str(tmp_path))
     events = []
     accessed_patterns = []
 

@@ -23,3 +23,13 @@ def test_runtime_accepts_strong_secret():
 def test_debug_mode_can_boot_for_local_diagnostics_without_secret():
     candidate = Settings(JWT_SECRET_KEY="", DEBUG=True)
     candidate.validate_runtime_security()
+
+
+def test_runtime_rejects_missing_model_context_boundary():
+    candidate = Settings(
+        JWT_SECRET_KEY="a" * 32,
+        DEBUG=False,
+        MODEL_CONTEXT_WINDOW_TOKENS=0,
+    )
+    with pytest.raises(RuntimeError, match="MODEL_CONTEXT_WINDOW_TOKENS"):
+        candidate.validate_runtime_security()

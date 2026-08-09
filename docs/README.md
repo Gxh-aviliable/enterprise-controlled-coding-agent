@@ -33,12 +33,12 @@
 
 ## 当前可复现证据
 
-截至 2026-07-23，当前仓库记录的基线为：
+当前代码验证更新于 2026-08-10；真实模型评测仍使用下列带日期的保留产物：
 
 | 证据 | 结果 | 解释边界 |
 |---|---:|---|
-| 后端 pytest | 381 passed | 单元、API、状态机、工具、安全、记忆和 Trace 回归 |
-| 前端 Vitest | 23 passed | 六个测试文件中的关键交互回归 |
+| 后端 pytest | 561 passed | 单元、API、七态状态机、Pause/Continue、Stop 闭环、工具、Workspace 安全写入、上下文、记忆和 Trace 回归 |
+| 前端 Vitest | 77 passed | 八个测试文件中的关键交互、SSE 控制流、Preview/Edit、冲突和未保存导航防护回归 |
 | Ruff | 0 findings | 当前配置覆盖的 Python 静态检查 |
 | Platform benchmark | 10/10 | 确定性工具、状态、策略和评测器，不是模型智能分 |
 | Memory benchmark | 6/6 | 小型合成集的检索与过滤，不证明模型正确采用记忆 |

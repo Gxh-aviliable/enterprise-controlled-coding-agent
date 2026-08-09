@@ -1,6 +1,6 @@
 # Mini Claude Code Architecture
 
-> Baseline date: 2026-07-23
+> Current implementation baseline: 2026-08-10
 > Scope: architecture in the current implementation baseline; planned components are explicitly labelled.
 
 ## 1. System context
@@ -24,7 +24,7 @@ flowchart LR
 
 | Component | Responsibility | Source of truth |
 |---|---|---|
-| Vue workbench | Login, chat/SSE, confirmations, file tree, memory view | `frontend/src/` |
+| Vue workbench | Login, chat/SSE, confirmations, file tree, guarded Preview/Edit, memory view | `frontend/src/` |
 | FastAPI | Authenticated API, session and workspace ownership boundary | `enterprise_agent/api/` |
 | LangGraph | Stateful LLM/tool loop and Redis checkpoint recovery | `enterprise_agent/core/agent/graph.py` |
 | Agent nodes | Context injection, model retry, tool execution, compaction, memory flush, HITL | `enterprise_agent/core/agent/nodes.py` |
@@ -37,7 +37,7 @@ flowchart LR
 
 ## 3. Current Agent execution path
 
-The current graph is a reactive tool loop. It already retries transient model failures, retries only idempotent tools, limits rounds, checkpoints state in Redis, and can pause at a LangGraph interrupt for sensitive-tool approval.
+The current graph is a reactive tool loop. It retries transient model failures, retries only idempotent tools, limits rounds, checkpoints state in Redis, supports sensitive-tool approval, and cooperatively pauses a user task at explicit safe boundaries.
 
 ```mermaid
 flowchart TD
@@ -45,23 +45,39 @@ flowchart TD
     A --> B[check_background]
     B --> C[check_inbox]
     C --> PL[plan_task]
-    PL --> D[pre_microcompact]
+    PL --> PB[pause_before_llm_gate]
+    PB --> D[pre_microcompact]
     D --> E[llm_call]
-    E -->|tool calls| PE[prepare_tool_execution]
+    E -->|tool calls| PD[pause_before_tool_dispatch_gate]
+    PD --> PE[prepare_tool_execution]
     PE --> F[tool_confirm]
-    F -->|approved or safe| G[tool_executor]
+    F -->|approved or safe| PX[pause_before_tool_execution_gate]
+    PX --> G[tool_executor]
     E -->|text response| H[save_memory]
     G --> CP[checkpoint_task]
-    CP --> H
+    CP --> PA[pause_after_tool_gate]
+    PA --> H
     E -->|token threshold| I[compress_context]
     H -->|continue| D
     H -->|code change lacks passing check| V[verification_gate]
-    V --> D
+    V --> PV[pause_after_verification_gate]
+    PV --> D
     H -->|manual compact| J[manual_compress]
-    H -->|complete or budget end| FN[finalize_task]
+    H -->|complete or budget end| PF[pause_before_finalize_gate]
+    PF --> FN[finalize_task]
     FN --> K[END]
-    I --> E
-    J --> K
+    I --> PC[pause_after_compression_gate]
+    J --> PC
+    PC --> E
+
+    PB -. pause requested .-> UP[user_pause typed interrupt]
+    PD -. pause requested .-> UP
+    PX -. pause requested .-> UP
+    PA -. pause requested .-> UP
+    PV -. pause requested .-> UP
+    PF -. pause requested .-> UP
+    PC -. pause requested .-> UP
+    UP -. Command resumes same Trace .-> RT[checkpointed resume target]
 ```
 
 Current request sequence:
@@ -70,13 +86,13 @@ Current request sequence:
 2. The route validates the explicit `single_agent` / `multi_agent` mode against the server switch and the user's current database role, then invokes the graph with `thread_id=session_id`.
 3. `init_context` restores/initializes task, todo and token-related state.
 4. `llm_call` binds only current-role-permitted tools for the selected execution mode, calls the configured model, and accumulates per-task token usage.
-5. Sensitive calls enter `tool_confirm` and pause through `interrupt()`.
+5. Sensitive calls enter `tool_confirm` and pause through a typed `tool_confirmation` interrupt.
 6. `tool_executor` invokes tools, truncates output, counts calls and retries transient read-only failures.
 7. The checkpoint and verification gate record file changes and require a successful relevant check before a code-modifying task can be marked successful.
 8. `save_memory` accumulates a task-level summary; RedisSaver checkpoints graph state after nodes.
-9. SSE exposes token deltas, tool start/result events, confirmation interrupts, cancellation, and completion.
+9. SSE exposes token deltas, tool start/result events, typed confirmation/user-pause interrupts, cancellation, and completion.
 
-These phases and the six-state task lifecycle are implemented. Their model-backed success rate remains unmeasured until the benchmark stage.
+These phases and the seven-state task lifecycle are implemented. Pause is cooperative: an in-flight model or tool call finishes before the next safe-boundary check.
 
 ## 4. Tool and workspace boundary
 
@@ -90,6 +106,8 @@ Current properties and limitations:
 - Shell/background confirmation is resolved from concrete arguments: safe inspection/test/build calls skip HITL, review-level calls interrupt for the current batch, and dangerous calls bypass the approval UI because executor policy must block them.
 - Policy rejections return `policy_blocked` plus a safe remediation. Absolute paths point back to the existing workspace `cwd`, output suppression/FD merging points to captured streams, and `rm` points to recoverable `delete_paths`; non-zero program exits remain distinct `nonzero_exit` evidence.
 - Shell safety is a parsed user-space policy, not a kernel sandbox. A workspace `cwd` and command validator do not provide the isolation of a rootless container, seccomp/AppArmor, resource limits, or an outbound-network policy; those remain explicit hardening work.
+- Authenticated browser reads return a SHA-256 receipt. `PUT /workspace/write` accepts the same path, new content and `expected_sha256`; it atomically replaces the file only when the receipt still matches, otherwise returning a structured `409 version_conflict` instead of silently overwriting a concurrent change.
+- Browser editing is deliberately narrower than Agent file tools: only an existing regular UTF-8 file of at most 1 MiB is writable. Sensitive names, Agent-owned operational directories, path escapes, symlinks and binary/oversized files are rejected. This is a direct user Workspace operation and is not presented as an Agent HITL or task Trace event.
 
 ## 5. State and persistence
 
@@ -99,12 +117,66 @@ There are currently four different state concepts:
 |---|---|---|
 | Conversation session | MySQL `SessionStatus`: `active`, `archived`, `deleted` | This is lifecycle metadata, not task execution status |
 | Conversation transcript | MySQL `ChatMessage`, ordered by per-session record ID | Durable user/assistant history; legacy Redis-only gaps remain explicitly marked |
-| Agent checkpoint | `AgentState` persisted by RedisSaver | Six-state lifecycle, execution phase, mode, budgets, tool records and task-linked artifacts |
+| Agent checkpoint | `AgentState` persisted by RedisSaver | Seven-state lifecycle including `paused`, execution phase, mode, budgets, tool records and task-linked artifacts |
 | Operational task board | JSON files under `<workspace>/.tasks/` | Supports pending/in-progress/completed/failed/cancelled; distributed storage remains future work |
 
-The execution state machine validates `pending`, `running`, `waiting_confirmation`, `succeeded`, `failed`, and `cancelled` transitions without replacing conversation-session status. Failure and cancellation also close open Todo items and persistent task artifacts created by that run.
+The execution state machine validates `pending`, `running`, `paused`, `waiting_confirmation`, `succeeded`, `failed`, and `cancelled` transitions without replacing conversation-session status. Failure and cancellation close open Todo items and persistent task artifacts created by that run; pausing is non-terminal and preserves recovery evidence.
 
-### 5.1 Explicit Multi-Agent boundary
+### 5.1 Redis-coordinated cooperative Pause/Continue
+
+RedisSaver checkpoints graph state under `thread_id=session_id`. The runtime now
+adds a separate Redis control record scoped by `user_id + session_id + trace_id`,
+so a late Pause cannot affect the next task in the same conversation. The
+implemented protocol is:
+
+```mermaid
+sequenceDiagram
+    participant UI as Frontend
+    participant API as Task control API
+    participant C as Redis control key
+    participant G as LangGraph
+    participant S as RedisSaver
+
+    UI->>API: POST /chat/stream/pause(session_id, trace_id)
+    API->>API: Verify user, session and trace ownership
+    API->>C: SET pause_requested for exact trace
+    G->>C: Check at next safe node boundary
+    G->>G: pause_*_gate writes task_status=paused and metadata
+    G->>S: Complete gate node and checkpoint
+    G->>S: user_pause_* calls interrupt(type=user_pause)
+    G-->>UI: SSE paused event
+    UI->>API: POST /chat/stream/continue(session_id, trace_id)
+    API->>API: Re-verify ownership and paused interrupt
+    API->>C: SET NX EX exact-trace resume lock
+    API->>G: Command(resume={action: continue, trace_id})
+    G->>C: Clear the exact matching pause request
+    G->>G: task_status = running
+```
+
+The ordering intentionally differs from “interrupt first, set paused later”.
+Code after `interrupt()` does not run until resume, so `paused` is written
+by a preceding `pause_*_gate` node and checkpointed before the interrupt node.
+This mirrors the existing `prepare_tool_execution -> tool_confirm` HITL pattern.
+
+Pause gates cover the first/next model round, tool dispatch, post-confirmation
+tool execution, post-tool checkpoint, post-verification, post-compression and
+finalization. Continue revalidates ownership, exact checkpoint Trace and the
+`user_pause` interrupt type, then uses a Redis resume lock to reject duplicate
+resume attempts. `/chat/stream/status` lets a refreshed client recover the
+authoritative paused state.
+
+This is **cooperative**, not preemptive, suspension. A request received during
+one blocking model or foreground-tool call takes effect only after that call
+returns to the next gate. The red **Stop** button remains the separate terminal
+Cancel path; it resumes a paused interrupt with `action=cancel` and converges
+the task to irreversible `cancelled` rather than pretending to be Pause. The
+cancel path also closes the checkpoint turn with an idempotent Assistant
+tombstone, synchronizes the matching MySQL assistant row, and prevents a late
+SSE finalizer from downgrading the terminal status. This preserves the stopped
+question for conversational reference without presenting it as another pending
+request on the next model call.
+
+### 5.2 Explicit Multi-Agent boundary
 
 ```mermaid
 flowchart LR
@@ -124,6 +196,13 @@ flowchart LR
 ```
 
 The `delegate_task` path is a bounded real subagent call. Natural-language Multi execution intent cannot silently enter Single mode, and a Multi task cannot mutate the workspace or report success before one real delegation succeeds. `task_create` remains operational tracking only. The older teammate/message-bus tools remain experimental and are not required for the reliable specialist-delegation baseline.
+
+Validation evidence is recorded independently from delegation evidence. In
+particular, successful `python -m py_compile` runs count as code validation,
+while arbitrary Python script execution does not. After finalization,
+`AgentState.task_status` is the single terminal truth: Trace keeps
+`succeeded/failed/cancelled`, while SSE and MySQL project those states to
+`completed/failed/cancelled`. Transport exhaustion alone never implies success.
 
 ## 6. Memory flow
 
@@ -153,6 +232,59 @@ or explicit `user_note` records plus evidence-backed preferences. Existing schem
 records are classified as `legacy`: they remain visible/deletable but are excluded
 from Agent retrieval. Persistence runs after `finalize_task`, so failed, cancelled,
 unverified, creative, or evidence-free tasks cannot become Active memory.
+
+### 6.1 Artifact-first context compaction
+
+Context management uses two levels. Cheap microcompaction runs first; full LLM
+summarization runs only when the artifact-backed cleanup is still insufficient:
+
+```mermaid
+flowchart LR
+    RAW["Complete tool result"] --> NORMALIZE["Normalize status / exit code"]
+    NORMALIZE --> SAFE["Redact and apply independent artifact cap"]
+    SAFE --> ART["Atomic private write<br/>.agent/tool-artifacts/trace/call-sha16.txt"]
+    ART --> RECEIPT["Path + SHA-256 + sizes + truncation flags"]
+    RECEIPT --> MODEL["Bounded ToolMessage preview"]
+    MODEL --> MICRO["Older bodies become verified restricted-evidence handles"]
+    MICRO --> CHECK{"Still above effective threshold?"}
+    CHECK -->|No| LLM["Continue Agent loop"]
+    CHECK -->|Yes| TRANS["Atomic normalized transcript"]
+    TRANS --> SUMMARY["Deterministic state packet + LLM narrative"]
+    SUMMARY --> REPLACE["RemoveMessage(REMOVE_ALL_MESSAGES)<br/>then compressed messages"]
+```
+
+The executor normalizes the uncut result before creating the preview. This is
+important for structured Shell JSON: a long non-zero result cannot lose its
+`exit_code` merely because the model preview was clipped. Any tool body eligible
+for later microcompaction is persisted first. If persistence fails, microcompact
+keeps the existing body and records an error instead of creating a false handle.
+
+A compacted model-facing message is evidence-bearing rather than generic:
+
+```text
+[tool output compacted; artifact: .agent/tool-artifacts/<trace>/<call>-<sha16>.txt;
+ sha256=<digest>; original_chars=<count>]
+```
+
+Full compression does not rely on the model narrative as its only source of
+truth. Goal, task status, failure, Todos, changed files, validations, counters and
+recent tool receipts are rebuilt deterministically from `AgentState` into a
+schema-v2 continuation packet. Under an exceptionally tight continuation budget,
+the packet is explicitly marked truncated and degrades to its transcript handle;
+it never claims that discarded fields remain present. The narrative is
+supplemental. Transcript paths are workspace-relative, names are sanitized and
+unique, and writes use fsync plus atomic replace. The summarizer input, bound
+output and next main-model turn are budgeted separately, with growth headroom;
+its model call is included in task/session budgets and Trace.
+
+“Restricted original” deliberately means policy-limited and redacted evidence,
+not an unconditional byte-for-byte copy of secrets or unlimited process output.
+The default artifact cap is 2,000,000 characters and preserves head/tail with an
+explicit `source_truncated` receipt when exceeded. `read_tool_artifact` performs
+workspace ownership, path, SHA-256 and UTF-8-safe range checks; generic file and
+Shell tools reject Agent-owned operational paths. These workspace artifacts are
+debugging evidence, not a tamper-proof multi-replica audit backend; retention and
+central object storage remain production work.
 
 ## 7. Trace and metric flow
 
@@ -217,20 +349,21 @@ The platform backend answers whether tools, isolation, recovery, safety policy, 
 
 ## 10. Baseline verification
 
-Recorded on 2026-07-23:
+Current code verification recorded on 2026-08-10; retained model benchmark
+results still come from their dated artifacts:
 
 | Check | Result |
 |---|---|
-| `uv run pytest -q` | 381 passed |
-| `uv run python scripts/smoke_test.py` | 7/7 local checks passed |
-| `npm test --prefix frontend -- --run` | 23 passed across 6 test files |
+| `uv run pytest -q` | 561 passed |
+| `uv run python scripts/smoke_test.py` | 9/9 local checks passed; no external service or model call |
+| `npm test --prefix frontend -- --run` | 77 passed |
 | `npm run build --prefix frontend` | Passed; largest JS chunk 76.99 kB, no size warning |
 | `npm audit --json` | 0 known production/development vulnerabilities |
-| `docker compose -f docker/docker-compose.yml config -q` | Passed |
-| `./scripts/docker_smoke_test.sh` | Passed in an isolated Compose project; all four services healthy and both direct/proxied API health checks passed |
-| Docker API/frontend builds | Passed; 464.5 MB / 21.9 MB final images |
+| `docker compose -f docker/docker-compose.yml config -q` | Passed for the current Preview/Edit change |
+| Docker runtime health | Current API/frontend images rebuilt; API, frontend, MySQL and Redis healthy; direct and proxied health returned MySQL/Redis `ok` |
+| `./scripts/docker_smoke_test.sh` | Previous isolated four-service baseline passed; not rerun because the current existing-stack health path was used |
 | API image self-check | UID 10001, `torch 2.13.0+cpu`, CUDA false, app import passed |
-| Browser Trace replay | Passed with a synthetic local user/trace: six metrics, run list, nine events, HITL, safety block and redacted detail rendered; no console warning/error |
+| Browser Preview/Edit smoke | Passed for Markdown Preview, Edit, dirty draft, draft Preview and Discard; no test draft was saved to the user's file |
 | `ruff check enterprise_agent migrations tests benchmarks scripts` | Passed, 0 findings |
 
 Long-term-memory tests exercise real in-process Chroma collections with a deterministic offline embedding, including v2 admission, Legacy quarantine, pattern upsert, filtered semantic search, and local-first model initialization. The final locked-environment platform benchmark passed 10/10 task assertions with 84.8 ms average task duration. A real `deepseek-chat` single-Agent run passed 8/10 tasks with zero infrastructure errors; the 3-case single/multi comparison remains unmeasured.

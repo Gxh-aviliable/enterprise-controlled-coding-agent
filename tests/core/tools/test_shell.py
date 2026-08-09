@@ -5,6 +5,7 @@ import os
 
 import pytest
 
+from enterprise_agent.config.settings import settings
 from enterprise_agent.core.agent.tools.shell import (
     BLOCKED_BINARIES,
     BLOCKED_PATTERNS,
@@ -119,6 +120,9 @@ class TestValidateCommand:
             "cat /etc/passwd",
             "cat .env",
             "cat .git/config",
+            "cat .agent/tool-artifacts/trace/call.txt",
+            "head .transcripts/transcript.jsonl",
+            "echo tamper > .tasks/task_1.json",
             "bash -c 'echo hidden'",
             "python -c 'print(1)'",
             "git reset --hard HEAD",
@@ -186,13 +190,17 @@ class TestBashTool:
         assert data["exit_code"] == 0
         assert data["stdout"] == "alpha beta"
 
-    def test_output_truncation(self, mock_workspace_env):
-        """Test that long output is truncated."""
-        # Generate long output
+    def test_output_is_not_truncated_before_shared_runtime(
+        self,
+        mock_workspace_env,
+        monkeypatch,
+    ):
+        """The executor must receive complete JSON before artifact/preview handling."""
+        monkeypatch.setattr(settings, "TOOL_OUTPUT_MAX_CHARS", 1_000)
         result = bash.invoke({"command": "echo " + "A" * 10000})
         data = json.loads(result)
-        # Output should be truncated if it exceeds TOOL_OUTPUT_MAX_CHARS
-        assert len(data["stdout"]) < 20000  # Should be truncated
+        assert len(data["stdout"]) == 10000
+        assert "truncated" not in data["stdout"]
 
     def test_returns_json_structure(self, mock_workspace_env):
         """Test that result is valid JSON with required fields."""

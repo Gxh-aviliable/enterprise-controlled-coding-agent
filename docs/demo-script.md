@@ -32,11 +32,18 @@ parse → plan → execute → checkpoint → validate → summarize
 
 1. Agent 先读取入口、测试和相关实现。
 2. `plan_task` 建立执行计划。
-3. 文件修改进入 review 风险并触发 HITL。
-4. Approve Current Batch 后从 checkpoint 恢复。
-5. Agent 修改文件并运行窄测试。
-6. verification gate 要求代码修改后存在成功验证。
-7. 最终回答包含文件、命令、退出状态和限制。
+3. 在一次模型或工具调用进行时点击 Pause；界面先显示 `Pausing`，到下一安全边界后才显示 `Paused`。
+4. 点击 Continue，展示经用户/会话/Trace 和 typed `user_pause` 校验后从同一 checkpoint 续跑。
+5. 文件修改进入 review 风险并触发独立的 `tool_confirmation` HITL。
+6. Approve Current Batch 后从 checkpoint 恢复，Agent 修改文件并运行窄测试。
+7. verification gate 要求代码修改后存在成功验证；最终回答包含文件、命令、退出状态和限制。
+
+可在 Files 中打开被修改文件，先用安全 Preview 查看 Markdown/代码，再切换 Edit 做一次
+无害改动并 `Cmd/Ctrl+S`。说明这是经过认证的直接用户操作：服务端用读取时的 SHA-256
+阻止并发静默覆盖，敏感路径、Agent 运行目录、符号链接、二进制和超限文件保持只读；它
+不冒充 Agent 工具调用或 HITL Trace。
+
+口头明确：Pause 是协作式安全边界暂停，不会强杀已开始的模型/工具调用；红色 Stop 才是不可恢复的终态 Cancel。
 
 如果模型现场不可用，运行：
 
@@ -72,6 +79,7 @@ uv run python -m benchmarks.run --backend platform --mode single --no-artifacts
 展示：
 
 - 同一个 Trace ID 串联节点、模型、工具、HITL 和终态；
+- `pause_requested → task_paused → resume_requested → task_resumed` 与 HITL 事件分开记录；
 - 模型与工具耗时；
 - token、工具次数和预算；
 - 风险、退出码、错误类型和重试；
@@ -82,7 +90,7 @@ uv run python -m benchmarks.run --backend platform --mode single --no-artifacts
 
 展示以下真实结果：
 
-- 后端 381 passed，前端 23 passed，Ruff 通过；
+- 后端 561 passed，前端 77 passed，Ruff 通过；
 - Platform 10/10；
 - Memory 6/6；
 - DeepSeek single-Agent 8/10；
@@ -92,3 +100,6 @@ uv run python -m benchmarks.run --backend platform --mode single --no-artifacts
 最后用一句话收尾：
 
 > 我先建立可靠的 single-Agent 控制面和可复现评测，再判断 Multi-Agent 是否值得付出额外 token、延迟和权限面；目前三用例对照仍待测，所以没有宣称 Multi 更好。
+
+> 当前 Preview/Edit 的 API/组件自动化、Docker 重建和浏览器实机 smoke 已通过。
+> 浏览器 smoke 只验证草稿、预览与丢弃，没有为测试修改用户文件；真实保存与 409 由隔离 API/组件测试证明。

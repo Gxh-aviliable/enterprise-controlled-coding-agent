@@ -9,8 +9,8 @@ class AgentState(TypedDict):
     包含消息历史、用户信息、任务追踪、工具执行状态等。
     """
 
-    # 消息历史（LangGraph自动合并）
-    messages: Annotated[List[Dict], add_messages]
+    # 消息历史（Reducer 会把 dict 规范化为 LangChain Message）
+    messages: Annotated[List[Any], add_messages]
 
     # 用户和会话信息
     session_id: str
@@ -34,7 +34,7 @@ class AgentState(TypedDict):
 
     # 上下文管理
     context_summary: Optional[str]
-    token_count: int
+    token_count: int  # Current active-context estimate; never cumulative model spend
     session_token_count: int  # Cumulative model usage across requests in this chat session
     transcript_path: Optional[str]  # Path to saved transcript after compression
 
@@ -49,6 +49,7 @@ class AgentState(TypedDict):
     round_count: int  # LLM调用轮次计数，防止无限循环
     task_token_count: int  # Per-task model usage, separate from total context estimate
     should_compress: bool
+    context_overflow_recovery_attempts: int
     should_end: bool
     should_end_after_save: bool  # 标记：文本响应完成后应该结束（由 llm_call_node 设置）
 
@@ -57,6 +58,14 @@ class AgentState(TypedDict):
     validation_results: List[Dict[str, Any]]
     verification_attempts: int
     confirmation_deadline: Optional[str]
+
+    # Cooperative user pause.  The Redis control request is separate from the
+    # checkpointed state; these fields describe the pause after a safe graph
+    # boundary has acknowledged it.
+    pause_requested_at: Optional[str]
+    paused_at: Optional[str]
+    pause_reason: Optional[str]
+    pause_resume_target: Optional[str]
 
     # TodoWrite nag reminder (s03)
     rounds_without_todo: int  # 计数：连续多少轮没有使用TodoWrite

@@ -10,7 +10,8 @@ Tools are organized by module:
 - skills: load_skill, list_skills, reload_skills
 - team: spawn_teammate, list_teammates, send_message, read_inbox,
         broadcast, shutdown_request, plan_approval, idle
-- context_tools: compress, list_transcripts, get_transcript, context_status
+- context_tools: compress, list_transcripts, get_transcript, read_tool_artifact,
+                 context_status
 - memory: search_memory
 """
 
@@ -29,6 +30,7 @@ from enterprise_agent.core.agent.tools.context_tools import (
     context_status,
     get_transcript,
     list_transcripts,
+    read_tool_artifact,
 )
 from enterprise_agent.core.agent.tools.contracts import (
     TOOL_CONTRACTS,
@@ -164,10 +166,10 @@ def get_sensitive_tool_info(tool_name: str, tool_args: dict) -> str:
         return f"Spawn teammate agent: {role}"
     elif tool_name == "send_message":
         to = tool_args.get("to", "")
-        msg = tool_args.get("message", "")[:50]
+        msg = tool_args.get("content", "")[:50]
         return f"Send message to {to}: {msg}..."
     elif tool_name == "broadcast":
-        msg = tool_args.get("message", "")[:50]
+        msg = tool_args.get("content", "")[:50]
         return f"Broadcast to all teammates: {msg}..."
     else:
         return f"Execute {tool_name}"
@@ -220,6 +222,7 @@ ALL_TOOLS = [
     compress,
     list_transcripts,
     get_transcript,
+    read_tool_artifact,
     context_status,
 
     # Memory
@@ -257,7 +260,7 @@ def get_tools_for_permissions(
             read_file, write_file, edit_file, delete_paths,
             todo_update, task_create, task_get, task_update, task_list, claim_task,
             load_skill, list_skills,
-            compress, list_transcripts, get_transcript, context_status,
+            compress, list_transcripts, get_transcript, read_tool_artifact, context_status,
             search_memory,
         ],
         "tools:shell": [bash, background_run, check_background],
@@ -276,7 +279,9 @@ def get_tools_for_permissions(
             spawn_teammate, list_teammates, send_message, read_inbox,
             broadcast, shutdown_request, plan_approval, idle,
         ],
-        "tools:context": [compress, list_transcripts, get_transcript, context_status],
+        "tools:context": [
+            compress, list_transcripts, get_transcript, read_tool_artifact, context_status,
+        ],
         "tools:memory": [search_memory],
         "tools:all": ALL_TOOLS,
     }
@@ -287,7 +292,7 @@ def get_tools_for_permissions(
             read_file, write_file, edit_file, delete_paths,
             todo_update, task_create, task_get, task_update, task_list,
             load_skill, list_skills,
-            compress, context_status
+            compress, read_tool_artifact, context_status
         ]
 
     # Collect tools for each permission

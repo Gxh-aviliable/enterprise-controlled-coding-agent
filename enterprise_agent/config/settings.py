@@ -87,16 +87,29 @@ class Settings(BaseSettings):
     CHECKPOINT_TTL_HOURS: int = 24  # RedisSaver checkpoint 过期时间（对话历史自动清理）
     MAX_MESSAGES_PER_SESSION: int = 100
     TOKEN_THRESHOLD: int = 500000
+    # Conservative cross-provider default. Deployments must set this to the
+    # selected model's documented context window; it is distinct from spend budgets.
+    MODEL_CONTEXT_WINDOW_TOKENS: int = 128_000
+    CONTEXT_COMPRESSION_RATIO: float = 0.8
 
     # Tool output limits
     TOOL_OUTPUT_MAX_CHARS: int = 50000  # Truncation limit for tool outputs
+    # Foreground/background process capture is file-backed and read with this
+    # byte cap, preventing unbounded stdout/stderr from entering API memory.
+    TOOL_SOURCE_CAPTURE_MAX_BYTES: int = 4_000_000
+    # Private artifact captures are larger than model previews but still bounded
+    # to prevent one hostile command from exhausting workspace storage.
+    TOOL_ARTIFACT_MAX_CHARS: int = 2_000_000
     # Auto-compact: how much recent text (chars) the summarizer LLM sees.
     # With TOKEN_THRESHOLD=500K (~2M chars), 200K chars (~50K tokens) gives the
     # summarizer enough context to produce a useful summary (~10% of full context).
     CONTEXT_SUMMARY_TRIGGER_CHARS: int = 200000
+    CONTEXT_SUMMARY_MAX_TOKENS: int = 50_000
+    CONTEXT_SUMMARY_OUTPUT_RESERVE_TOKENS: int = 4_096
 
     # Agent behavior
     MICROCOMPACT_KEEP_LAST: int = 6  # Messages to keep during microcompact
+    MICROCOMPACT_MIN_CHARS: int = 1000  # Avoid receipts larger than small outputs
     NAG_REMINDER_THRESHOLD: int = 3  # Rounds without TodoWrite before reminder
     COMMAND_TIMEOUT_SECONDS: int = 120  # Shell/background command timeout
     AGENT_INVOKE_TIMEOUT_SECONDS: int = 600  # Max seconds for a single graph invocation
@@ -174,6 +187,16 @@ class Settings(BaseSettings):
         importing settings, so the offline smoke test works before `.env` is
         created while an actual server still fails closed.
         """
+        if self.MODEL_CONTEXT_WINDOW_TOKENS <= 0:
+            raise RuntimeError(
+                "MODEL_CONTEXT_WINDOW_TOKENS must be a positive value matching the "
+                "selected model; zero disables the safety boundary."
+            )
+        if not 0.1 <= self.CONTEXT_COMPRESSION_RATIO <= 0.95:
+            raise RuntimeError(
+                "CONTEXT_COMPRESSION_RATIO must be between 0.1 and 0.95."
+            )
+
         placeholders = {
             "",
             "change-me-in-production",

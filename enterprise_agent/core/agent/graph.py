@@ -41,16 +41,21 @@ from enterprise_agent.core.agent.nodes import (
     init_context_node,
     llm_call_node,
     manual_compress_node,
+    pause_gate_node,
     persist_memory_node,
     plan_task_node,
     pre_llm_microcompact_node,
     prepare_tool_execution_node,
     route_after_llm,
+    route_after_microcompact,
+    route_after_pause_gate,
     route_after_tool,
+    route_after_user_pause,
     save_memory_node,
     task_parse_node,
     tool_confirm_node,
     tool_executor_node,
+    user_pause_node,
     verification_gate_node,
 )
 from enterprise_agent.core.agent.state import AgentState
@@ -67,6 +72,15 @@ _checkpointer_pool = redis_async.ConnectionPool(
     db=0,
 )
 _checkpointer_client = redis_async.Redis(connection_pool=_checkpointer_pool)
+
+
+def _pause_gate_for(resume_target: str):
+    """Bind one checkpoint-visible resume target without using fragile globals."""
+
+    async def bound_pause_gate(state):
+        return await pause_gate_node(state, resume_target)
+
+    return bound_pause_gate
 
 
 def _traced_node(node_name, node):
@@ -201,6 +215,22 @@ def build_agent_graph():
     add_node("verification_gate", verification_gate_node)
     add_node("finalize_task", finalize_task_node)
     add_node("persist_memory", persist_memory_node)
+    # Cooperative user-pause boundaries.  Every boundary uses two nodes: the
+    # gate first commits ``task_status=paused``; the second node then calls
+    # interrupt().  Distinct graph node names retain the exact continuation
+    # point without storing executable routing data in Redis.
+    pause_boundaries = {
+        "before_llm": "pre_microcompact",
+        "before_tool_dispatch": "prepare_tool_execution",
+        "before_tool_execution": "tool_executor",
+        "after_tool": "save_memory",
+        "after_verification": "pre_microcompact",
+        "after_compression": "llm_call",
+        "before_finalize": "finalize_task",
+    }
+    for boundary, resume_target in pause_boundaries.items():
+        add_node(f"pause_{boundary}_gate", _pause_gate_for(resume_target))
+        add_node(f"user_pause_{boundary}", user_pause_node)
 
     # Compression nodes
     add_node("compress_context", compress_context_node)
@@ -220,8 +250,22 @@ def build_agent_graph():
     # Pre-processing before LLM
     graph.add_edge("check_background", "check_inbox")   # Inject inbox messages
     graph.add_edge("check_inbox", "plan_task")          # Explicit planning phase
-    graph.add_edge("plan_task", "pre_microcompact")     # Apply microcompact
-    graph.add_edge("pre_microcompact", "llm_call")      # Then call LLM
+    graph.add_edge("plan_task", "pause_before_llm_gate")
+    graph.add_conditional_edges(
+        "pause_before_llm_gate",
+        route_after_pause_gate,
+        {"pause": "user_pause_before_llm", "continue": "pre_microcompact"},
+    )
+    graph.add_conditional_edges(
+        "user_pause_before_llm",
+        route_after_user_pause,
+        {"continue": "pre_microcompact", "cancel": "finalize_task"},
+    )
+    graph.add_conditional_edges(
+        "pre_microcompact",
+        route_after_microcompact,
+        {"compress": "compress_context", "llm_call": "llm_call"},
+    )
 
     # Conditional routing after LLM
     # tool_call -> tool_confirm (human-in-the-loop check) -> tool_executor
@@ -229,39 +273,100 @@ def build_agent_graph():
         "llm_call",
         route_after_llm,
         {
-            "tool_call": "prepare_tool_execution",
-            "save_memory": "save_memory",  # Text response -> save then end
+            "tool_call": "pause_before_tool_dispatch_gate",
             "compress": "compress_context",
+            "save_memory": "save_memory",  # Text response -> save then end
         }
+    )
+
+    graph.add_conditional_edges(
+        "pause_before_tool_dispatch_gate",
+        route_after_pause_gate,
+        {"pause": "user_pause_before_tool_dispatch", "continue": "prepare_tool_execution"},
+    )
+    graph.add_conditional_edges(
+        "user_pause_before_tool_dispatch",
+        route_after_user_pause,
+        {"continue": "prepare_tool_execution", "cancel": "finalize_task"},
     )
 
     # Persist status before a potential LangGraph interrupt.
     graph.add_edge("prepare_tool_execution", "tool_confirm")
-    graph.add_edge("tool_confirm", "tool_executor")
+    graph.add_edge("tool_confirm", "pause_before_tool_execution_gate")
+    graph.add_conditional_edges(
+        "pause_before_tool_execution_gate",
+        route_after_pause_gate,
+        {"pause": "user_pause_before_tool_execution", "continue": "tool_executor"},
+    )
+    graph.add_conditional_edges(
+        "user_pause_before_tool_execution",
+        route_after_user_pause,
+        {"continue": "tool_executor", "cancel": "finalize_task"},
+    )
 
     # Tool execution flow — always run microcompact before next LLM call
     graph.add_edge("tool_executor", "checkpoint_task")
-    graph.add_edge("checkpoint_task", "save_memory")
+    graph.add_edge("checkpoint_task", "pause_after_tool_gate")
+    graph.add_conditional_edges(
+        "pause_after_tool_gate",
+        route_after_pause_gate,
+        {"pause": "user_pause_after_tool", "continue": "save_memory"},
+    )
+    graph.add_conditional_edges(
+        "user_pause_after_tool",
+        route_after_user_pause,
+        {"continue": "save_memory", "cancel": "finalize_task"},
+    )
     graph.add_conditional_edges(
         "save_memory",
         route_after_tool,
         {
-            "end": "finalize_task",
+            "end": "pause_before_finalize_gate",
             "verify": "verification_gate",
             "compress": "compress_context",
             "manual_compress": "manual_compress",
-            "llm_call": "pre_microcompact"  # Run microcompact before returning to LLM
+            "llm_call": "pause_before_llm_gate",
         }
     )
-    graph.add_edge("verification_gate", "pre_microcompact")
+    graph.add_edge("verification_gate", "pause_after_verification_gate")
+    graph.add_conditional_edges(
+        "pause_after_verification_gate",
+        route_after_pause_gate,
+        {"pause": "user_pause_after_verification", "continue": "pre_microcompact"},
+    )
+    graph.add_conditional_edges(
+        "user_pause_after_verification",
+        route_after_user_pause,
+        {"continue": "pre_microcompact", "cancel": "finalize_task"},
+    )
+    graph.add_conditional_edges(
+        "pause_before_finalize_gate",
+        route_after_pause_gate,
+        {"pause": "user_pause_before_finalize", "continue": "finalize_task"},
+    )
+    graph.add_conditional_edges(
+        "user_pause_before_finalize",
+        route_after_user_pause,
+        {"continue": "finalize_task", "cancel": "finalize_task"},
+    )
     graph.add_edge("finalize_task", "persist_memory")
     graph.add_edge("persist_memory", END)
 
     # Compression flow - back to LLM with compressed context
-    graph.add_edge("compress_context", "llm_call")
+    graph.add_edge("compress_context", "pause_after_compression_gate")
+    graph.add_conditional_edges(
+        "pause_after_compression_gate",
+        route_after_pause_gate,
+        {"pause": "user_pause_after_compression", "continue": "llm_call"},
+    )
+    graph.add_conditional_edges(
+        "user_pause_after_compression",
+        route_after_user_pause,
+        {"continue": "llm_call", "cancel": "finalize_task"},
+    )
 
-    # Manual compress ends the invocation
-    graph.add_edge("manual_compress", "finalize_task")
+    # Manual compression resumes the same invocation from its continuation packet.
+    graph.add_edge("manual_compress", "pause_after_compression_gate")
 
     # Compile with RedisSaver for persistent state management
     # TTL ensures checkpoints are automatically cleaned up after expiry
@@ -302,16 +407,44 @@ def build_simple_agent_graph(checkpointer=None):
     add_node("checkpoint_task", checkpoint_task_node)
     add_node("save_memory", save_memory_node)
     add_node("compress_context", compress_context_node)
+    add_node("manual_compress", manual_compress_node)
     add_node("verification_gate", verification_gate_node)
     add_node("finalize_task", finalize_task_node)
     add_node("persist_memory", persist_memory_node)
+
+    pause_boundaries = {
+        "before_llm": "pre_microcompact",
+        "before_tool_dispatch": "prepare_tool_execution",
+        "before_tool_execution": "tool_executor",
+        "after_tool": "save_memory",
+        "after_verification": "pre_microcompact",
+        "after_compression": "llm_call",
+        "before_finalize": "finalize_task",
+    }
+    for boundary, resume_target in pause_boundaries.items():
+        add_node(f"pause_{boundary}_gate", _pause_gate_for(resume_target))
+        add_node(f"user_pause_{boundary}", user_pause_node)
 
     # Entry flow (no load_memory — RedisSaver restores state automatically)
     graph.set_entry_point("task_parse")
     graph.add_edge("task_parse", "init_context")
     graph.add_edge("init_context", "plan_task")
-    graph.add_edge("plan_task", "pre_microcompact")
-    graph.add_edge("pre_microcompact", "llm_call")
+    graph.add_edge("plan_task", "pause_before_llm_gate")
+    graph.add_conditional_edges(
+        "pause_before_llm_gate",
+        route_after_pause_gate,
+        {"pause": "user_pause_before_llm", "continue": "pre_microcompact"},
+    )
+    graph.add_conditional_edges(
+        "user_pause_before_llm",
+        route_after_user_pause,
+        {"continue": "pre_microcompact", "cancel": "finalize_task"},
+    )
+    graph.add_conditional_edges(
+        "pre_microcompact",
+        route_after_microcompact,
+        {"compress": "compress_context", "llm_call": "llm_call"},
+    )
 
     # Conditional routing after LLM
     # tool_call -> tool_confirm (human-in-the-loop check) -> tool_executor
@@ -319,35 +452,97 @@ def build_simple_agent_graph(checkpointer=None):
         "llm_call",
         route_after_llm,
         {
-            "tool_call": "prepare_tool_execution",
-            "save_memory": "save_memory",  # Text response -> save then end
+            "tool_call": "pause_before_tool_dispatch_gate",
             "compress": "compress_context",
+            "save_memory": "save_memory",  # Text response -> save then end
         }
     )
 
+    graph.add_conditional_edges(
+        "pause_before_tool_dispatch_gate",
+        route_after_pause_gate,
+        {"pause": "user_pause_before_tool_dispatch", "continue": "prepare_tool_execution"},
+    )
+    graph.add_conditional_edges(
+        "user_pause_before_tool_dispatch",
+        route_after_user_pause,
+        {"continue": "prepare_tool_execution", "cancel": "finalize_task"},
+    )
+
     graph.add_edge("prepare_tool_execution", "tool_confirm")
-    graph.add_edge("tool_confirm", "tool_executor")
+    graph.add_edge("tool_confirm", "pause_before_tool_execution_gate")
+    graph.add_conditional_edges(
+        "pause_before_tool_execution_gate",
+        route_after_pause_gate,
+        {"pause": "user_pause_before_tool_execution", "continue": "tool_executor"},
+    )
+    graph.add_conditional_edges(
+        "user_pause_before_tool_execution",
+        route_after_user_pause,
+        {"continue": "tool_executor", "cancel": "finalize_task"},
+    )
 
     # Tool flow — always run microcompact before next LLM call
     graph.add_edge("tool_executor", "checkpoint_task")
-    graph.add_edge("checkpoint_task", "save_memory")
+    graph.add_edge("checkpoint_task", "pause_after_tool_gate")
+    graph.add_conditional_edges(
+        "pause_after_tool_gate",
+        route_after_pause_gate,
+        {"pause": "user_pause_after_tool", "continue": "save_memory"},
+    )
+    graph.add_conditional_edges(
+        "user_pause_after_tool",
+        route_after_user_pause,
+        {"continue": "save_memory", "cancel": "finalize_task"},
+    )
     graph.add_conditional_edges(
         "save_memory",
         route_after_tool,
         {
-            "end": "finalize_task",
+            "end": "pause_before_finalize_gate",
             "verify": "verification_gate",
             "compress": "compress_context",
-            "manual_compress": "finalize_task",
-            "llm_call": "pre_microcompact"  # Run microcompact before returning to LLM
+            "manual_compress": "manual_compress",
+            "llm_call": "pause_before_llm_gate",
         }
     )
-    graph.add_edge("verification_gate", "pre_microcompact")
+    graph.add_edge("verification_gate", "pause_after_verification_gate")
+    graph.add_conditional_edges(
+        "pause_after_verification_gate",
+        route_after_pause_gate,
+        {"pause": "user_pause_after_verification", "continue": "pre_microcompact"},
+    )
+    graph.add_conditional_edges(
+        "user_pause_after_verification",
+        route_after_user_pause,
+        {"continue": "pre_microcompact", "cancel": "finalize_task"},
+    )
+    graph.add_conditional_edges(
+        "pause_before_finalize_gate",
+        route_after_pause_gate,
+        {"pause": "user_pause_before_finalize", "continue": "finalize_task"},
+    )
+    graph.add_conditional_edges(
+        "user_pause_before_finalize",
+        route_after_user_pause,
+        {"continue": "finalize_task", "cancel": "finalize_task"},
+    )
     graph.add_edge("finalize_task", "persist_memory")
     graph.add_edge("persist_memory", END)
 
     # Compress back to LLM
-    graph.add_edge("compress_context", "llm_call")
+    graph.add_edge("compress_context", "pause_after_compression_gate")
+    graph.add_edge("manual_compress", "pause_after_compression_gate")
+    graph.add_conditional_edges(
+        "pause_after_compression_gate",
+        route_after_pause_gate,
+        {"pause": "user_pause_after_compression", "continue": "llm_call"},
+    )
+    graph.add_conditional_edges(
+        "user_pause_after_compression",
+        route_after_user_pause,
+        {"continue": "llm_call", "cancel": "finalize_task"},
+    )
 
     if checkpointer is None:
         checkpointer = AsyncRedisSaver(
