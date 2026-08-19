@@ -318,7 +318,7 @@ Known deployment gaps:
 ## 9.1 Evaluation path
 
 ```text
-benchmarks/v1/cases.json
+benchmarks/v2/cases.json
           |
           +--> platform backend --> real tools/policy/state/Trace --> deterministic assertions
           |
@@ -328,18 +328,18 @@ benchmarks/v1/cases.json
                                                    +--> multi only for delegation_suitable cases
 ```
 
-The platform backend answers whether tools, isolation, recovery, safety policy, and evaluators behave deterministically. Only the Agent backend measures autonomous model performance. Connection/provider failures are reported as `infrastructure_error` and excluded from the Agent-success denominator.
+The platform backend answers whether tools, isolation, recovery, safety policy, and evaluators behave deterministically. Only the Agent backend measures autonomous model performance. Connection/provider failures are reported as `infrastructure_error` and excluded from the Agent-success denominator. Stop/Cancel protocol correctness is established separately by deterministic API, state-machine, Redis lease/tombstone, runner-fence, and process-termination tests. The benchmark's cancel-and-replan task only measures whether the Agent can reconcile partial Workspace side effects; it does not replace those protocol tests.
 
 ## 10. Baseline verification
 
-Current code verification recorded on 2026-08-10; retained model benchmark
-results still come from their dated artifacts:
+Current automated verification recorded on 2026-08-19; the latest retained official
+model benchmark was generated on 2026-08-19:
 
 | Check | Result |
 |---|---|
-| `uv run pytest -q` | 561 passed |
+| `uv run pytest -q` | 619 passed |
 | `uv run python scripts/smoke_test.py` | 9/9 local checks passed; no external service or model call |
-| `npm test --prefix frontend -- --run` | 77 passed |
+| `npm test --prefix frontend -- --run` | 93 passed |
 | `npm run build --prefix frontend` | Passed; largest JS chunk 76.99 kB, no size warning |
 | `npm audit --json` | 0 known production/development vulnerabilities |
 | `docker compose -f docker/docker-compose.yml config -q` | Passed for the current Preview/Edit change |
@@ -349,7 +349,7 @@ results still come from their dated artifacts:
 | Browser Preview/Edit smoke | Passed for Markdown Preview, Edit, dirty draft, draft Preview and Discard; no test draft was saved to the user's file |
 | `ruff check enterprise_agent migrations tests benchmarks scripts` | Passed, 0 findings |
 
-Long-term-memory tests exercise real in-process Chroma collections with a deterministic offline embedding, including v2 admission, Legacy quarantine, pattern upsert, filtered semantic search, and local-first model initialization. The final locked-environment platform benchmark passed 10/10 task assertions with 84.8 ms average task duration. A real `deepseek-chat` single-Agent run passed 8/10 tasks with zero infrastructure errors; the 3-case single/multi comparison remains unmeasured.
+Long-term-memory tests exercise real in-process Chroma collections with a deterministic offline embedding, including v2 admission, Legacy quarantine, pattern upsert, filtered semantic search, and local-first model initialization. The final locked-environment platform benchmark passed 10/10 task assertions with 84.8 ms average task duration. The official `mini-claude-code-v2` real-model run used `deepseek-v4-flash` in single-Agent mode and passed 25/30 tasks: easy 9/10, medium 10/10, hard 6/10, with 87.5% tool success, 11.524 s average duration, 32,342.23 average tokens, 73.3% human intervention, 15 safety interceptions, and zero infrastructure or system errors. Its source artifact is `benchmarks/results/20260819T160324Z-agent-single.{md,json}`. Because v2 expands and rebalances the suite and strengthens evaluation relative to the old v1 8/10 run, the two scores are not a strict like-for-like improvement comparison. The 6-case single/multi comparison remains unmeasured.
 
 ## 11. Evolution constraints
 

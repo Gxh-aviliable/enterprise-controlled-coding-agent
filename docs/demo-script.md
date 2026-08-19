@@ -6,7 +6,7 @@
 2. 在用户 Workspace 放入一个只有一处小 Bug、带失败测试的仓库。
 3. 预先确认模型 endpoint 可用，并保留一次成功录屏。
 4. 打开 Chat 和 Trace 页面。
-5. 准备 Platform 10/10 与 DeepSeek 8/10 报告作为网络故障时的证据。
+5. 准备 Platform 10/10 与 [v2 DeepSeek V4 Flash 25/30 正式报告](../benchmarks/results/20260819T160324Z-agent-single.md)（[JSON](../benchmarks/results/20260819T160324Z-agent-single.json)）作为网络故障时的证据。
 
 ## 0:00–0:40：项目定位
 
@@ -90,16 +90,18 @@ uv run python -m benchmarks.run --backend platform --mode single --no-artifacts
 
 展示以下真实结果：
 
-- 后端 561 passed，前端 77 passed，Ruff 通过；
+- 后端 619 passed，前端 93 passed，Ruff 通过；
 - Platform 10/10；
 - Memory 6/6；
-- DeepSeek single-Agent 8/10；
+- v2 DeepSeek V4 Flash single-Agent 25/30（83.3%）：easy 9/10、medium 10/10、hard 6/10，基础设施错误 0、系统错误 0；
 - 前端最大 chunk 76.99 kB；
 - Docker API 非 root、CPU-only PyTorch。
 
+口径说明：25/30 来自 `mini-claude-code-v2` 的 30 题 suite 与当前 evaluator，和旧 v1 的 8/10 在用例、断言及评测器上均有变化，不能当作严格同口径的纵向提升。v2 中的 `hard.cancel_replan.partial_workspace` 只评估模型面对部分 Workspace 时的重新规划能力；真实 Stop/Cancel 的 lease、tombstone、runner fencing 与前端锁定不计入模型成功率，由后端、控制层和前端确定性测试证明。
+
 最后用一句话收尾：
 
-> 我先建立可靠的 single-Agent 控制面和可复现评测，再判断 Multi-Agent 是否值得付出额外 token、延迟和权限面；目前三用例对照仍待测，所以没有宣称 Multi 更好。
+> 我先建立可靠的 single-Agent 控制面和可复现评测，再判断 Multi-Agent 是否值得付出额外 token、延迟和权限面；目前六用例对照仍待测，所以没有宣称 Multi 更好。
 
 > 当前 Preview/Edit 的 API/组件自动化、Docker 重建和浏览器实机 smoke 已通过。
 > 浏览器 smoke 只验证草稿、预览与丢弃，没有为测试修改用户文件；真实保存与 409 由隔离 API/组件测试证明。

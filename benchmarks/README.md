@@ -85,15 +85,17 @@ Six v2 cases are marked `delegation_suitable`. Multi-Agent mode intentionally ex
 
 ## Canonical checked-in reports
 
-The currently checked-in Agent baseline remains the historical v1 result until a complete, valid v2 `--official` run has successfully produced and passed review. Only then should the old 8/10 pair be replaced in the active result directory and downstream portfolio claims updated.
+The active Agent baseline is the complete, valid v2 `--official` run on clean commit `7562a9561cbd4e3d8fa0e6cf178c562f1950defa`. `deepseek-v4-flash` passed 25/30 cases: easy 9/10, medium 10/10, and hard 6/10, with zero provider-infrastructure errors and zero system errors. Because v2 expands both the workload and evaluator safeguards, this replaces the historical v1 baseline but is not a strictly like-for-like score comparison.
 
 | Layer | Result | Canonical artifact | What it proves |
 |---|---:|---|---|
 | Platform single (v1) | 10/10 | `20260715T125211Z-platform-single.*` | Deterministic tools, policy, lifecycle, recovery and v1 evaluator behavior |
 | Memory recall | 6/6 | `20260720T093639Z-memory-recall.*` | Small synthetic-set retrieval, filtering and Trace-field coverage |
-| DeepSeek Agent single (v1) | 8/10 | `20260723T052543Z-agent-single.*` | One real `deepseek-chat` autonomous run with tokens, latency and failures |
+| DeepSeek V4 Flash Agent single (v2) | 25/30 (easy 9/10, medium 10/10, hard 6/10) | [`20260819T160324Z-agent-single.md`](results/20260819T160324Z-agent-single.md) / [`JSON`](results/20260819T160324Z-agent-single.json) | One complete official autonomous run with tokens, latency, deterministic assertions, 0 infrastructure errors and 0 system errors |
 
-The earlier platform runs at `12:14:04Z` and `12:39:55Z` were diagnostic duplicates with the same 10/10 final assertions and are available through Git history instead of the active result directory. The multi-Agent comparison remains unmeasured.
+The historical v1 Agent artifact and the earlier platform diagnostic duplicates remain available through Git history rather than as the active baseline. The multi-Agent comparison remains unmeasured.
+
+The Agent score is stochastic model evidence. Even though v2 includes a `cancel_replan` workspace-reconciliation case, it does not establish the HTTP/SSE Stop/Cancel protocol, durable cancellation, runner fencing, or cancel-and-replan control-plane semantics. Those claims rely on the deterministic API and integration tests listed above and must be reported separately from the 25/30 model score.
 
 ## Result interpretation
 

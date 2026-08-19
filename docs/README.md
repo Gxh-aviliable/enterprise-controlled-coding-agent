@@ -34,16 +34,16 @@
 
 ## 当前可复现证据
 
-当前代码验证更新于 2026-08-10；真实模型评测仍使用下列带日期的保留产物：
+当前自动化验证更新于 2026-08-19；最新真实模型正式评测产物生成于 2026-08-19（UTC）：
 
 | 证据 | 结果 | 解释边界 |
 |---|---:|---|
-| 后端 pytest | 561 passed | 单元、API、任务状态机、Stop 闭环、工具、Workspace 安全写入、上下文、记忆和 Trace 回归 |
-| 前端 Vitest | 77 passed | 八个测试文件中的关键交互、SSE 控制流、Preview/Edit、冲突和未保存导航防护回归 |
+| 后端 pytest | 619 passed | 单元、API、任务状态机、Stop 闭环、工具、Workspace 安全写入、上下文、记忆和 Trace 回归 |
+| 前端 Vitest | 93 passed | 关键交互、SSE 控制流、Stop/HITL、Preview/Edit、冲突和未保存导航防护回归 |
 | Ruff | 0 findings | 当前配置覆盖的 Python 静态检查 |
 | Platform benchmark | 10/10 | 确定性工具、状态、策略和评测器，不是模型智能分 |
 | Memory benchmark | 6/6 | 小型合成集的检索与过滤，不证明模型正确采用记忆 |
-| DeepSeek single-Agent | 8/10 | `deepseek-chat` 在版本化合成任务上的一次真实运行 |
+| DeepSeek single-Agent v2 | 25/30 | `deepseek-v4-flash`：easy 9/10、medium 10/10、hard 6/10；工具成功率 87.5%，平均 11.524 s / 32,342.23 token，HITL 73.3%，安全拦截 15，基础设施/系统错误均为 0 |
 | Multi-Agent 对照 | 待测 | 不宣称多 Agent 优于单 Agent |
 
 对应原始产物：
@@ -52,8 +52,10 @@
   [Platform JSON](../benchmarks/results/20260715T125211Z-platform-single.json)
 - [Memory Markdown](../benchmarks/results/20260720T093639Z-memory-recall.md) /
   [Memory JSON](../benchmarks/results/20260720T093639Z-memory-recall.json)
-- [Agent Markdown](../benchmarks/results/20260723T052543Z-agent-single.md) /
-  [Agent JSON](../benchmarks/results/20260723T052543Z-agent-single.json)
+- [Agent v2 Markdown](../benchmarks/results/20260819T160324Z-agent-single.md) /
+  [Agent v2 JSON](../benchmarks/results/20260819T160324Z-agent-single.json)
+
+Agent v2 将题集扩展并重新平衡为 30 条，同时强化了评测器，因此 25/30 与旧 v1 的 8/10 **不严格同口径**，不能直接解释为同一题集上的净提升。Stop/Cancel 协议本身由确定性 API、状态机、Redis 与进程终止回归证明；v2 中的 cancel-and-replan 用例只补充模型行为证据，不替代协议测试。
 
 ## 历史记录的使用方式
 

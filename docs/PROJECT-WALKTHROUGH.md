@@ -3670,8 +3670,10 @@ tool_name=delegate_task and ok=true
 
 ### 45.3 当前评测边界
 
-- 保留的真实 single-Agent：8/10；
-- 三个 `delegation_suitable` 用例已定义；
+- 保留的正式 single-Agent 基线是 [v2 DeepSeek V4 Flash 25/30](../benchmarks/results/20260819T160324Z-agent-single.md)（[JSON](../benchmarks/results/20260819T160324Z-agent-single.json)）：easy 9/10、medium 10/10、hard 6/10，基础设施错误 0、系统错误 0；
+- v2 30 题 suite 与旧 v1 10 题的用例、断言和 evaluator 均不同，25/30 与旧 8/10 不能作为严格同口径的纵向对比；
+- `hard.cancel_replan.partial_workspace` 评估的是模型对部分 Workspace 的重新规划，不执行真实 Stop/Cancel 协议；lease、cancel tombstone、runner fencing 和 UI 输入锁由确定性测试证明，不计入模型成功率；
+- 六个 `delegation_suitable` 用例已定义；
 - single/multi 对照尚未完成；
 - 不宣称 Multi 提高成功率或效率。
 
@@ -3741,10 +3743,12 @@ uv run python -m benchmarks.run --backend platform --mode single --no-artifacts
 |---|---:|---:|---|
 | Platform | 否 | 10/10 | 工具、策略、状态、评测器 |
 | Memory | 否 | 6/6 | 小型检索与过滤 |
-| Agent single | 是 | 8/10 | 一次 DeepSeek 自主执行 |
+| Agent single v2 | 是 | 25/30 | DeepSeek V4 Flash；easy 9/10、medium 10/10、hard 6/10；0 infrastructure/system errors |
 | Agent multi | 是 | 待测 | 尚无收益结论 |
 
-`benchmarks/v1/cases.json` 每个用例包含：
+Agent single 行的权威 artifact 是 [Markdown 正式报告](../benchmarks/results/20260819T160324Z-agent-single.md)与[机器可读 JSON](../benchmarks/results/20260819T160324Z-agent-single.json)。旧 v1 与 v2 的 suite/evaluator 发生变化，因此不得把旧 8/10 与 v2 25/30 解释为严格同口径提升。模型基线不覆盖真实 Stop/Cancel 控制面；`hard.cancel_replan.partial_workspace` 只验证取消后部分 Workspace 场景中的模型重新规划，控制协议由 `tests/core/execution/test_interrupt_control.py`、`tests/api/test_chat_task_security.py`、`tests/api/test_cancelled_turn_regression.py` 和 `frontend/tests/ChatPanel.spec.js` 等确定性测试证明。
+
+`benchmarks/v2/cases.json` 每个用例包含：
 
 - category；
 - fixtures；
@@ -3989,13 +3993,16 @@ uv run python scripts/smoke_test.py
 
 - `tests/README.md`
 - `benchmarks/README.md`
-- `benchmarks/v1/cases.json`
+- `benchmarks/v2/cases.json`
+- `benchmarks/results/20260819T160324Z-agent-single.md`
 - `docs/portfolio-guide.md`
 
 需要回答：
 
-- Platform 10/10 为什么不是 Agent 10/10？
-- single 8/10 的两个失败说明什么？
+- Platform 10/10 为什么不能与 Agent v2 25/30 当作同一种分数？
+- v2 single 的五个失败说明什么？
+- 为什么旧 v1 8/10 与 v2 25/30 不能做严格纵向比较？
+- 为什么 Stop/Cancel 控制面不计入模型成功率？
 - 为什么 Multi 目前没有收益结论？
 
 练习：
@@ -4045,7 +4052,7 @@ uv run python -m benchmarks.run --backend platform --mode single --no-artifacts
 第 2 分钟：FastAPI → AgentState → LangGraph 主循环
 第 3 分钟：ToolContract → 权限 → 风险 → HITL → 执行器
 第 4 分钟：验证门、Checkpoint、Trace 和记忆治理
-第 5 分钟：真实 8/10、Platform 10/10、当前安全/Multi 边界
+第 5 分钟：v2 DeepSeek V4 Flash 25/30、Platform 10/10、当前安全/Multi 边界
 ```
 
 ## C. 最容易讲错的十件事

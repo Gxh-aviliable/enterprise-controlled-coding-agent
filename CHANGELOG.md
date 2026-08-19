@@ -118,10 +118,11 @@ All notable project changes are recorded here. Benchmark and performance claims 
 
 ### Baseline verification
 
+- Real `deepseek-v4-flash` v2 single-Agent benchmark (clean commit `7562a95`): 25/30 tasks, with easy 9/10, medium 10/10, hard 6/10, 87.5% tool success, 11.524 s average duration, 32,342.23 average tokens, 73.3% human intervention, 15 safety interceptions, and zero infrastructure/system errors. V2 replaces the active v1 baseline but is not a strictly like-for-like score comparison because the suite and evaluator both changed.
 - Current code verification (2026-08-10): backend 561 passed; Ruff passed; frontend 77/77 passed; production build, 9/9 local smoke and Compose configuration passed. Multi regression coverage proves real delegation, mutation, `py_compile` validation and terminal Trace/MySQL consistency without calling a third-party model. The prior Preview/Edit Docker and browser smoke remains valid for its recorded code state.
 - Current code verification (2026-08-08): backend 442 passed; Ruff passed; frontend 23/23 passed; production build, Compose configuration and 7-check local smoke passed; the offline Platform benchmark remained 10/10. No third-party model was called for this verification.
 - Current milestone (2026-07-23): backend 381 passed; Ruff passed; frontend 23/23 passed; production build passed with a 76.99 kB largest chunk; Compose configuration and local smoke passed.
-- Real `deepseek-chat` single-Agent benchmark: 8/10 tasks, 82.9% tool success, 5.285 s average duration, 19,339.9 average tokens, 50.0% human intervention, 6 safety interceptions, and 0 infrastructure errors.
+- Historical v1 milestone — real `deepseek-chat` single-Agent benchmark: 8/10 tasks, 82.9% tool success, 5.285 s average duration, 19,339.9 average tokens, 50.0% human intervention, 6 safety interceptions, and 0 infrastructure errors. It is retained for chronology, not as the active baseline.
 - Rebuilt API/frontend images passed against the existing MySQL volume; Alembic reached `20260722_0002`, 13 readable Redis messages migrated to MySQL, all 12 non-deleted user-1 sessions were returned after refresh (1 durable, 11 honestly expired), and all four Compose services were healthy.
 - Live API authorization smoke: users.id=1 administrator overview returned 200 with `metadata_only`; an active non-admin user returned 403. Browser regular-user smoke showed no administrator entry and zero warning/error logs.
 - Offline platform benchmark: 10/10 tasks passed; 80.0% tool-call success, 84.8 ms average task duration, 20.0% intervention rate, and 1 safety interception. This deterministic run uses no LLM and is not an Agent intelligence score.
@@ -133,4 +134,4 @@ All notable project changes are recorded here. Benchmark and performance claims 
 
 ### Not yet measured
 
-- The 3-case delegation-suitable single-Agent versus multi-Agent comparison remains unexecuted. No multi-Agent benefit is claimed.
+- The 6-case delegation-suitable single-Agent versus multi-Agent comparison remains unexecuted. No multi-Agent benefit is claimed.

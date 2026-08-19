@@ -162,7 +162,7 @@ MEMORY_DEDUP_MAX_DISTANCE=0.3
 - 本地 embedding 初始基线：6 个用例通过 5 个，Precision@3 27.78%，无关负例误注入率 100%，证明原始中文检索门槛不可接受。
 - 加入中文词法重排和相对门槛后：6/6 通过，Recall@3、Precision@3、MRR 均为 100%，负例误注入率 0%，Forbidden injection 0。
 - 原始报告见 `benchmarks/results/20260720T093639Z-memory-recall.json` 和同名 Markdown。该结果只证明小型合成集上的**本地检索与过滤**，不证明模型正确采用记忆。
-- 真实模型是否正确采用已注入记忆仍未单独归因评测；现有 Agent 8/10 报告不能替代该指标。
+- 真实模型是否正确采用已注入记忆仍未单独归因评测；现有 Agent v2 `deepseek-v4-flash` 25/30 报告不能替代该指标。
 
 ## 7. 下一阶段评测
 

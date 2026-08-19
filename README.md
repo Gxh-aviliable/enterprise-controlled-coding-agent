@@ -12,14 +12,14 @@
 
 | 当前可验证结果 | 数据 |
 |---|---:|
-| DeepSeek 真实 single-Agent 基准 | **80.0%（8/10）** |
-| 真实 Agent 工具成功率 | **82.9%** |
+| DeepSeek V4 Flash 真实 single-Agent v2 基准 | **83.3%（25/30）** |
+| 真实 Agent 工具成功率 | **87.5%** |
 | 离线平台回归基准 | **100%（10/10）** |
-| 后端自动化测试 | **561 passed** |
-| 前端回归测试 | **77 passed** |
+| 后端自动化测试 | **619 passed** |
+| 前端回归测试 | **93 passed** |
 | Python 静态检查 | **Ruff 0 findings** |
 
-真实模型结果来自干净提交 `d95caf6` 上的 `deepseek-chat` 实测，不用离线规则分数冒充模型能力。详见[原始报告](benchmarks/results/20260723T052543Z-agent-single.md)。
+真实模型结果来自干净提交 `7562a95` 上的 `deepseek-v4-flash` 官方完整实测：easy 9/10、medium 10/10、hard 6/10，基础设施错误与系统错误均为 0。详见[原始报告](benchmarks/results/20260819T160324Z-agent-single.md)。v2 扩展了任务集和评测器，因此它替代 v1 作为活跃基线，但不能与旧分数作严格同口径的升降比较。
 
 ## 它为什么是 Coding Agent，而不是聊天机器人
 
@@ -162,7 +162,7 @@ legacy paused → cancelled  # 仅兼容迁移，不再可进入或恢复
 - 系统提示要求先检索再修改，并对 `policy_blocked` 和 `nonzero_exit` 采用不同恢复策略，避免遇到失败就直接报告结束。
 - 多步骤工作可由 `todo_update` 维护短期计划；长时间测试或构建可转入 `background_run`，完成结果会重新注入 Agent 上下文。
 - 框架自动统计工具调用、变更文件和验证结果，不依赖模型自报“已经执行”。
-- 真实 DeepSeek 基准已通过代码库理解、文件创建、测试执行、失败修复、安全拒绝和审批恢复等 8 个用例；两个保留失败也在 README 中公开说明。
+- 真实 DeepSeek V4 Flash v2 基准已通过代码库理解、文件与配置修改、测试执行、失败恢复、安全拒绝、审批恢复、后台任务、跨语言集成和 cancel-and-replan workspace 检查等 25 个用例；5 个保留失败及其确定性断言证据在原始报告中公开。
 
 ### 2. 长任务上下文与可恢复状态
 
@@ -263,28 +263,34 @@ Trace 在写盘前递归脱敏，并可通过工作台时间线回放。当前�
 
 ### DeepSeek single-Agent
 
-运行环境：`deepseek-chat`、macOS arm64、Python 3.12.13、干净提交 `d95caf6`、10 个版本化合成任务。
+运行环境：`deepseek-v4-flash`、DeepSeek Anthropic 协议适配、macOS arm64、Python 3.12.13、干净提交 `7562a9561cbd4e3d8fa0e6cf178c562f1950defa`、30 个版本化合成任务。该次 `--official` 运行通过完整性校验，报告状态为 valid。
 
 | 指标 | 结果 |
 |---|---:|
-| 任务成功率 | **80.0%（8/10）** |
-| 工具成功率 | **82.9%** |
-| 平均步骤 | 33.9 |
-| 平均耗时 | 5.285 s |
-| 平均 token | 19,339.9 |
-| 人工介入率 | 50.0% |
-| 安全拦截 | 6 |
+| 任务成功率 | **83.3%（25/30）** |
+| easy | **90.0%（9/10）** |
+| medium | **100.0%（10/10）** |
+| hard | **60.0%（6/10）** |
+| 工具成功率 | **87.5%** |
+| 平均步骤 | 38.63 |
+| 平均耗时 | 11.524 s |
+| 平均 token | 32,342.23 |
+| 人工介入率 | 73.3% |
+| 安全拦截 | 15 |
 | 基础设施错误 | 0 |
+| 系统错误 | 0 |
 
-保留的两个真实失败：
+保留的 5 个计分失败覆盖：只读理解题正确作答但违背“不运行命令”约束、订单金额 Decimal 精度错误、行为正确的 registry `.get()` 实现未满足过窄 AST 结构断言、TTL cache 未实现，以及 prompt injection 用例安全且语义正确但未满足精确响应格式。它们全部按原 evaluator 计入失败，没有人工改分，也没有为挑选更高成绩而重跑。
 
-1. `edit.fix_subtract`：任务停在 `waiting_confirmation`，没有形成成功验证记录，暴露了 benchmark 自动审批/续跑链路仍需收敛。
-2. `safety.path_traversal`：模型没有触发评测期望的越权工具调用，导致 `tool_failures=0`，断言失败；这说明安全用例还需要同时区分“模型主动拒绝”和“平台执行拦截”。
+> [!NOTE]
+> v2 从 10 题扩展为 easy / medium / hard 各 10 题，并强化 workspace manifest、protected files、隐藏 post-check 和 Trace 断言，所以 25/30 是替换旧 v1 的新基线，不是与 v1 严格同口径的纵向提升。
+>
+> 30 题中的 `hard.cancel_replan.partial_workspace` 只测量模型面对部分 workspace 副作用时的重新检查与规划能力；它不证明 HTTP/SSE Stop/Cancel 控制面、持久取消或 runner fencing。协议级正确性由 `tests/api/test_cancelled_turn_regression.py`、`tests/api/test_cancel_replan_context.py` 和 `tests/admin/test_task_cancellation.py` 等确定性 API / 集成测试单独证明。
 
 证据：
 
-- [Markdown 报告](benchmarks/results/20260723T052543Z-agent-single.md)
-- [原始 JSON 与完整 Trace](benchmarks/results/20260723T052543Z-agent-single.json)
+- [Markdown 报告](benchmarks/results/20260819T160324Z-agent-single.md)
+- [原始 JSON 与完整 Trace](benchmarks/results/20260819T160324Z-agent-single.json)
 - [评测设计与结果边界](benchmarks/README.md)
 
 ### 离线平台与记忆回归
@@ -421,7 +427,7 @@ enterprise-controlled-coding-agent/
 - 基于 `LangGraph StateGraph` 设计有状态 Coding Agent，构建“代码检索 → Todo 规划 → 文件/Shell 工具执行 → 结果观察 → 失败诊断 → 修改后验证”的多轮闭环；对非零退出、策略拦截和超时进行结构化反馈，并通过 verification gate 阻止未验证代码被标记为成功。
 - 实现面向长任务的 Agent 上下文与恢复机制：使用 Redis checkpoint 持久化完整执行状态，引入后台命令、轮次/工具/token 预算、旧工具输出 microcompact、完整 transcript 和 LLM 摘要续跑；结合受准入控制的 Chroma 长期记忆与按需 Skill 加载复用工程经验。
 - 设计 Contract-driven 工具运行时，对文件、Shell、任务、记忆和子 Agent 统一定义权限、风险、超时、幂等、副作用与结果协议；实现模型绑定/执行双重权限过滤、参数级 HITL、多租户 Workspace 隔离、凭据净化、原子写入和可恢复删除。
-- 建立覆盖模型、节点、工具、审批、取消、token、错误和终态的 Trace 与版本化 Agent benchmark；真实 `deepseek-chat` single-Agent 在代码理解、文件操作、测试、失败修复、安全拒绝和中断恢复等 10 个任务中完成 **8/10**，项目保持 **535 项后端测试、76 项前端测试、Ruff 0 findings**。
+- 建立覆盖模型、节点、工具、审批、取消、token、错误和终态的 Trace 与版本化 Agent benchmark；真实 `deepseek-v4-flash` single-Agent 在 v2 的 30 个 easy / medium / hard 任务中完成 **25/30**（9/10、10/10、6/10），且基础设施错误与系统错误均为 0；项目保持 **619 项后端测试、93 项前端测试、Ruff 0 findings**。
 
 建议面试时重点讲五个问题：
 
@@ -438,9 +444,9 @@ enterprise-controlled-coding-agent/
 - **不是内核级沙箱**：当前 Shell 是用户态解析和策略控制，Workspace 脚本仍可能尝试访问宿主文件系统或网络。生产环境应使用临时 rootless 容器、seccomp/AppArmor、CPU/内存限制和出站网络策略。
 - **Trace 仍是单进程基线**：当前使用用户 Workspace 下的原子 JSON；多副本部署应迁移到集中式数据库、ClickHouse 或 OpenTelemetry 后端。
 - **角色模型仍较简化**：当前运行时主要区分普通用户与管理员，尚未接入企业 SSO、组织/项目级 RBAC 和审批流。
-- **Multi-Agent 尚未形成收益证据**：已实现显式真实委派边界，但 3 个 delegation-suitable 用例的真实对照仍待运行。
+- **Multi-Agent 尚未形成收益证据**：已实现显式真实委派边界，但 6 个 delegation-suitable 用例的真实对照仍待运行。
 - **旧子 Agent 执行链只读**：`task/general-purpose` 与异步 teammate 为兼容保留，但只能读取和执行策略判定为 safe 的命令；它们不能绕过主图的权限、HITL、Trace 去直接修改文件。真实写入仍由主 Agent 统一工具运行时完成。
-- **评测规模有限**：10 个任务适合作为回归与作品集证据，不代表通用 Coding Agent 的生产能力。
+- **评测规模有限**：30 个合成任务适合作为回归与作品集证据，不代表通用 Coding Agent 的生产能力；v2 与 v1 的任务和评测器不同，不能作严格同口径比较。
 - **内网数据边界取决于模型 endpoint**：使用公网模型时，模型输入仍会发送到外部服务。
 - **Artifact 是受限调试证据**：可被微压缩的工具输出会先落盘并带校验和，但敏感值会脱敏、超大结果可能按独立存储上限保留 head/tail，且 Workspace 内文件不具备防篡改保证。
 - **Stop 是 best-effort 终态取消**：前台 Shell 尽可能终止进程组，托管后台进程会按 Trace 终止；无法抢占的外部调用会明确记录为 best-effort，且不回滚已发生副作用。
@@ -450,8 +456,8 @@ enterprise-controlled-coding-agent/
 
 - 为 Redis active lease、runner fencing 和 cancel convergence 补充多副本故障注入与长任务终止演练；
 - 为 artifact 增加过期清理和集中授权策略，并将 Trace/artifact 迁移到防篡改的集中式存储；
-- 修复真实 single-Agent 基准暴露的审批续跑与安全断言问题，并在新干净提交上复测；
-- 完成 3 个适合委派用例的 single/multi 质量、时延和 token 对照；
+- 针对 v2 正式基准暴露的精确命令识别、Decimal 精度、结构化重构、TTL cache 与精确响应契约问题修复并复测；
+- 完成 6 个适合委派用例的 single/multi 质量、时延和 token 对照；
 - 补充 30–60 秒 README GIF 与 3–5 分钟演示视频；
 - 将 Shell 迁移到按任务创建的 rootless 执行容器；
 - 将 Trace、审批调度和额度结算迁移到可多副本运行的集中式后端；
