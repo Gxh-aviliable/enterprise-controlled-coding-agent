@@ -46,6 +46,7 @@ from enterprise_agent.core.agent.nodes import (
     pre_llm_microcompact_node,
     prepare_tool_execution_node,
     route_after_llm,
+    route_after_microcompact,
     route_after_tool,
     save_memory_node,
     task_parse_node,
@@ -74,6 +75,16 @@ def _traced_node(node_name, node):
 
     @wraps(node)
     async def wrapped(state):
+        from enterprise_agent.core.execution.interrupt_control import (
+            get_current_task_runner_identity,
+            owns_current_task_runner,
+        )
+
+        runner_identity = get_current_task_runner_identity()
+        if runner_identity is not None and not await owns_current_task_runner():
+            raise RuntimeError(
+                f"Active trace runner fence lost before node {node_name}; refusing execution."
+            )
         started = time.perf_counter()
         try:
             result = await node(state)
@@ -113,6 +124,11 @@ def _traced_node(node_name, node):
             except Exception:
                 logging.warning("Failed to record node error trace", exc_info=True)
             raise
+
+        if runner_identity is not None and not await owns_current_task_runner():
+            raise RuntimeError(
+                f"Active trace runner fence lost after node {node_name}; refusing checkpoint update."
+            )
 
         try:
             if state.get("trace_id") and state.get("user_id") is not None:
@@ -219,9 +235,13 @@ def build_agent_graph():
 
     # Pre-processing before LLM
     graph.add_edge("check_background", "check_inbox")   # Inject inbox messages
-    graph.add_edge("check_inbox", "plan_task")          # Explicit planning phase
-    graph.add_edge("plan_task", "pre_microcompact")     # Apply microcompact
-    graph.add_edge("pre_microcompact", "llm_call")      # Then call LLM
+    graph.add_edge("check_inbox", "plan_task")          # Planning phase marker
+    graph.add_edge("plan_task", "pre_microcompact")
+    graph.add_conditional_edges(
+        "pre_microcompact",
+        route_after_microcompact,
+        {"compress": "compress_context", "llm_call": "llm_call"},
+    )
 
     # Conditional routing after LLM
     # tool_call -> tool_confirm (human-in-the-loop check) -> tool_executor
@@ -230,8 +250,8 @@ def build_agent_graph():
         route_after_llm,
         {
             "tool_call": "prepare_tool_execution",
-            "save_memory": "save_memory",  # Text response -> save then end
             "compress": "compress_context",
+            "save_memory": "save_memory",  # Text response -> save then end
         }
     )
 
@@ -250,7 +270,7 @@ def build_agent_graph():
             "verify": "verification_gate",
             "compress": "compress_context",
             "manual_compress": "manual_compress",
-            "llm_call": "pre_microcompact"  # Run microcompact before returning to LLM
+            "llm_call": "pre_microcompact",
         }
     )
     graph.add_edge("verification_gate", "pre_microcompact")
@@ -260,8 +280,8 @@ def build_agent_graph():
     # Compression flow - back to LLM with compressed context
     graph.add_edge("compress_context", "llm_call")
 
-    # Manual compress ends the invocation
-    graph.add_edge("manual_compress", "finalize_task")
+    # Manual compression resumes the same invocation from its continuation packet.
+    graph.add_edge("manual_compress", "llm_call")
 
     # Compile with RedisSaver for persistent state management
     # TTL ensures checkpoints are automatically cleaned up after expiry
@@ -302,6 +322,7 @@ def build_simple_agent_graph(checkpointer=None):
     add_node("checkpoint_task", checkpoint_task_node)
     add_node("save_memory", save_memory_node)
     add_node("compress_context", compress_context_node)
+    add_node("manual_compress", manual_compress_node)
     add_node("verification_gate", verification_gate_node)
     add_node("finalize_task", finalize_task_node)
     add_node("persist_memory", persist_memory_node)
@@ -311,7 +332,11 @@ def build_simple_agent_graph(checkpointer=None):
     graph.add_edge("task_parse", "init_context")
     graph.add_edge("init_context", "plan_task")
     graph.add_edge("plan_task", "pre_microcompact")
-    graph.add_edge("pre_microcompact", "llm_call")
+    graph.add_conditional_edges(
+        "pre_microcompact",
+        route_after_microcompact,
+        {"compress": "compress_context", "llm_call": "llm_call"},
+    )
 
     # Conditional routing after LLM
     # tool_call -> tool_confirm (human-in-the-loop check) -> tool_executor
@@ -320,8 +345,8 @@ def build_simple_agent_graph(checkpointer=None):
         route_after_llm,
         {
             "tool_call": "prepare_tool_execution",
-            "save_memory": "save_memory",  # Text response -> save then end
             "compress": "compress_context",
+            "save_memory": "save_memory",  # Text response -> save then end
         }
     )
 
@@ -338,8 +363,8 @@ def build_simple_agent_graph(checkpointer=None):
             "end": "finalize_task",
             "verify": "verification_gate",
             "compress": "compress_context",
-            "manual_compress": "finalize_task",
-            "llm_call": "pre_microcompact"  # Run microcompact before returning to LLM
+            "manual_compress": "manual_compress",
+            "llm_call": "pre_microcompact",
         }
     )
     graph.add_edge("verification_gate", "pre_microcompact")
@@ -348,6 +373,7 @@ def build_simple_agent_graph(checkpointer=None):
 
     # Compress back to LLM
     graph.add_edge("compress_context", "llm_call")
+    graph.add_edge("manual_compress", "llm_call")
 
     if checkpointer is None:
         checkpointer = AsyncRedisSaver(

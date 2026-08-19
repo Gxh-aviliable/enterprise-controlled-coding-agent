@@ -1,65 +1,107 @@
 # Mini Claude Code Benchmark
 
-`v1/cases.json` is a versioned, self-contained coding-agent suite. Every case creates a fresh temporary workspace and carries its own fixtures, prompt, deterministic platform steps, assertions, category, and delegation-suitability flag.
+`v2/cases.json` is the default coding-Agent suite. It contains 30 self-contained cases, split evenly into `easy`, `medium`, and `hard` (10 cases each). Every case runs in a fresh temporary workspace and defines its own fixtures, prompt, deterministic platform steps, assertions, category, protected paths, post-run checks, and delegation-suitability flag.
+
+`v1/cases.json` remains available for historical compatibility and for reproducing the earlier 10-case reports. Because v2 expands both the workload and the evaluator, its score is a replacement baseline rather than a strictly like-for-like continuation of v1.
 
 ## What the two backends mean
 
-- `platform`: offline and deterministic. It validates workspace isolation, tools, policies, task lifecycle, confirmation/recovery, trace collection, and evaluators. It does **not** measure LLM reasoning quality.
-- `agent`: invokes the configured model through the real in-memory LangGraph, tools, confirmation interrupts, verification gate, and Trace pipeline. It is the source of Agent task-success/token/latency claims.
+- `platform`: offline and deterministic, and intentionally supports `single` mode only. It validates suite fixtures, workspace isolation, tools, selected policy blocks, scripted representative confirmation/recovery flows, Trace collection, and evaluators. It does **not** measure LLM reasoning quality or an exhaustive real-policy intervention rate.
+- `agent`: invokes the configured model through the real in-memory LangGraph, tools, confirmation interrupts, verification gate, and Trace pipeline. It is the source of model task-success, token, and latency measurements.
 
-Run the reproducible infrastructure baseline:
-
-```bash
-uv run python -m benchmarks.run --backend platform --mode single
-```
-
-Run the real single-Agent baseline only when synthetic benchmark content is approved for the configured model endpoint:
+The 30-case Agent score measures completion of synthetic coding tasks. It does **not** by itself prove the HTTP/SSE Stop/Cancel control plane, durable cancellation, or cancel-and-replan semantics. Those behaviors are evidenced separately by deterministic API and integration tests, for example:
 
 ```bash
-uv run python -m benchmarks.run --backend agent --mode single
+uv run pytest \
+  tests/api/test_cancelled_turn_regression.py \
+  tests/api/test_cancel_replan_context.py \
+  tests/admin/test_task_cancellation.py -q
 ```
 
-Only after a single-Agent report exists, run the smaller delegation-suitable subset with multi-Agent tools exposed:
+## Running the suites
+
+Preflight the complete v2 workload with the deterministic backend before spending model tokens:
 
 ```bash
-uv run python -m benchmarks.run --backend agent --mode multi
+uv run python -m benchmarks.run \
+  --suite v2 --backend platform --mode single --no-artifacts
 ```
 
-Reports are written as raw JSON plus a human-readable Markdown summary under `benchmarks/results/`. Connection/provider failures are reported as `infrastructure_error` and excluded from task-success-rate denominators instead of being misrepresented as Agent-quality failures.
+After committing the suite and runner changes, run the complete real-model baseline from that clean commit:
 
-Every report carries a secret-free reproducibility manifest: Git commit/branch/dirty state, benchmark suite and `uv.lock` SHA-256, exact selected case IDs, Python/platform identity, run timestamps, Agent limits, provider/model, sanitized endpoint, and the effective inference-default policy. A measured portfolio run is valid only when `Dirty worktree` is `False`; API keys, URL credentials, query strings, and fragments are never written to artifacts.
+```bash
+uv run python -m benchmarks.run \
+  --suite v2 --backend agent --mode single --official
+```
+
+Run a legacy v1 reproduction explicitly:
+
+```bash
+uv run python -m benchmarks.run \
+  --suite v1 --backend agent --mode single
+```
+
+`--suite` accepts `v1`, `v2`, or an explicit `cases.json` path. The following filters can be repeated; combining them takes their intersection:
+
+```bash
+# One or more difficulty levels
+uv run python -m benchmarks.run --level easy --level medium
+
+# One or more exact category names
+uv run python -m benchmarks.run --category bug_fix --category safety_refusal
+
+# One or more exact case IDs
+uv run python -m benchmarks.run --case easy.understanding.entrypoint
+```
+
+`--official` is the publishable v2 guard. It only accepts the canonical 30-case `agent` / `single` run with result artifacts enabled, fails closed before execution if Git cannot identify the commit or the worktree is dirty, pins the starting commit, rejects partial-suite filters, and checks the same commit and clean tree again after the cases finish. An official report is marked valid only when the run has no skipped cases, provider-infrastructure errors, or system errors.
+
+Only after the single-Agent report exists should the smaller delegation-suitable subset be run with multi-Agent tools exposed:
+
+```bash
+uv run python -m benchmarks.run \
+  --suite v2 --backend agent --mode multi
+```
+
+Unless `--no-artifacts` is supplied, reports are written as raw JSON plus a human-readable Markdown summary under `benchmarks/results/`. Connection/provider failures are recorded as `infrastructure_error` and excluded from task-success-rate denominators instead of being misrepresented as Agent-quality failures. Runner or Agent defects are recorded as `system_error` and count as task failures.
+
+## V2 evaluator safeguards
+
+- Workspace manifests hash the initial and final user-visible files, including type, content digest, size, mode, mtime, and ctime. Operational `.agent` artifacts are excluded. Assertions can require an exact added/modified/deleted path set.
+- `protected_files` supports exact paths and glob patterns. A case that declares protected paths automatically receives final-state content/metadata integrity plus successful first-party `write_file` / `edit_file` / `delete_paths` Trace checks. This catches normal direct and shell touch-and-restore attempts, but it remains bounded benchmark evidence rather than a kernel-level filesystem-audit claim.
+- `post_checks` run deterministic, argv-based commands after the Agent finishes. They use a minimal environment that excludes host `PYTHONPATH`, `PYTEST_ADDOPTS`, `NODE_OPTIONS`, and npm configuration, plus a private HOME/TMP, bounded timeout, captured output, and optional hidden fixtures injected after the final workspace manifest.
+- Every report carries a secret-free reproducibility manifest: Git commit/branch/dirty state, suite and `uv.lock` SHA-256, exact selected case IDs, difficulty/category selection, Python/platform identity, Node/npm versions, timestamps, Agent limits, provider/model, sanitized endpoint, and inference-default policy. API keys, URL credentials, query strings, and fragments are never written to artifacts.
+
+## V2 coverage
+
+| Difficulty | Cases | Emphasis |
+|---|---:|---|
+| Easy | 10 | Repository reading, exact file/config edits, small fixes, test execution, basic safety refusal |
+| Medium | 10 | Recovery loops, behavior-preserving edits, confirmation resume, background work, secret isolation |
+| Hard | 10 | Multi-file reasoning, security hardening, refactors, cross-language contracts, hidden checks, large-output artifacts, cancel-and-replan workspace inspection |
+| **Total** | **30** | Broad synthetic coding-Agent regression coverage |
+
+Six v2 cases are marked `delegation_suitable`. Multi-Agent mode intentionally excludes the remaining cases so delegation is measured only where parallel information gathering is plausibly useful.
 
 ## Canonical checked-in reports
 
-Only one representative artifact pair is retained for each measured layer:
+The active Agent baseline is the complete, valid v2 `--official` run on clean commit `7562a9561cbd4e3d8fa0e6cf178c562f1950defa`. `deepseek-v4-flash` passed 25/30 cases: easy 9/10, medium 10/10, and hard 6/10, with zero provider-infrastructure errors and zero system errors. Because v2 expands both the workload and evaluator safeguards, this replaces the historical v1 baseline but is not a strictly like-for-like score comparison.
 
 | Layer | Result | Canonical artifact | What it proves |
 |---|---:|---|---|
-| Platform single | 10/10 | `20260715T125211Z-platform-single.*` | Deterministic tools, policy, lifecycle, recovery and evaluator behavior |
+| Platform single (v1) | 10/10 | `20260715T125211Z-platform-single.*` | Deterministic tools, policy, lifecycle, recovery and v1 evaluator behavior |
 | Memory recall | 6/6 | `20260720T093639Z-memory-recall.*` | Small synthetic-set retrieval, filtering and Trace-field coverage |
-| DeepSeek Agent single | 8/10 | `20260723T052543Z-agent-single.*` | One real `deepseek-chat` autonomous run with tokens, latency and failures |
+| DeepSeek V4 Flash Agent single (v2) | 25/30 (easy 9/10, medium 10/10, hard 6/10) | [`20260819T160324Z-agent-single.md`](results/20260819T160324Z-agent-single.md) / [`JSON`](results/20260819T160324Z-agent-single.json) | One complete official autonomous run with tokens, latency, deterministic assertions, 0 infrastructure errors and 0 system errors |
 
-The earlier platform runs at `12:14:04Z` and `12:39:55Z` were diagnostic duplicates with the same 10/10 final assertions and are available through Git history instead of the active result directory. The multi-Agent comparison remains unmeasured.
+The historical v1 Agent artifact and the earlier platform diagnostic duplicates remain available through Git history rather than as the active baseline. The multi-Agent comparison remains unmeasured.
 
-## V1 coverage
-
-| Area | Cases |
-|---|---:|
-| Repository understanding | 2 |
-| File read/write | 2 |
-| Bug fix | 1 |
-| Shell/test validation | 1 |
-| Failure recovery | 1 |
-| Safety refusal | 2 |
-| Confirmation interruption/resume | 1 |
-
-Three cases are marked `delegation_suitable`. Multi-Agent mode intentionally excludes the remaining cases so that delegation is tested only where there is at least a plausible parallel-information benefit.
+The Agent score is stochastic model evidence. Even though v2 includes a `cancel_replan` workspace-reconciliation case, it does not establish the HTTP/SSE Stop/Cancel protocol, durable cancellation, runner fencing, or cancel-and-replan control-plane semantics. Those claims rely on the deterministic API and integration tests listed above and must be reported separately from the 25/30 model score.
 
 ## Result interpretation
 
-The checked-in platform report is expected to show one failed validation followed by recovery, two policy/permission failures, and successful final assertions. Consequently, tool-call success can be below 100% while task success remains 100%. Average token count is zero because the platform backend makes no model calls.
+The platform backend should pass the same final case assertions without model calls, so its token count is zero. Tool-call success can still be below 100% when a case deliberately exercises failed validation, policy interception, or recovery before reaching the expected final state. Its human-intervention metric reflects only the suite's scripted confirmation examples; the Agent backend is the source of real typed-HITL counts.
 
-The benchmark is intentionally small and synthetic. It is useful as a regression and portfolio proof, not as a claim of production-grade coding-agent generality. Add cases without rewriting old results: create a new suite version when assertions or semantics change.
+Both suites are synthetic regression and portfolio evidence, not claims of production-grade coding-Agent generality. Preserve historical results when evaluator semantics change: add a new suite version and label cross-version comparisons accordingly.
 
 ## Memory recall benchmark
 

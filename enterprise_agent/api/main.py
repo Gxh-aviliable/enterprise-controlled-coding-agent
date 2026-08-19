@@ -57,6 +57,18 @@ async def lifespan(app: FastAPI):
     except Exception:
         logger.warning("Legacy chat history migration failed; Redis fallback remains available", exc_info=True)
 
+    # Phase-B compatibility migration: no instance with the retired graph may
+    # become ready while a legacy cooperative-pause checkpoint is still the
+    # only way to make progress.  The migration is idempotent and also writes
+    # the cluster-wide retirement marker consumed by Phase-A bridge releases.
+    from enterprise_agent.api.routes.chat import retire_legacy_user_pause_tasks
+    retired_tasks = await retire_legacy_user_pause_tasks()
+    logger.info("Legacy user-pause retirement complete (%s tasks terminalized)", retired_tasks)
+
+    from enterprise_agent.api.routes.chat import restore_pending_confirmation_timeouts
+    restored_timeouts = await restore_pending_confirmation_timeouts()
+    logger.info("Tool-confirmation timeouts restored (%s pending)", restored_timeouts)
+
     # Memory decay cleanup task
     from enterprise_agent.memory.decay import get_or_start_cleanup_task
     cleanup_task = get_or_start_cleanup_task()
@@ -72,6 +84,16 @@ async def lifespan(app: FastAPI):
         logger.info("Pending memory flush tasks drained")
     except Exception as e:
         logger.warning("Error draining memory flush tasks: %s", e)
+
+    try:
+        from enterprise_agent.core.agent.tools.background import (
+            shutdown_background_managers,
+        )
+
+        shutdown_background_managers()
+        logger.info("Background Agent processes drained")
+    except Exception as e:
+        logger.warning("Error draining background Agent processes: %s", e)
 
     cleanup_task.cancel()  # Stop memory cleanup task
 

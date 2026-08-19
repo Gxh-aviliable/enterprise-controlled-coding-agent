@@ -35,13 +35,13 @@ class TestAgentTypes:
         assert "write_file" not in tools
         assert "edit_file" not in tools
 
-    def test_general_purpose_agent_has_write_tools(self):
-        """Test that general-purpose agent has write tools."""
+    def test_general_purpose_compatibility_alias_is_read_only(self):
+        """Legacy child loops must not bypass the lead Agent's governed writes."""
         tools = AGENT_TYPES["general-purpose"]
         assert "bash" in tools
         assert "read_file" in tools
-        assert "write_file" in tools
-        assert "edit_file" in tools
+        assert "write_file" not in tools
+        assert "edit_file" not in tools
 
 
 class TestSubagentSystemPrompts:
@@ -57,10 +57,10 @@ class TestSubagentSystemPrompts:
         prompt = SUBAGENT_SYSTEM_PROMPTS["Explore"]
         assert "read-only" in prompt.lower() or "Do NOT modify" in prompt
 
-    def test_general_purpose_prompt_mentions_write(self):
-        """Test that general-purpose prompt mentions write capability."""
+    def test_general_purpose_prompt_returns_mutations_to_lead(self):
         prompt = SUBAGENT_SYSTEM_PROMPTS["general-purpose"]
-        assert "write" in prompt.lower() or "edit" in prompt.lower()
+        assert "read-only" in prompt.lower()
+        assert "lead Agent" in prompt
 
     def test_prompts_are_not_empty(self):
         """Test that prompts have meaningful content."""

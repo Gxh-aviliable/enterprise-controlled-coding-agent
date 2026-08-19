@@ -48,6 +48,15 @@ class ToolExecutionRecord:
     attempt_count: int
     error_code: str | None = None
     exit_code: int | None = None
+    artifact_path: str | None = None
+    artifact_sha256: str | None = None
+    artifact_bytes: int | None = None
+    original_chars: int | None = None
+    model_chars: int | None = None
+    source_truncated: bool = False
+    model_truncated: bool = False
+    artifact_redacted: bool = False
+    artifact_error: str | None = None
 
     def to_dict(self) -> dict[str, Any]:
         data = asdict(self)
@@ -157,6 +166,7 @@ TOOL_CONTRACTS = {
     "compress": _contract("compress", idempotent=False, side_effect="agent_state"),
     "list_transcripts": _contract("list_transcripts"),
     "get_transcript": _contract("get_transcript"),
+    "read_tool_artifact": _contract("read_tool_artifact"),
     "context_status": _contract("context_status"),
     "search_memory": _contract("search_memory"),
 }
@@ -173,7 +183,7 @@ REVIEW_SHELL_TOKENS = {
     "switch", "merge", "rebase", "reset", "clean", "mv", "cp", "mkdir", "touch",
 }
 
-SAFE_PYTHON_MODULES = {"compileall", "pytest", "unittest"}
+SAFE_PYTHON_MODULES = {"compileall", "py_compile", "pytest", "unittest"}
 
 
 def get_tool_contract(tool_name: str) -> ToolContract:
@@ -261,9 +271,14 @@ def normalize_tool_result(
     raw_result: Any,
     duration_ms: int,
     attempt_count: int,
+    display_output: str | None = None,
+    artifact: dict[str, Any] | None = None,
+    model_truncated: bool = False,
+    artifact_error: str | None = None,
 ) -> ToolExecutionRecord:
     """Convert heterogeneous legacy tool output to one reliable result shape."""
-    output = str(raw_result)
+    raw_output = str(raw_result)
+    output = raw_output if display_output is None else display_output
     status = ToolResultStatus.SUCCESS
     error_code = None
     exit_code = None
@@ -291,7 +306,7 @@ def normalize_tool_result(
                 status = ToolResultStatus.ERROR
                 error_code = "nonzero_exit"
     else:
-        lowered = output.lstrip().lower()
+        lowered = raw_output.lstrip().lower()
         if lowered.startswith("blocked:"):
             status = ToolResultStatus.BLOCKED
             error_code = "policy_blocked"
@@ -316,4 +331,13 @@ def normalize_tool_result(
         attempt_count=max(1, attempt_count),
         error_code=error_code,
         exit_code=exit_code,
+        artifact_path=artifact.get("path") if artifact else None,
+        artifact_sha256=artifact.get("sha256") if artifact else None,
+        artifact_bytes=artifact.get("stored_bytes") if artifact else None,
+        original_chars=artifact.get("original_chars") if artifact else len(raw_output),
+        model_chars=len(output),
+        source_truncated=bool(artifact.get("source_truncated")) if artifact else False,
+        model_truncated=model_truncated,
+        artifact_redacted=bool(artifact.get("redacted")) if artifact else False,
+        artifact_error=artifact_error,
     )

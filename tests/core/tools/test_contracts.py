@@ -81,6 +81,10 @@ def test_shell_risk_is_argument_sensitive():
     assert resolve_tool_risk("bash", {"command": "pwd"}) == RiskLevel.SAFE
     assert resolve_tool_risk("bash", {"command": "git commit -m test"}) == RiskLevel.REVIEW
     assert resolve_tool_risk("bash", {"command": "python3 cleanup.py"}) == RiskLevel.REVIEW
+    assert (
+        resolve_tool_risk("bash", {"command": "python3 -m py_compile src/example.py"})
+        == RiskLevel.SAFE
+    )
     assert resolve_tool_risk("bash", {"command": "node cleanup.js"}) == RiskLevel.REVIEW
     assert resolve_tool_risk("delete_paths", {"paths": ["generated"]}) == RiskLevel.DANGEROUS
     assert resolve_tool_risk("bash", {"command": "rm -rf /"}) == RiskLevel.DANGEROUS

@@ -2,11 +2,14 @@
 
 import asyncio
 
+from enterprise_agent.config.settings import settings
 from enterprise_agent.core.agent.nodes import (
     IDEMPOTENT_TOOLS,
     MAIN_SYSTEM_PROMPT,
     RETRYABLE_ERROR_PATTERNS,
+    _automatic_memory_skip_reason,
     _build_environment_info,
+    _build_runtime_system_prompt,
     _convert_from_langchain_messages,
     _convert_to_langchain_messages,
     _drain_memory_flush_tasks,
@@ -14,7 +17,9 @@ from enterprise_agent.core.agent.nodes import (
     _memory_flush_tasks,
     _schedule_memory_flush,
     init_context_node,
+    llm_call_node,
     route_after_llm,
+    route_after_microcompact,
     route_after_tool,
 )
 
@@ -145,6 +150,8 @@ def test_existing_session_retrieves_memory_for_current_task(monkeypatch):
             {"role": "user", "content": "初始化一个新的 Python 项目"},
         ],
         "todos": [],
+        "memory_accumulator": {"user_request": "stale cancelled task"},
+        "continuation_receipt": {"original_task": "stale cancelled task"},
     }
 
     result = asyncio.run(init_context_node(state))
@@ -154,9 +161,260 @@ def test_existing_session_retrieves_memory_for_current_task(monkeypatch):
     assert calls["updated_pattern"] == "pattern-uv"
     assert "memory_id=pattern-uv" in result["retrieved_memory_context"]
     assert "messages" not in result
+    assert result["memory_accumulator"] == {}
+    assert "continuation_receipt" not in result
     event = next(item for item in trace_events if item["event_type"] == "memory")
     assert event["data"]["injected_ids"] == ["pattern-uv"]
     assert event["data"]["application_status"] == "not_attributed"
+
+
+def test_new_trace_clears_prior_todos_in_existing_session(monkeypatch):
+    """A cancelled trace's plan must not become the next trace's active plan."""
+    from enterprise_agent.core.agent.tools.task import (
+        clear_todo_manager,
+        get_todo_manager,
+    )
+
+    session_id = "existing-session-replan-todos"
+    old_todos = [{
+        "content": "unfinished work from cancelled trace",
+        "status": "in_progress",
+        "activeForm": "Continuing the cancelled trace",
+    }]
+    old_manager = get_todo_manager(session_id)
+    old_manager.update(old_todos)
+    monkeypatch.setattr(settings, "ENABLE_LONG_TERM_MEMORY", False)
+
+    try:
+        # init_context is entered only for a brand-new trace. Tool confirmation
+        # Command(resume) continues from its interrupted node and bypasses init.
+        result = asyncio.run(init_context_node({
+            "session_id": session_id,
+            "user_id": 1,
+            "trace_id": "trace-new-after-stop",
+            "current_user_request": "replan from current workspace",
+            "messages": [
+                {"role": "user", "content": "old task"},
+                {"role": "assistant", "content": "old partial work"},
+                {"role": "user", "content": "replan from current workspace"},
+            ],
+            "todos": old_todos,
+        }))
+
+        assert result["todos"] == []
+        assert result["has_open_todos"] is False
+        assert old_manager.items == []
+        assert get_todo_manager(session_id).items == []
+    finally:
+        clear_todo_manager(session_id)
+
+
+def test_recent_conversation_references_skip_automatic_memory(monkeypatch):
+    trace_events = []
+
+    monkeypatch.setattr(
+        "enterprise_agent.memory.long_term.get_long_term_memory",
+        lambda _user_id: (_ for _ in ()).throw(
+            AssertionError("recent-turn questions must not query Chroma")
+        ),
+    )
+    monkeypatch.setattr(
+        "enterprise_agent.core.agent.nodes._record_trace",
+        lambda state, **event: trace_events.append(event),
+    )
+
+    state = {
+        "session_id": "recent-reference-session",
+        "user_id": 1,
+        "trace_id": "trace-recent-reference",
+        "current_user_request": "我刚才问你的问题是什么？",
+        "messages": [
+            {"role": "user", "content": "你现在有什么 tools"},
+            {"role": "user", "content": "我刚才问你的问题是什么？"},
+        ],
+        "todos": [],
+    }
+
+    result = asyncio.run(init_context_node(state))
+
+    assert result["retrieved_memory_context"] == ""
+    event = next(item for item in trace_events if item["event_type"] == "memory")
+    assert event["status"] == "skipped"
+    assert event["data"]["skip_reason"] == "recent_conversation_reference"
+    assert event["data"]["strategy"] == "current_conversation_history"
+    assert event["data"]["injected_count"] == 0
+
+
+def test_recent_conversation_reference_detection_covers_chinese_and_english():
+    recent_requests = (
+        "上一条消息是什么？",
+        "上一条是什么？",
+        "上一个问题我是怎么问的？",
+        "刚才发生了什么？",
+        "What did I just ask?",
+        "Repeat my previous message",
+        "What was the last question?",
+    )
+    for request in recent_requests:
+        assert _automatic_memory_skip_reason(request) == "recent_conversation_reference"
+
+    assert _automatic_memory_skip_reason("我的 Python 项目默认用什么测试工具？") is None
+
+
+def test_recalled_memory_is_part_of_the_sole_system_message(monkeypatch):
+    from langchain_core.messages import AIMessage
+
+    captured = {}
+
+    class FakeModel:
+        async def ainvoke(self, messages):
+            captured["messages"] = messages
+            return AIMessage(content="done")
+
+    monkeypatch.setattr(
+        "enterprise_agent.core.agent.nodes.get_llm_with_tools",
+        lambda *_args, **_kwargs: FakeModel(),
+    )
+    monkeypatch.setattr(
+        "enterprise_agent.core.agent.nodes._build_available_skills",
+        lambda _state: "(none)",
+    )
+
+    memory_context = (
+        "<long_term_memory>\n"
+        "[User Request]: an old request that is not active\n"
+        "</long_term_memory>"
+    )
+    state = {
+        "messages": [{"role": "user", "content": "current request"}],
+        "permissions": [],
+        "execution_mode": "single_agent",
+        "retrieved_memory_context": memory_context,
+        "task_token_count": 0,
+        "session_token_count": 0,
+        "round_count": 0,
+    }
+
+    asyncio.run(llm_call_node(state))
+
+    model_messages = captured["messages"]
+    system_messages = [message for message in model_messages if message.type == "system"]
+    human_messages = [message for message in model_messages if message.type == "human"]
+    assert len(system_messages) == 1
+    assert memory_context in system_messages[0].content
+    assert "not a user message" in system_messages[0].content
+    assert [message.content for message in human_messages] == ["current request"]
+    assert memory_context in _build_runtime_system_prompt(state)
+
+
+def test_llm_retry_stops_when_cancel_arrives_after_transient_failure(monkeypatch):
+    """A Redis tombstone raised between attempts must fence the retry call."""
+    cancelled = False
+    invocation_count = 0
+
+    class TransientlyFailingModel:
+        async def ainvoke(self, _messages):
+            nonlocal cancelled, invocation_count
+            invocation_count += 1
+            if invocation_count > 1:
+                raise AssertionError("LLM retried after task cancellation")
+            cancelled = True
+            raise RuntimeError("temporary connection timeout")
+
+    async def fake_cancel_request(_state):
+        if cancelled:
+            return {"reason": "Stop requested during LLM retry"}
+        return None
+
+    async def no_retry_delay(_seconds):
+        return None
+
+    monkeypatch.setattr(
+        "enterprise_agent.core.agent.nodes.get_llm_with_tools",
+        lambda *_args, **_kwargs: TransientlyFailingModel(),
+    )
+    monkeypatch.setattr(
+        "enterprise_agent.core.agent.nodes._tool_cancel_request",
+        fake_cancel_request,
+    )
+    monkeypatch.setattr("enterprise_agent.core.agent.nodes.asyncio.sleep", no_retry_delay)
+    monkeypatch.setattr(
+        "enterprise_agent.core.agent.nodes._build_available_skills",
+        lambda _state: "(none)",
+    )
+
+    result = asyncio.run(llm_call_node({
+        "session_id": "llm-retry-stop",
+        "trace_id": "trace-llm-retry-stop",
+        "user_id": 301,
+        "task_status": "running",
+        "messages": [{"role": "user", "content": "do the work"}],
+        "permissions": [],
+        "execution_mode": "single_agent",
+        "task_token_count": 0,
+        "session_token_count": 0,
+        "round_count": 0,
+    }))
+
+    assert invocation_count == 1
+    assert result["task_status"] == "cancelled"
+    assert result["pending_tool_calls"] == []
+    assert result["should_end_after_save"] is True
+    assert result["failure_reason"] == "Stop requested during LLM retry"
+    assert "messages" not in result
+
+
+def test_llm_response_is_discarded_when_cancel_arrives_during_call(monkeypatch):
+    """A late model response must not enter history after its trace was stopped."""
+    from langchain_core.messages import AIMessage
+
+    cancelled = False
+    invocation_count = 0
+
+    class LateSuccessModel:
+        async def ainvoke(self, _messages):
+            nonlocal cancelled, invocation_count
+            invocation_count += 1
+            cancelled = True
+            return AIMessage(content="stale response that must be discarded")
+
+    async def fake_cancel_request(_state):
+        if cancelled:
+            return {"reason": "Stop requested during LLM call"}
+        return None
+
+    monkeypatch.setattr(
+        "enterprise_agent.core.agent.nodes.get_llm_with_tools",
+        lambda *_args, **_kwargs: LateSuccessModel(),
+    )
+    monkeypatch.setattr(
+        "enterprise_agent.core.agent.nodes._tool_cancel_request",
+        fake_cancel_request,
+    )
+    monkeypatch.setattr(
+        "enterprise_agent.core.agent.nodes._build_available_skills",
+        lambda _state: "(none)",
+    )
+
+    result = asyncio.run(llm_call_node({
+        "session_id": "llm-late-success-stop",
+        "trace_id": "trace-llm-late-success-stop",
+        "user_id": 302,
+        "task_status": "running",
+        "messages": [{"role": "user", "content": "do the work"}],
+        "permissions": [],
+        "execution_mode": "single_agent",
+        "task_token_count": 0,
+        "session_token_count": 0,
+        "round_count": 0,
+    }))
+
+    assert invocation_count == 1
+    assert result["task_status"] == "cancelled"
+    assert result["pending_tool_calls"] == []
+    assert result["should_end_after_save"] is True
+    assert result["failure_reason"] == "Stop requested during LLM call"
+    assert "messages" not in result
 
 
 class TestExtractText:
@@ -264,6 +522,12 @@ class TestRoutingFunctions:
         assert result == "save_memory"
         assert "should_end_after_save" not in state
 
+    def test_final_text_above_threshold_still_routes_to_save_memory(self, monkeypatch):
+        monkeypatch.setattr(settings, "TOKEN_THRESHOLD", 100)
+        monkeypatch.setattr(settings, "MODEL_CONTEXT_WINDOW_TOKENS", 0)
+        state = {"pending_tool_calls": [], "round_count": 1, "token_count": 101}
+        assert route_after_llm(state) == "save_memory"
+
     def test_route_after_llm_returns_tool_call_when_has_tools(self):
         """Test route_after_llm returns 'tool_call' when has tool calls."""
         state = {
@@ -273,6 +537,15 @@ class TestRoutingFunctions:
         }
         result = route_after_llm(state)
         assert result == "tool_call"
+
+    def test_provider_overflow_routes_to_compression(self):
+        state = {
+            "pending_tool_calls": [],
+            "round_count": 0,
+            "should_compress": True,
+            "token_count": 1,
+        }
+        assert route_after_llm(state) == "compress"
 
     def test_route_after_llm_finishes_pending_tool_protocol_at_max_rounds(self):
         """A tool_use still needs a tool_result at the round boundary."""
@@ -296,6 +569,20 @@ class TestRoutingFunctions:
         }
         result = route_after_tool(state)
         assert result == "llm_call"
+
+    def test_microcompact_gets_first_chance_before_full_compression(self, monkeypatch):
+        from enterprise_agent.config.settings import settings
+
+        monkeypatch.setattr(settings, "TOKEN_THRESHOLD", 100)
+        monkeypatch.setattr(settings, "MODEL_CONTEXT_WINDOW_TOKENS", 0)
+        assert route_after_tool({
+            "round_count": 0,
+            "token_count": 101,
+            "should_compress": False,
+            "should_end_after_save": False,
+        }) == "llm_call"
+        assert route_after_microcompact({"token_count": 99}) == "llm_call"
+        assert route_after_microcompact({"token_count": 100}) == "compress"
 
     def test_route_after_tool_ends_when_flag_set(self):
         """Test route_after_tool returns 'end' when flag set."""

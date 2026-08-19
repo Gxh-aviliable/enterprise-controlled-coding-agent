@@ -54,3 +54,4 @@ class SessionResponse(BaseModel):
 class ResumeRequest(BaseModel):
     """Resume request after tool confirmation"""
     approved_ids: List[str] = Field(default_factory=list)
+    trace_id: str = Field(..., min_length=1, max_length=100)

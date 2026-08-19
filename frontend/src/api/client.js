@@ -144,178 +144,153 @@ export async function sendMessage({ session_id, content, mode = 'single_agent' }
   return data
 }
 
-export function streamMessage({ session_id, content, mode = 'single_agent', signal, onDelta, onToolStart, onToolEnd, onToolResult, onInterrupt, onError, onDone }) {
-  const token = getToken()
-  console.log('[stream] Starting stream, session:', session_id, 'content:', content.slice(0, 50))
+async function consumeEventStream(res, handlers = {}, label = 'stream') {
+  const {
+    onDelta,
+    onToolStart,
+    onToolEnd,
+    onToolResult,
+    onTaskStarted,
+    onCancelled,
+    onInterrupt,
+    onError,
+    onDone
+  } = handlers
+  const reader = res.body.getReader()
+  const decoder = new TextDecoder()
+  let buffer = ''
 
-  fetch(`${BASE}/chat/stream`, {
-    method: 'POST',
-    signal,
-    headers: {
-      'Content-Type': 'application/json',
-      'Authorization': `Bearer ${token}`
-    },
-    body: JSON.stringify({ session_id, content, stream: true, mode })
-  }).then(async (res) => {
-    console.log('[stream] Response status:', res.status)
-
-    if (!res.ok) {
-      let errText = 'Stream failed'
-      try {
-        const err = await res.json()
-        errText = errorMessage(err.detail, errText)
-      } catch {}
-      console.error('[stream] HTTP error:', errText)
-      onError(errText)
-      return
+  const handlePayload = (payload) => {
+    if (payload === '[DONE]') {
+      onDone?.()
+      return true
     }
 
-    const reader = res.body.getReader()
-    const decoder = new TextDecoder()
-    let buffer = ''
-    let streamHadContent = false
+    let data
+    try {
+      data = JSON.parse(payload)
+    } catch (error) {
+      console.warn(`[${label}] Failed to parse SSE data:`, payload, error)
+      return false
+    }
 
-    while (true) {
-      const { done, value } = await reader.read()
-      if (done) {
-        console.log('[stream] Stream ended, had content:', streamHadContent)
-        break
-      }
-      const chunk = decoder.decode(value, { stream: true })
-      buffer += chunk
-      const lines = buffer.split('\n')
-      buffer = lines.pop() || ''
-      for (const line of lines) {
-        if (line.startsWith('data: ')) {
-          const payload = line.slice(6)
-          if (payload === '[DONE]') {
-            console.log('[stream] Received [DONE]')
-            onDone()
-            return
-          }
-          try {
-            const json = JSON.parse(payload)
-            if (json.delta !== undefined) {
-              streamHadContent = true
-              onDelta(json.delta)
-            } else if (json.event === 'tool_start') {
-              console.log('[stream] Tool start:', json.name)
-              onToolStart(json.name, json.id)
-            } else if (json.event === 'tool_end') {
-              console.log('[stream] Tool end:', json.name)
-              onToolEnd(json.name, json)
-            } else if (json.event === 'tool_result') {
-              onToolResult?.(json.id, json.result, json)
-            } else if (json.event === 'interrupt') {
-              // Interrupt received - tool confirmation required
-              console.log('[stream] Interrupt received:', json.data)
-              onInterrupt(json.data)
-              // Stop current stream, wait for user confirmation
-              return
-            } else if (json.error) {
-              console.error('[stream] Error event:', json.error)
-              onError(json.error)
-            }
-          } catch (e) {
-            console.warn('[stream] Failed to parse SSE data:', payload, e)
-          }
-        }
-      }
+    if (data.delta !== undefined) {
+      onDelta?.(data.delta, data)
+    } else if (data.event === 'task_started') {
+      onTaskStarted?.(data)
+    } else if (data.event === 'tool_start') {
+      onToolStart?.(data.name, data.id, data)
+    } else if (data.event === 'tool_end') {
+      onToolEnd?.(data.name, data)
+    } else if (data.event === 'tool_result') {
+      onToolResult?.(data.id, data.result, data)
+    } else if (data.event === 'cancelled') {
+      onCancelled?.(data)
+      return true
+    } else if (data.event === 'interrupt') {
+      const interruptData = { ...(data.data || {}) }
+      if (data.session_id && !interruptData.session_id) interruptData.session_id = data.session_id
+      if (data.trace_id && !interruptData.trace_id) interruptData.trace_id = data.trace_id
+      onInterrupt?.(interruptData)
+      return true
+    } else if (data.error) {
+      onError?.(data.error)
+      return true
     }
-    // If we exit the loop without [DONE], still call onDone
-    if (!streamHadContent) {
-      console.warn('[stream] Stream ended without any content')
+    return false
+  }
+
+  while (true) {
+    const { done, value } = await reader.read()
+    if (done) break
+    buffer += decoder.decode(value, { stream: true })
+    const lines = buffer.split('\n')
+    buffer = lines.pop() || ''
+    for (const line of lines) {
+      if (!line.startsWith('data: ')) continue
+      if (handlePayload(line.slice(6))) return
     }
-    onDone()
-  }).catch(err => {
-    if (err.name === 'AbortError') return
-    console.error('[stream] Fetch error:', err)
-    onError(err.message)
-  })
+  }
+
+  const trailing = buffer.trim()
+  if (trailing.startsWith('data: ')) {
+    if (handlePayload(trailing.slice(6))) return
+  }
+  onError?.('Stream transport closed before a terminal event was received.')
 }
 
-// Resume stream after interrupt confirmation
-export function resumeStream({ session_id, approved, approved_ids, signal, onDelta, onToolStart, onToolEnd, onToolResult, onInterrupt, onError, onDone }) {
-  const token = getToken()
-  console.log('[resume] Resuming stream, session:', session_id, 'approved:', approved)
-
-  // Build URL with query params
-  let url = `${BASE}/chat/stream/resume?session_id=${encodeURIComponent(session_id)}&approved=${approved}`
-
-  fetch(url, {
-    method: 'POST',
-    signal,
-    headers: {
-      'Content-Type': 'application/json',
-      'Authorization': `Bearer ${token}`
-    },
-    body: JSON.stringify({ approved_ids: approved_ids || [] })
-  }).then(async (res) => {
-    console.log('[resume] Response status:', res.status)
-
+async function openEventStream(path, options, handlers, fallbackError, label) {
+  try {
+    const res = await request(path, options)
     if (!res.ok) {
-      let errText = 'Resume failed'
+      let errText = fallbackError
       try {
         const err = await res.json()
         errText = errorMessage(err.detail, errText)
       } catch {}
-      console.error('[resume] HTTP error:', errText)
-      onError(errText)
+      handlers.onError?.(errText)
       return
     }
+    await consumeEventStream(res, handlers, label)
+  } catch (error) {
+    if (error.name === 'AbortError') return
+    console.error(`[${label}] Fetch error:`, error)
+    handlers.onError?.(error.message)
+  }
+}
 
-    const reader = res.body.getReader()
-    const decoder = new TextDecoder()
-    let buffer = ''
+export function streamMessage({
+  session_id,
+  content,
+  mode = 'single_agent',
+  signal,
+  ...handlers
+}) {
+  return openEventStream(
+    '/chat/stream',
+    {
+      method: 'POST',
+      signal,
+      body: JSON.stringify({ session_id, content, stream: true, mode })
+    },
+    handlers,
+    'Stream failed',
+    'stream'
+  )
+}
 
-    while (true) {
-      const { done, value } = await reader.read()
-      if (done) {
-        console.log('[resume] Stream ended')
-        break
-      }
-      const chunk = decoder.decode(value, { stream: true })
-      buffer += chunk
-      const lines = buffer.split('\n')
-      buffer = lines.pop() || ''
-      for (const line of lines) {
-        if (line.startsWith('data: ')) {
-          const payload = line.slice(6)
-          if (payload === '[DONE]') {
-            console.log('[resume] Received [DONE]')
-            onDone()
-            return
-          }
-          try {
-            const json = JSON.parse(payload)
-            if (json.delta !== undefined) {
-              onDelta(json.delta)
-            } else if (json.event === 'tool_start') {
-              onToolStart(json.name, json.id)
-            } else if (json.event === 'tool_end') {
-              onToolEnd(json.name, json)
-            } else if (json.event === 'tool_result') {
-              onToolResult?.(json.id, json.result, json)
-            } else if (json.event === 'interrupt') {
-              // Another interrupt (multiple tool confirmations)
-              console.log('[resume] Another interrupt:', json.data)
-              onInterrupt(json.data)
-              return
-            } else if (json.error) {
-              onError(json.error)
-            }
-          } catch (e) {
-            console.warn('[resume] Failed to parse SSE data:', payload)
-          }
-        }
-      }
-    }
-    onDone()
-  }).catch(err => {
-    if (err.name === 'AbortError') return
-    console.error('[resume] Fetch error:', err)
-    onError(err.message)
+// Resume stream after an existing tool-confirmation interrupt.
+export function resumeStream({
+  session_id,
+  trace_id,
+  approved,
+  approved_ids,
+  signal,
+  ...handlers
+}) {
+  const params = new URLSearchParams({
+    session_id,
+    approved: String(approved)
   })
+  return openEventStream(
+    `/chat/stream/resume?${params}`,
+    {
+      method: 'POST',
+      signal,
+      body: JSON.stringify({ approved_ids: approved_ids || [], trace_id: trace_id || null })
+    },
+    handlers,
+    'Resume failed',
+    'resume-confirmation'
+  )
+}
+
+export async function getStreamStatus(sessionId) {
+  const params = new URLSearchParams({ session_id: sessionId })
+  const res = await request(`/chat/stream/status?${params}`)
+  const data = await res.json()
+  if (!res.ok) throw new Error(errorMessage(data.detail, 'Failed to load stream status'))
+  return data
 }
 
 // Session API
@@ -374,13 +349,15 @@ export async function replayTaskTrace(traceId) {
 }
 
 // Stream cancellation
-export async function cancelStream(sessionId) {
+export async function cancelStream(sessionId, traceId = '') {
+  const params = new URLSearchParams({ session_id: sessionId })
+  if (traceId) params.set('trace_id', traceId)
   const res = await request(
-    `/chat/stream/cancel?session_id=${encodeURIComponent(sessionId)}`,
+    `/chat/stream/cancel?${params}`,
     { method: 'POST' }
   )
   const data = await res.json()
-  if (!res.ok) throw new Error(data.detail || 'Cancel failed')
+  if (!res.ok) throw new Error(errorMessage(data.detail, 'Cancel failed'))
   return data
 }
 
@@ -399,6 +376,29 @@ export async function readFile(path, offset = 0, limit = 500) {
   const res = await request(`/workspace/read?${params}`)
   const data = await res.json()
   if (!res.ok) throw new Error(data.detail || 'Failed to read file')
+  return data
+}
+
+export async function saveFile(path, content, expectedSha256) {
+  const res = await request('/workspace/write', {
+    method: 'PUT',
+    body: JSON.stringify({
+      path,
+      content,
+      expected_sha256: expectedSha256
+    })
+  })
+  const data = await res.json()
+  if (!res.ok) {
+    const detail = data.detail
+    const error = new Error(errorMessage(detail, 'Failed to save file'))
+    error.status = res.status
+    if (detail && typeof detail === 'object') {
+      error.code = detail.code
+      error.currentSha256 = detail.current_sha256
+    }
+    throw error
+  }
   return data
 }
 

@@ -2,12 +2,16 @@
 
 import json
 import os
+import signal
+import subprocess
 
 import pytest
 
+from enterprise_agent.config.settings import settings
 from enterprise_agent.core.agent.tools.shell import (
     BLOCKED_BINARIES,
     BLOCKED_PATTERNS,
+    _terminate_process_group,
     bash,
     validate_command,
 )
@@ -119,6 +123,9 @@ class TestValidateCommand:
             "cat /etc/passwd",
             "cat .env",
             "cat .git/config",
+            "cat .agent/tool-artifacts/trace/call.txt",
+            "head .transcripts/transcript.jsonl",
+            "echo tamper > .tasks/task_1.json",
             "bash -c 'echo hidden'",
             "python -c 'print(1)'",
             "git reset --hard HEAD",
@@ -186,13 +193,17 @@ class TestBashTool:
         assert data["exit_code"] == 0
         assert data["stdout"] == "alpha beta"
 
-    def test_output_truncation(self, mock_workspace_env):
-        """Test that long output is truncated."""
-        # Generate long output
+    def test_output_is_not_truncated_before_shared_runtime(
+        self,
+        mock_workspace_env,
+        monkeypatch,
+    ):
+        """The executor must receive complete JSON before artifact/preview handling."""
+        monkeypatch.setattr(settings, "TOOL_OUTPUT_MAX_CHARS", 1_000)
         result = bash.invoke({"command": "echo " + "A" * 10000})
         data = json.loads(result)
-        # Output should be truncated if it exceeds TOOL_OUTPUT_MAX_CHARS
-        assert len(data["stdout"]) < 20000  # Should be truncated
+        assert len(data["stdout"]) == 10000
+        assert "truncated" not in data["stdout"]
 
     def test_returns_json_structure(self, mock_workspace_env):
         """Test that result is valid JSON with required fields."""
@@ -217,6 +228,108 @@ class TestBashTool:
         assert result["exit_code"] == 0
         assert result["stdout"] == "missing"
         assert "must-not-reach-child" not in result["stdout"]
+
+    @pytest.mark.parametrize(
+        ("termination_mode", "cancellation"),
+        [
+            ("process_group_term", "terminated"),
+            ("best_effort_unconfirmed", "best_effort"),
+        ],
+    )
+    @pytest.mark.skipif(os.name == "nt", reason="POSIX uses process-group cancellation")
+    def test_cancelled_command_uses_a_new_process_group(
+        self,
+        mock_workspace_env,
+        monkeypatch,
+        termination_mode,
+        cancellation,
+    ):
+        """Foreground Stop must target the isolated process group, not only the shell."""
+        popen_kwargs = {}
+
+        class FakeProcess:
+            pid = 4321
+            returncode = -15
+
+            def poll(self):
+                return None
+
+        def fake_popen(*_args, **kwargs):
+            popen_kwargs.update(kwargs)
+            return FakeProcess()
+
+        monkeypatch.setattr(
+            "enterprise_agent.core.agent.tools.shell.subprocess.Popen",
+            fake_popen,
+        )
+        monkeypatch.setattr(
+            "enterprise_agent.core.agent.tools.shell._foreground_cancel_requested",
+            lambda: True,
+        )
+        monkeypatch.setattr(
+            "enterprise_agent.core.agent.tools.shell._terminate_process_group",
+            lambda _process: termination_mode,
+        )
+
+        data = json.loads(bash.invoke({"command": "echo stopped"}))
+
+        assert popen_kwargs["start_new_session"] is True
+        assert data["error_code"] == "task_cancelled"
+        assert data["cancellation"] == cancellation
+        assert data["termination_mode"] == termination_mode
+
+
+@pytest.mark.skipif(os.name == "nt", reason="POSIX uses process-group cancellation")
+class TestForegroundProcessGroupTermination:
+    def test_escalates_from_group_term_to_group_kill(self, monkeypatch):
+        signals = []
+
+        class FakeProcess:
+            pid = 8765
+
+            def __init__(self):
+                self.wait_count = 0
+
+            def poll(self):
+                return None
+
+            def wait(self, timeout):
+                self.wait_count += 1
+                if self.wait_count == 1:
+                    raise subprocess.TimeoutExpired("test", timeout)
+                return -9
+
+        monkeypatch.setattr(
+            "enterprise_agent.core.agent.tools.shell.os.killpg",
+            lambda pid, sig: signals.append((pid, sig)),
+        )
+
+        mode = _terminate_process_group(FakeProcess())
+
+        assert mode == "process_group_kill"
+        assert signals == [(8765, signal.SIGTERM), (8765, signal.SIGKILL)]
+
+    def test_reports_best_effort_when_group_exit_cannot_be_confirmed(self, monkeypatch):
+        signals = []
+
+        class UnresponsiveProcess:
+            pid = 9999
+
+            def poll(self):
+                return None
+
+            def wait(self, timeout):
+                raise subprocess.TimeoutExpired("test", timeout)
+
+        monkeypatch.setattr(
+            "enterprise_agent.core.agent.tools.shell.os.killpg",
+            lambda pid, sig: signals.append((pid, sig)),
+        )
+
+        mode = _terminate_process_group(UnresponsiveProcess())
+
+        assert mode == "best_effort_unconfirmed"
+        assert len(signals) == 2
 
 
 class TestBlockedPatterns:

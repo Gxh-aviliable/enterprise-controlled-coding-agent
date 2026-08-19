@@ -1,13 +1,23 @@
 """Tests for background module (background_run, check_background)."""
 
+import hashlib
 import os
 
 import pytest
 
+from enterprise_agent.config.settings import settings
+from enterprise_agent.core.agent.nodes import check_background_node
 from enterprise_agent.core.agent.tools.background import (
     BackgroundManager,
     background_run,
     check_background,
+    clear_background_manager,
+    get_background_manager,
+)
+from enterprise_agent.core.agent.tools.workspace import (
+    get_user_workspace,
+    set_current_session_id,
+    set_current_user_id,
 )
 
 
@@ -55,6 +65,60 @@ class TestBackgroundManager:
         result = manager.run("echo test")
         # Task ID should be 8 character hex
         assert "task" in result.lower()
+
+    def test_cancel_trace_only_stops_and_joins_exact_trace(self, monkeypatch):
+        """Stop for one trace must leave sibling tasks in the same Session untouched."""
+        manager = BackgroundManager(session_id="shared-session", user_id=8)
+        manager.tasks = {
+            "old-running": {
+                "status": "running",
+                "command": "python old.py",
+                "result": None,
+                "trace_id": "trace-old",
+            },
+            "new-running": {
+                "status": "running",
+                "command": "python new.py",
+                "result": None,
+                "trace_id": "trace-new",
+            },
+            "old-finished": {
+                "status": "completed",
+                "command": "echo done",
+                "result": "done",
+                "trace_id": "trace-old",
+            },
+        }
+        joined = []
+
+        class FakeThread:
+            def __init__(self, task_id):
+                self.task_id = task_id
+
+            def join(self, timeout):
+                joined.append((self.task_id, timeout))
+
+        manager._threads = {
+            "old-running": FakeThread("old-running"),
+            "new-running": FakeThread("new-running"),
+        }
+
+        def fake_cancel(task_id):
+            manager.tasks[task_id].update({
+                "status": "cancelled",
+                "result": "Cancelled by user",
+            })
+            return True
+
+        monkeypatch.setattr(manager, "cancel", fake_cancel)
+
+        count = manager.cancel_trace("trace-old", wait_seconds=0.25)
+
+        assert count == 1
+        assert manager.tasks["old-running"]["status"] == "cancelled"
+        assert manager.tasks["new-running"]["status"] == "running"
+        assert manager.tasks["old-finished"]["status"] == "completed"
+        assert joined == [("old-running", 0.25)]
 
 
 class TestBackgroundRunTool:
@@ -113,8 +177,6 @@ class TestBackgroundTaskCompletion:
         assert notifications == []
 
     def test_shutdown_cancels_and_reaps_running_process(self, mock_workspace_env):
-        from enterprise_agent.core.agent.tools.workspace import get_user_workspace
-
         manager = BackgroundManager()
         (get_user_workspace() / "sleep_task.py").write_text(
             "import time\ntime.sleep(10)\n",
@@ -129,5 +191,228 @@ class TestBackgroundTaskCompletion:
         assert manager._processes == {}
         assert manager._threads == {}
 
-    # Note: Testing actual task completion requires waiting,
-    # which is complex in unit tests. Integration tests would cover this.
+    def test_worker_observes_redis_cancel_without_local_clear(
+        self,
+        tmp_path,
+        monkeypatch,
+    ):
+        """A remote-worker tombstone must terminate the owning background process."""
+        from enterprise_agent.core.execution.interrupt_control import (
+            get_current_task_control_identity,
+        )
+
+        manager = BackgroundManager(session_id="remote-stop-session", user_id=601)
+        task_id = "remote-stop"
+        trace_id = "trace-remote-stop"
+        manager.tasks[task_id] = {
+            "status": "running",
+            "command": "python long_running.py",
+            "result": None,
+            "timeout": 30,
+            "trace_id": trace_id,
+        }
+        checked_identities = []
+        terminated = []
+
+        class FakeProcess:
+            pid = 2468
+            returncode = -15
+
+            def poll(self):
+                return None
+
+        def redis_cancel_checker():
+            checked_identities.append(get_current_task_control_identity())
+            return True
+
+        monkeypatch.setattr(
+            "enterprise_agent.core.agent.tools.background.subprocess.Popen",
+            lambda *_args, **_kwargs: FakeProcess(),
+        )
+        monkeypatch.setattr(
+            "enterprise_agent.core.execution.interrupt_control."
+            "is_current_task_cancel_requested_sync",
+            redis_cancel_checker,
+        )
+        monkeypatch.setattr(
+            "enterprise_agent.core.agent.tools.background._terminate_process_group",
+            lambda process: terminated.append(process.pid) or "process_group_term",
+        )
+
+        # No local clear_background_manager/cancel_trace call is made. The
+        # worker must discover the Redis tombstone through its bound identity.
+        manager._execute(
+            task_id,
+            "python long_running.py",
+            30,
+            tmp_path,
+            trace_id,
+        )
+
+        task = manager.tasks[task_id]
+        assert checked_identities == [(601, "remote-stop-session", trace_id)]
+        assert terminated == [2468]
+        assert task["status"] == "cancelled"
+        assert task["cancellation"] == "terminated"
+        assert task["termination_mode"] == "process_group_term"
+        assert task["result"] == (
+            "Cancelled by user "
+            "(terminated; termination_mode=process_group_term)"
+        )
+        assert manager._processes == {}
+        notification = manager.notifications.get_nowait()
+        assert notification["task_id"] == task_id
+        assert notification["status"] == "cancelled"
+        assert "termination_mode=process_group_term" in notification["result"]
+        assert get_current_task_control_identity() is None
+
+    @pytest.mark.asyncio
+    async def test_long_result_receipt_survives_notification_and_node_injection(
+        self,
+        mock_workspace_env,
+        monkeypatch,
+    ):
+        """A bounded source capture keeps exit status and a real recovery path."""
+        monkeypatch.setattr(settings, "TOOL_SOURCE_CAPTURE_MAX_BYTES", 240)
+        monkeypatch.setattr(settings, "TOOL_ARTIFACT_MAX_CHARS", 2_000)
+        monkeypatch.setattr(settings, "TOOL_OUTPUT_MAX_CHARS", 500)
+        user_id = 501
+        session_id = "background-artifact-receipt"
+        set_current_user_id(user_id)
+        set_current_session_id(session_id)
+
+        try:
+            manager = get_background_manager(session_id)
+            workspace = get_user_workspace(user_id)
+            (workspace / "emit_long_background.py").write_text(
+                "import sys\n"
+                "sys.stdout.write('HEAD_FACT=' + ('x' * 4000) + '_TAIL_FACT\\n')\n"
+                "sys.stderr.write('FAILURE_FACT=background failed\\n')\n"
+                "raise SystemExit(7)\n",
+                encoding="utf-8",
+            )
+            task_id = "bgreceipt"
+            manager.tasks[task_id] = {
+                "status": "running",
+                "command": "python emit_long_background.py",
+                "result": None,
+                "timeout": 10,
+            }
+
+            manager._execute(
+                task_id,
+                "python emit_long_background.py",
+                10,
+                workspace,
+            )
+
+            task = manager.tasks[task_id]
+            receipt = task["artifact"]
+            assert task["status"] == "error"
+            assert task["exit_code"] == 7
+            assert isinstance(receipt, dict)
+            assert receipt["storage_status"] == "stored"
+            assert receipt["source_truncated"] is True
+            assert receipt["path"].startswith(
+                ".agent/tool-artifacts/background-background-artifact-receipt/"
+            )
+
+            artifact_path = workspace / receipt["path"]
+            stored = artifact_path.read_bytes()
+            assert artifact_path.is_file()
+            assert hashlib.sha256(stored).hexdigest() == receipt["sha256"]
+            assert b"HEAD_FACT=" in stored
+            assert b"_TAIL_FACT" in stored
+            assert b"FAILURE_FACT=background failed" in stored
+
+            notifications = list(manager.drain_notifications())
+            assert len(notifications) == 1
+            notification = notifications[0]
+            assert notification["status"] == "error"
+            assert notification["artifact"] == receipt
+            assert notification["artifact_error"] is None
+
+            # Requeue the authoritative notification so the graph node consumes
+            # the same structured receipt produced by the worker.
+            manager.notifications.put(notification)
+            update = await check_background_node({
+                "session_id": session_id,
+                "user_id": user_id,
+            })
+            content = update["messages"][0]["content"]
+            assert receipt["path"] in content
+            assert receipt["sha256"] in content
+            assert "artifact unavailable" not in content
+        finally:
+            clear_background_manager(session_id)
+            set_current_session_id(None)
+            set_current_user_id(None)
+
+    @pytest.mark.asyncio
+    async def test_large_result_fails_closed_when_background_artifact_write_fails(
+        self,
+        mock_workspace_env,
+        monkeypatch,
+    ):
+        """A storage outage must not downgrade a large result to an untracked preview."""
+        monkeypatch.setattr(settings, "TOOL_SOURCE_CAPTURE_MAX_BYTES", 2_000)
+        monkeypatch.setattr(settings, "TOOL_OUTPUT_MAX_CHARS", 200)
+        user_id = 502
+        session_id = "background-artifact-failure"
+        set_current_user_id(user_id)
+        set_current_session_id(session_id)
+
+        def fail_artifact_write(*_args, **_kwargs):
+            raise OSError("private server path must not reach the model")
+
+        monkeypatch.setattr(
+            "enterprise_agent.core.agent.tools.background.ToolArtifactStore.save",
+            fail_artifact_write,
+        )
+
+        try:
+            manager = get_background_manager(session_id)
+            workspace = get_user_workspace(user_id)
+            (workspace / "emit_unstored_background.py").write_text(
+                "print('UNTRACKED_RAW_OUTPUT=' + ('z' * 1000))\n",
+                encoding="utf-8",
+            )
+            task_id = "bgfailure"
+            manager.tasks[task_id] = {
+                "status": "running",
+                "command": "python emit_unstored_background.py",
+                "result": None,
+                "timeout": 10,
+            }
+
+            manager._execute(
+                task_id,
+                "python emit_unstored_background.py",
+                10,
+                workspace,
+            )
+
+            task = manager.tasks[task_id]
+            assert task["status"] == "error"
+            assert task["result"] == (
+                "Background result withheld because its evidence artifact "
+                "could not be stored (artifact_write_failed)."
+            )
+            assert task["exit_code"] == 0
+            assert task["artifact"] is None
+            assert task["artifact_error"] == "artifact_write_failed"
+            assert "UNTRACKED_RAW_OUTPUT" not in task["result"]
+            assert "private server path" not in task["result"]
+
+            update = await check_background_node({
+                "session_id": session_id,
+                "user_id": user_id,
+            })
+            content = update["messages"][0]["content"]
+            assert "artifact unavailable: artifact_write_failed" in content
+            assert "UNTRACKED_RAW_OUTPUT" not in content
+            assert "private server path" not in content
+        finally:
+            clear_background_manager(session_id)
+            set_current_session_id(None)
+            set_current_user_id(None)

@@ -9,8 +9,8 @@ class AgentState(TypedDict):
     包含消息历史、用户信息、任务追踪、工具执行状态等。
     """
 
-    # 消息历史（LangGraph自动合并）
-    messages: Annotated[List[Dict], add_messages]
+    # 消息历史（Reducer 会把 dict 规范化为 LangChain Message）
+    messages: Annotated[List[Any], add_messages]
 
     # 用户和会话信息
     session_id: str
@@ -26,6 +26,7 @@ class AgentState(TypedDict):
     task_started_at: Optional[str]
     task_finished_at: Optional[str]
     failure_reason: Optional[str]
+    continuation_receipt: Optional[Dict[str, Any]]
 
     # 任务追踪
     current_task: Optional[Dict[str, Any]]
@@ -34,7 +35,7 @@ class AgentState(TypedDict):
 
     # 上下文管理
     context_summary: Optional[str]
-    token_count: int
+    token_count: int  # Current active-context estimate; never cumulative model spend
     session_token_count: int  # Cumulative model usage across requests in this chat session
     transcript_path: Optional[str]  # Path to saved transcript after compression
 
@@ -49,6 +50,7 @@ class AgentState(TypedDict):
     round_count: int  # LLM调用轮次计数，防止无限循环
     task_token_count: int  # Per-task model usage, separate from total context estimate
     should_compress: bool
+    context_overflow_recovery_attempts: int
     should_end: bool
     should_end_after_save: bool  # 标记：文本响应完成后应该结束（由 llm_call_node 设置）
 
@@ -64,5 +66,5 @@ class AgentState(TypedDict):
     has_open_todos: bool  # 标记：是否有未完成的todo项
 
     # Memory accumulator (task-level storage, not per-round fragments)
-    memory_accumulator: Dict[str, Any]  # 跨轮积累的任务内容（user_request, assistant_responses, tool_actions, etc.）
+    memory_accumulator: Dict[str, Any]  # 当前 trace 内积累的任务内容
     retrieved_memory_context: str  # 本次任务临时注入；不写入聊天消息历史

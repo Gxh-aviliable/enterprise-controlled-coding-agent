@@ -4,10 +4,10 @@
 
 ## 当前基线
 
-截至 2026-07-23：
+截至 2026-08-10：
 
-- 后端：381 passed
-- 前端：23 passed
+- 后端：561 passed
+- 前端：77 passed
 - Ruff：0 findings
 
 ## 目录
@@ -15,11 +15,13 @@
 ```text
 tests/
 ├── admin/          # 额度和 Shared Skill 治理
-├── api/            # 认证、会话、Workspace、Memory、Trace、Admin 安全
+├── api/            # 认证、会话、Workspace 读取/乐观并发写入、Memory、Trace、Admin 安全
 ├── benchmark/      # benchmark runner 与 memory evaluator
 ├── config/         # 配置与运行时安全校验
 ├── core/
-│   ├── execution/  # 六态状态机和生命周期
+│   ├── execution/  # 七态状态机、暂停控制和生命周期
+│   ├── test_context.py        # artifact-first、reducer 替换、transcript 与摘要续跑
+│   ├── test_tool_artifacts.py # 路径隔离、原子写入、脱敏、校验和双限长
 │   └── tools/      # 文件、Shell、任务、Skill、后台、委派和 Workspace
 ├── db/             # Chroma 行为
 ├── memory/         # 准入、召回、偏好和删除
@@ -48,6 +50,7 @@ uv run pytest -q tests/core/tools
 uv run pytest -q tests/core/execution
 uv run pytest -q tests/memory tests/observability
 uv run pytest -q tests/admin tests/api/test_admin_security.py
+uv run pytest -q tests/api/test_workspace_read_service.py tests/api/test_workspace_write.py
 ```
 
 覆盖率：
@@ -74,9 +77,11 @@ uv run python -m benchmarks.run --backend platform --mode single --no-artifacts
 
 - Chroma 测试使用进程内 collection 和确定性离线 embedding。
 - MySQL/Redis 路由逻辑主要通过替身和隔离 API 测试，完整服务启动由 Docker smoke 覆盖。
+- Stop/Cancel 覆盖 Redis active-trace lease、精确 trace 取消标记、runner fencing、工具确认原 trace 恢复与取消后新 trace 重规划；已发生的文件或外部副作用不承诺回滚，无法立即中断的操作会明确记为 best-effort cancellation。
 - `platform` benchmark 不调用模型，不代表 Agent 推理能力。
 - `agent` benchmark 会调用配置的第三方或私有模型 endpoint，发送合成提示和工具上下文并产生费用。
 - 当前 Shell 测试证明策略行为，不证明内核级隔离。
+- Workspace 写入测试覆盖 SHA-256 乐观锁、原子替换、路径/符号链接/敏感目录拒绝、UTF-8 与 1 MiB 边界；它不证明 Docker volume 权限或浏览器实机行为，本轮两项仍待验证。
 
 ## 新增测试原则
 

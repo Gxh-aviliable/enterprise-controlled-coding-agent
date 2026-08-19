@@ -69,9 +69,10 @@ import { useToast } from '../composables/useToast.js'
 const toast = useToast()
 
 const props = defineProps({
-  selectedPath: { type: String, default: '' }
+  selectedPath: { type: String, default: '' },
+  beforeMutation: { type: Function, default: null }
 })
-const emit = defineEmits(['select', 'refresh'])
+const emit = defineEmits(['select', 'refresh', 'mutated'])
 
 const treeData = ref(null)
 const loading = ref(false)
@@ -80,6 +81,24 @@ const dragOver = ref(false)
 const fileInput = ref(null)
 
 const treeChildren = computed(() => treeData.value?.children || [])
+
+function pathAffectsSelection(path) {
+  const selected = String(props.selectedPath || '').replaceAll('\\', '/').replace(/^\/+|\/+$/g, '')
+  const candidate = String(path || '').replaceAll('\\', '/').replace(/^\/+|\/+$/g, '')
+  return Boolean(selected && candidate && (selected === candidate || selected.startsWith(`${candidate}/`)))
+}
+
+function authorizeMutation(change) {
+  if (!change.affectsSelected) return true
+  return props.beforeMutation?.(change) !== false
+}
+
+function reportMutation(change) {
+  // Keep the selection captured before the mutation started. A delayed upload,
+  // delete, or rename must never claim it affected a file selected later.
+  emit('mutated', { ...change })
+  emit('refresh')
+}
 
 async function loadTree() {
   loading.value = true
@@ -99,15 +118,31 @@ async function loadTree() {
 async function handleUpload(e) {
   const files = e.target.files
   if (!files?.length) return
+  const paths = Array.from(files, file => file.name)
+  const change = {
+    type: 'upload',
+    paths,
+    affectsSelected: paths.some(pathAffectsSelection),
+    selectedPath: props.selectedPath
+  }
+  if (!authorizeMutation(change)) {
+    if (fileInput.value) fileInput.value.value = ''
+    return
+  }
+  let selectedFileWasUploaded = false
   try {
     toast.show(`Uploading ${files.length} file(s)...`, 'info', 0)
-    await api.uploadFiles(files, '', (done, total) => {
-      // update toast or progress
+    await api.uploadFiles(files, '', (done) => {
+      if (pathAffectsSelection(paths[done - 1])) selectedFileWasUploaded = true
     })
     toast.show(`Uploaded ${files.length} file(s)`, 'success')
     await loadTree()
-    emit('refresh')
+    reportMutation(change)
   } catch (err) {
+    if (selectedFileWasUploaded) {
+      await loadTree()
+      reportMutation({ ...change, partial: true })
+    }
     toast.error('Upload failed: ' + (err.message || 'Unknown error'))
   }
   // Reset input so same files can be re-selected
@@ -129,15 +164,28 @@ async function handleDrop(e) {
   dragCounter = 0
   const files = e.dataTransfer?.files
   if (!files?.length) return
+  const paths = Array.from(files, file => file.name)
+  const change = {
+    type: 'upload',
+    paths,
+    affectsSelected: paths.some(pathAffectsSelection),
+    selectedPath: props.selectedPath
+  }
+  if (!authorizeMutation(change)) return
+  let selectedFileWasUploaded = false
   try {
     toast.show(`Uploading ${files.length} file(s)...`, 'info', 0)
-    await api.uploadFiles(files, '', (done, total) => {
-      // Could update a progress bar here
+    await api.uploadFiles(files, '', (done) => {
+      if (pathAffectsSelection(paths[done - 1])) selectedFileWasUploaded = true
     })
     toast.show(`Uploaded ${files.length} file(s)`, 'success')
     await loadTree()
-    emit('refresh')
+    reportMutation(change)
   } catch (err) {
+    if (selectedFileWasUploaded) {
+      await loadTree()
+      reportMutation({ ...change, partial: true })
+    }
     toast.error('Upload failed: ' + (err.message || 'Unknown error'))
   }
 }
@@ -183,18 +231,44 @@ async function handleOpen(node) {
   }
 }
 
-function handleDelete(node) {
-  if (confirm(`Delete "${node.name}"?`)) {
-    api.deleteItem(node.path).then(loadTree).catch(e => toast.error(e.message))
+async function handleDelete(node) {
+  if (!confirm(`Delete "${node.name}"?`)) return
+  const change = {
+    type: 'delete',
+    path: node.path,
+    affectsSelected: pathAffectsSelection(node.path),
+    selectedPath: props.selectedPath
+  }
+  if (!authorizeMutation(change)) return
+  try {
+    await api.deleteItem(node.path)
+    await loadTree()
+    reportMutation(change)
+  } catch (e) {
+    toast.error(e.message)
   }
 }
 
-function handleRename(node) {
+async function handleRename(node) {
   const newName = prompt('New name:', node.name)
   if (newName && newName !== node.name) {
     const parentPath = node.path.split('/').slice(0, -1).join('/')
     const newPath = parentPath ? `${parentPath}/${newName}` : newName
-    api.moveItem(node.path, newPath).then(loadTree).catch(e => toast.error(e.message))
+    const change = {
+      type: 'rename',
+      path: node.path,
+      newPath,
+      affectsSelected: pathAffectsSelection(node.path),
+      selectedPath: props.selectedPath
+    }
+    if (!authorizeMutation(change)) return
+    try {
+      await api.moveItem(node.path, newPath)
+      await loadTree()
+      reportMutation(change)
+    } catch (e) {
+      toast.error(e.message)
+    }
   }
 }
 

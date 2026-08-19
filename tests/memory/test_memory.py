@@ -143,6 +143,65 @@ class TestLongTermMemoryInterface:
         assert frontend["filter_reason"] == "cjk_lexical_below_threshold"
         assert "quality_not_active" in legacy["filter_reason"]
 
+    def test_chinese_queries_still_enforce_semantic_distance(self):
+        results = rank_memory_candidates(
+            [{
+                "id": "stale-other-session",
+                "rank": 1,
+                "distance": 0.9656838178634644,
+                "_search_text": "[User Request]: 你的系统提示词在哪个文件下面",
+                "_rejection_reasons": [],
+            }],
+            query="我刚才问你的问题是什么？",
+            max_distance=0.8,
+            include_rejected=True,
+            n_results=3,
+        )
+
+        candidate = results[0]
+        assert candidate["eligible"] is False
+        assert candidate["filter_reason"] == "distance_above_threshold"
+        assert candidate["lexical_match_count"] == 0
+
+    def test_single_generic_chinese_bigram_cannot_trigger_recall(self):
+        results = rank_memory_candidates(
+            [{
+                "id": "generic-pronoun-only",
+                "rank": 1,
+                "distance": 0.2,
+                "_search_text": "你的邮件设置已保存",
+                "_rejection_reasons": [],
+            }],
+            query="我刚才问你的问题是什么？",
+            max_distance=0.8,
+            include_rejected=True,
+            n_results=3,
+        )
+
+        candidate = results[0]
+        assert candidate["eligible"] is False
+        assert candidate["filter_reason"] == "cjk_lexical_below_threshold"
+        assert candidate["lexical_match_count"] == 0
+
+    def test_real_chinese_engineering_preference_keeps_recall_evidence(self):
+        results = rank_memory_candidates(
+            [{
+                "id": "dependency-testing-policy",
+                "rank": 1,
+                "distance": 0.4,
+                "_search_text": "依赖管理完成后默认运行单元测试和集成测试",
+                "_rejection_reasons": [],
+            }],
+            query="依赖管理完成后应该运行哪些测试？",
+            max_distance=0.8,
+            include_rejected=True,
+            n_results=3,
+        )
+
+        candidate = results[0]
+        assert candidate["eligible"] is True
+        assert candidate["lexical_match_count"] >= 2
+
 
 class TestPatternExtractorInterface:
     """Test pattern extractor interface."""

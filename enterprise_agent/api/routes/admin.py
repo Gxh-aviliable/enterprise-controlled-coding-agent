@@ -822,7 +822,12 @@ async def cancel_admin_task(
 
     from enterprise_agent.api.routes.chat import request_task_cancellation
 
-    result = await request_task_cancellation(trace["session_id"], owner_id, payload.reason)
+    result = await request_task_cancellation(
+        trace["session_id"],
+        owner_id,
+        payload.reason,
+        trace_id=trace_id,
+    )
     try:
         current = store.get_trace(owner_id, trace_id)
         if current.get("status") not in {"succeeded", "failed", "cancelled"}:

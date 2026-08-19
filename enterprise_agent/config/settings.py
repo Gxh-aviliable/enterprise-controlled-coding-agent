@@ -77,7 +77,7 @@ class Settings(BaseSettings):
     LLM_PROVIDER: str = "deepseek"
     LLM_API_KEY: str = ""  # Universal API key
     LLM_BASE_URL: Optional[str] = "https://api.deepseek.com/anthropic"  # Anthropic-compatible endpoint
-    MODEL_ID: str = "deepseek-v4-pro"  # Model identifier
+    MODEL_ID: str = "deepseek-v4-flash"  # Model identifier
 
     # Legacy Anthropic config (for backward compatibility)
     ANTHROPIC_API_KEY: str = ""
@@ -87,23 +87,43 @@ class Settings(BaseSettings):
     CHECKPOINT_TTL_HOURS: int = 24  # RedisSaver checkpoint 过期时间（对话历史自动清理）
     MAX_MESSAGES_PER_SESSION: int = 100
     TOKEN_THRESHOLD: int = 500000
+    # Conservative cross-provider default. Deployments must set this to the
+    # selected model's documented context window; it is distinct from spend budgets.
+    MODEL_CONTEXT_WINDOW_TOKENS: int = 128_000
+    CONTEXT_COMPRESSION_RATIO: float = 0.8
 
     # Tool output limits
     TOOL_OUTPUT_MAX_CHARS: int = 50000  # Truncation limit for tool outputs
+    # Foreground/background process capture is file-backed and read with this
+    # byte cap, preventing unbounded stdout/stderr from entering API memory.
+    TOOL_SOURCE_CAPTURE_MAX_BYTES: int = 4_000_000
+    # Private artifact captures are larger than model previews but still bounded
+    # to prevent one hostile command from exhausting workspace storage.
+    TOOL_ARTIFACT_MAX_CHARS: int = 2_000_000
     # Auto-compact: how much recent text (chars) the summarizer LLM sees.
     # With TOKEN_THRESHOLD=500K (~2M chars), 200K chars (~50K tokens) gives the
     # summarizer enough context to produce a useful summary (~10% of full context).
     CONTEXT_SUMMARY_TRIGGER_CHARS: int = 200000
+    CONTEXT_SUMMARY_MAX_TOKENS: int = 50_000
+    CONTEXT_SUMMARY_OUTPUT_RESERVE_TOKENS: int = 4_096
 
     # Agent behavior
     MICROCOMPACT_KEEP_LAST: int = 6  # Messages to keep during microcompact
+    MICROCOMPACT_MIN_CHARS: int = 1000  # Avoid receipts larger than small outputs
     NAG_REMINDER_THRESHOLD: int = 3  # Rounds without TodoWrite before reminder
     COMMAND_TIMEOUT_SECONDS: int = 120  # Shell/background command timeout
     AGENT_INVOKE_TIMEOUT_SECONDS: int = 600  # Max seconds for a single graph invocation
+    # Cross-worker execution ownership. Runners renew this Redis lease while
+    # active; checkpoints still provide the durable fallback if a worker dies.
+    ACTIVE_TRACE_LEASE_SECONDS: int = 1200
+    CANCEL_CONVERGENCE_WAIT_SECONDS: float = 5.0
     MAX_AGENT_ROUNDS: int = 20  # Fail fast instead of allowing long no-progress loops
     MAX_TOOL_CALLS_PER_TASK: int = 25  # Framework-enforced tool-call budget
     TASK_TOKEN_BUDGET: int = 1_000_000  # Per user task; separate from context compaction threshold
     SESSION_TOKEN_BUDGET: int = 1_000_000  # Cumulative model usage across one chat session
+    # MySQL history is injected only when the Redis checkpoint is unavailable.
+    # Bound both rows and characters before it reaches the model.
+    DURABLE_HISTORY_MAX_CHARS: int = 120_000
     SUBAGENT_MAX_ROUNDS: int = 30  # Max rounds for subagent execution
     TODO_MAX_ITEMS: int = 20  # Max todo items per session
     TODO_MAX_IN_PROGRESS: int = 1  # Max concurrent in_progress todos
@@ -134,7 +154,7 @@ class Settings(BaseSettings):
     MEMORY_CLEANUP_THRESHOLD: float = 0.1  # 留存分数低于此值则清理
     MEMORY_CLEANUP_INTERVAL_HOURS: int = 1  # 清理任务间隔（小时）
     ENABLE_LLM_IMPORTANCE_EVAL: bool = True  # 是否启用 LLM 重要性评估
-    IMPORTANCE_EVAL_MODEL: str = "deepseek-chat"  # 重要性评估使用的模型
+    IMPORTANCE_EVAL_MODEL: str = "deepseek-v4-flash"  # 重要性评估使用的模型
 
     # Output Verification (trust but verify - prevent hallucination)
     ENABLE_EDIT_VERIFICATION: bool = True  # Auto re-read after edit_file
@@ -174,6 +194,28 @@ class Settings(BaseSettings):
         importing settings, so the offline smoke test works before `.env` is
         created while an actual server still fails closed.
         """
+        if self.MODEL_CONTEXT_WINDOW_TOKENS <= 0:
+            raise RuntimeError(
+                "MODEL_CONTEXT_WINDOW_TOKENS must be a positive value matching the "
+                "selected model; zero disables the safety boundary."
+            )
+        if not 0.1 <= self.CONTEXT_COMPRESSION_RATIO <= 0.95:
+            raise RuntimeError(
+                "CONTEXT_COMPRESSION_RATIO must be between 0.1 and 0.95."
+            )
+        if self.ACTIVE_TRACE_LEASE_SECONDS <= max(
+            self.AGENT_INVOKE_TIMEOUT_SECONDS,
+            self.CONFIRMATION_TIMEOUT_SECONDS,
+        ):
+            raise RuntimeError(
+                "ACTIVE_TRACE_LEASE_SECONDS must outlive both one Agent invocation "
+                "and the tool-confirmation timeout."
+            )
+        if self.CANCEL_CONVERGENCE_WAIT_SECONDS <= 0:
+            raise RuntimeError("CANCEL_CONVERGENCE_WAIT_SECONDS must be positive.")
+        if self.DURABLE_HISTORY_MAX_CHARS <= 0:
+            raise RuntimeError("DURABLE_HISTORY_MAX_CHARS must be positive.")
+
         placeholders = {
             "",
             "change-me-in-production",

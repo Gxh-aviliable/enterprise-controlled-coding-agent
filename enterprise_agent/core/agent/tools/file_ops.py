@@ -13,9 +13,11 @@ from enterprise_agent.core.agent.tools.workspace import (
     get_current_session_id,
     get_current_user_id,
     get_user_workspace,
+    is_operational_agent_path,
     is_sensitive_agent_path,
     resolve_path,
 )
+from enterprise_agent.core.agent.tools.workspace_lock import workspace_write_lock
 
 MAX_DELETE_PATHS = 100
 PROTECTED_DELETE_PARTS = {
@@ -30,9 +32,50 @@ PROTECTED_DELETE_PARTS = {
 WILDCARD_CHARACTERS = {"*", "?", "[", "]", "{", "}"}
 
 
+def _read_text_bounded(path: Path, max_chars: int) -> tuple[str, bool, int]:
+    """Stream a text file while retaining bounded head/tail context."""
+    limit = max(1, int(max_chars))
+    captured = ""
+    head = ""
+    tail = ""
+    total_chars = 0
+    truncated = False
+    head_limit = limit * 3 // 5
+    tail_limit = limit - head_limit
+
+    with path.open("r", encoding="utf-8", errors="replace") as handle:
+        while chunk := handle.read(64 * 1024):
+            total_chars += len(chunk)
+            if not truncated:
+                captured += chunk
+                if len(captured) > limit:
+                    truncated = True
+                    head = captured[:head_limit]
+                    tail = captured[-tail_limit:] if tail_limit else ""
+                    captured = ""
+            elif tail_limit:
+                tail = (tail + chunk)[-tail_limit:]
+
+    if not truncated:
+        return captured, False, total_chars
+    marker = f"\n... [source capture clipped {total_chars - limit} chars] ...\n"
+    available = max(0, limit - len(marker))
+    adjusted_head = available * 3 // 5
+    adjusted_tail = available - adjusted_head
+    result = head[:adjusted_head] + marker
+    if adjusted_tail:
+        result += tail[-adjusted_tail:]
+    return result, True, total_chars
+
+
 def _validate_agent_file_path(path: str) -> None:
     if is_sensitive_agent_path(path):
         raise ValueError(f"Sensitive credential path is not available to Agent tools: {path}")
+    if is_operational_agent_path(path):
+        raise ValueError(
+            "Agent operational paths require their dedicated task, team, transcript, "
+            "or artifact tool"
+        )
 
 
 def _atomic_write_text(path: Path, content: str) -> None:
@@ -130,10 +173,20 @@ def read_file(path: str, limit: Optional[int] = None) -> str:
     try:
         _validate_agent_file_path(path)
         fp = resolve_path(path)
-        lines = fp.read_text(encoding="utf-8").splitlines()
+        text, source_truncated, total_chars = _read_text_bounded(
+            fp,
+            settings.TOOL_ARTIFACT_MAX_CHARS,
+        )
+        lines = text.splitlines()
         if limit and limit < len(lines):
             lines = lines[:limit] + [f"... ({len(lines) - limit} more lines)"]
-        return "\n".join(lines)[:settings.TOOL_OUTPUT_MAX_CHARS]
+        result = "\n".join(lines)
+        if source_truncated:
+            result += (
+                f"\n[source_truncated=true original_chars={total_chars}; "
+                "restricted head/tail capture only]"
+            )
+        return result
     except Exception as e:
         return f"Error: {e}"
 
@@ -150,12 +203,15 @@ def write_file(path: str, content: str) -> str:
         Success message with first N lines preview (trust but verify)
     """
     try:
-        _validate_agent_file_path(path)
-        fp = resolve_path(path)
-        _atomic_write_text(fp, content)
+        with workspace_write_lock():
+            _validate_agent_file_path(path)
+            # Resolve only after acquiring the shared lock so a concurrent
+            # browser move/delete cannot invalidate the checked target.
+            fp = resolve_path(path)
+            _atomic_write_text(fp, content)
 
-        # Auto-verify: re-read and show preview
-        verified = fp.read_text(encoding="utf-8")
+            # Auto-verify before releasing the lock.
+            verified = fp.read_text(encoding="utf-8")
         lines = verified.splitlines()
         preview_lines = lines[:settings.VERIFICATION_PREVIEW_LINES]
         preview = "\n".join(preview_lines)
@@ -180,18 +236,18 @@ def edit_file(path: str, old_text: str, new_text: str) -> str:
         Success message with diff preview (trust but verify)
     """
     try:
-        _validate_agent_file_path(path)
-        fp = resolve_path(path)
-        content = fp.read_text(encoding="utf-8")
-        if old_text not in content:
-            return f"Error: Text not found in {path}"
+        with workspace_write_lock():
+            _validate_agent_file_path(path)
+            fp = resolve_path(path)
+            content = fp.read_text(encoding="utf-8")
+            if old_text not in content:
+                return f"Error: Text not found in {path}"
 
-        # Perform edit
-        new_content = content.replace(old_text, new_text, 1)
-        _atomic_write_text(fp, new_content)
-
-        # Auto-verify: re-read and show context around edit
-        verified = fp.read_text(encoding="utf-8")
+            # Keep the entire read-modify-write and verification sequence under
+            # one lock so another API worker cannot interleave an update.
+            new_content = content.replace(old_text, new_text, 1)
+            _atomic_write_text(fp, new_content)
+            verified = fp.read_text(encoding="utf-8")
         if new_text in verified:
             # Show ~5 lines of context around the edit
             lines = verified.splitlines()
@@ -216,26 +272,8 @@ def edit_file(path: str, old_text: str, new_text: str) -> str:
         return f"Error: {e}"
 
 
-@tool
-def delete_paths(paths: list[str], reason: str) -> str:
-    """Move exact workspace paths into the protected recovery trash.
-
-    This is the only supported Agent mechanism for deleting files or
-    directories. It never accepts wildcards, absolute paths, traversal, or
-    protected Agent/system directories. The operation requires explicit human
-    confirmation before execution and returns a recovery operation ID.
-
-    Args:
-        paths: Exact workspace-relative file or directory paths to remove.
-        reason: Human-readable reason shown in the confirmation and audit trace.
-
-    Returns:
-        JSON receipt with the moved paths and recovery operation ID.
-    """
-    normalized_reason = str(reason or "").strip()
-    if len(normalized_reason) < 3:
-        return "Error: A deletion reason of at least 3 characters is required"
-
+def _delete_paths_locked(paths: list[str], normalized_reason: str) -> str:
+    """Perform a recoverable delete while the workspace write lock is held."""
     moved: list[tuple[Path, Path]] = []
     operation_root: Path | None = None
     try:
@@ -291,4 +329,31 @@ def delete_paths(paths: list[str], reason: str) -> str:
             except Exception as rollback_exc:
                 rollback_errors.append(str(rollback_exc))
         suffix = f"; rollback errors: {rollback_errors}" if rollback_errors else ""
-        return f"Error: {exc}{suffix}"
+        raise RuntimeError(f"{exc}{suffix}") from exc
+
+
+@tool
+def delete_paths(paths: list[str], reason: str) -> str:
+    """Move exact workspace paths into the protected recovery trash.
+
+    This is the only supported Agent mechanism for deleting files or
+    directories. It never accepts wildcards, absolute paths, traversal, or
+    protected Agent/system directories. The operation requires explicit human
+    confirmation before execution and returns a recovery operation ID.
+
+    Args:
+        paths: Exact workspace-relative file or directory paths to remove.
+        reason: Human-readable reason shown in the confirmation and audit trace.
+
+    Returns:
+        JSON receipt with the moved paths and recovery operation ID.
+    """
+    normalized_reason = str(reason or "").strip()
+    if len(normalized_reason) < 3:
+        return "Error: A deletion reason of at least 3 characters is required"
+
+    try:
+        with workspace_write_lock():
+            return _delete_paths_locked(paths, normalized_reason)
+    except Exception as exc:
+        return f"Error: {exc}"

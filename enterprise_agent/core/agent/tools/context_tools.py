@@ -6,9 +6,15 @@ Provides:
 - get_transcript: Load a specific transcript
 """
 
+import json
+
 from langchain_core.tools import tool
 
 from enterprise_agent.core.agent.context import get_context_manager, get_transcript_manager
+from enterprise_agent.core.agent.tool_artifacts import (
+    ARTIFACT_READ_MAX_BYTES,
+    ToolArtifactStore,
+)
 
 # === Tool Definitions ===
 
@@ -61,48 +67,75 @@ def list_transcripts() -> str:
 
 
 @tool
-def get_transcript(filename: str) -> str:
-    """Load and display a compression backup transcript file.
+def get_transcript(
+    filename: str,
+    offset_bytes: int = 0,
+    limit_bytes: int = ARTIFACT_READ_MAX_BYTES,
+) -> str:
+    """Read one bounded page of a compression backup transcript.
 
     These are operational compression artifacts, NOT user long-term memory.
     For long-term memory queries, use `search_memory` instead.
 
     Args:
-        filename: Transcript filename (e.g., 'transcript_xxx.jsonl')
+        filename: Filename or ``.transcripts/transcript_xxx.jsonl`` handle.
+        offset_bytes: Zero-based byte offset from the previous page receipt.
+        limit_bytes: Target page bytes, capped by the server.
 
     Returns:
-        Transcript content summary or full content
+        JSON page metadata and raw JSONL content. Follow ``next_offset_bytes``
+        until ``eof`` to recover all currently available backup text.
     """
     tm = get_transcript_manager()
-    path = tm.transcript_dir / filename
+    try:
+        return json.dumps(
+            tm.read_range(
+                filename,
+                offset_bytes=offset_bytes,
+                limit_bytes=limit_bytes,
+            ),
+            ensure_ascii=False,
+        )
+    except ValueError as exc:
+        return f"Error: Transcript read rejected ({exc})"
+    except FileNotFoundError:
+        available = [item["path"] for item in tm.list_transcripts()]
+        return f"Error: Transcript not found. Available: {', '.join(available) or 'none'}"
+    except OSError:
+        return "Error: Transcript read failed"
 
-    if not path.exists():
-        available = [t["filename"] for t in tm.list_transcripts()]
-        return f"Transcript not found: {filename}\nAvailable: {', '.join(available) or 'none'}"
 
-    messages = tm.load(path)
+@tool
+def read_tool_artifact(
+    path: str,
+    sha256: str,
+    offset_bytes: int = 0,
+    limit_bytes: int = ARTIFACT_READ_MAX_BYTES,
+) -> str:
+    """Read one bounded range of restricted tool-output evidence.
 
-    if not messages:
-        return f"Empty transcript: {filename}"
+    Only paths under the authenticated user's ``.agent/tool-artifacts`` root
+    are accepted. Use ``next_offset_bytes`` to page through a stored artifact.
+    An artifact can be redacted or source-truncated; it is debugging evidence,
+    not a promise that unlimited raw bytes were retained.
 
-    # Format for display
-    lines = []
-    for msg in messages[:50]:  # Show first 50 messages
-        role = msg.get("role", "unknown")
-        content = msg.get("content", "")
-        preview = content[:200] if len(content) > 200 else content
-        lines.append(f"[{role}] {preview}")
-
-    total = len(messages)
-    shown = min(50, total)
-
-    result = f"Transcript: {filename} ({total} messages, showing {shown})\n\n"
-    result += "\n".join(lines)
-
-    if total > 50:
-        result += f"\n\n... ({total - 50} more messages)"
-
-    return result
+    Args:
+        path: Workspace-relative artifact path from a tool receipt.
+        sha256: Expected SHA-256 from the same receipt; mismatches are rejected.
+        offset_bytes: Zero-based byte offset.
+        limit_bytes: Bytes to return, capped by the server.
+    """
+    try:
+        return ToolArtifactStore().read_range_json(
+            path,
+            expected_sha256=sha256,
+            offset_bytes=offset_bytes,
+            limit_bytes=limit_bytes,
+        )
+    except ValueError as exc:
+        return f"Error: Artifact read rejected ({exc})"
+    except OSError:
+        return "Error: Artifact read failed"
 
 
 @tool

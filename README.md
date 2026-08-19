@@ -6,20 +6,20 @@
 
 在 Agent 执行层之外，项目还提供浏览器工作台和企业控制面，负责身份认证、Workspace 隔离、工具权限、人工审批、任务恢复、全链路 Trace 与长期记忆治理。项目关注的问题不是再做一个聊天界面，而是：
 
-> 如何让一个会自主读代码、改代码、跑测试和处理失败的 Agent，在企业内网中仍然可限制、可暂停、可恢复、可验证、可追溯？
+> 如何让一个会自主读代码、改代码、跑测试和处理失败的 Agent，在企业内网中仍然可限制、可终止、可为敏感工具等待人工确认、可恢复、可验证、可追溯？
 
 `LangGraph` · `FastAPI` · `Vue 3` · `Redis` · `MySQL` · `ChromaDB` · `Docker Compose`
 
 | 当前可验证结果 | 数据 |
 |---|---:|
-| DeepSeek 真实 single-Agent 基准 | **80.0%（8/10）** |
-| 真实 Agent 工具成功率 | **82.9%** |
+| DeepSeek V4 Flash 真实 single-Agent v2 基准 | **83.3%（25/30）** |
+| 真实 Agent 工具成功率 | **87.5%** |
 | 离线平台回归基准 | **100%（10/10）** |
-| 后端自动化测试 | **381 passed** |
-| 前端回归测试 | **23 passed** |
+| 后端自动化测试 | **619 passed** |
+| 前端回归测试 | **93 passed** |
 | Python 静态检查 | **Ruff 0 findings** |
 
-真实模型结果来自干净提交 `d95caf6` 上的 `deepseek-chat` 实测，不用离线规则分数冒充模型能力。详见[原始报告](benchmarks/results/20260723T052543Z-agent-single.md)。
+真实模型结果来自干净提交 `7562a95` 上的 `deepseek-v4-flash` 官方完整实测：easy 9/10、medium 10/10、hard 6/10，基础设施错误与系统错误均为 0。详见[原始报告](benchmarks/results/20260819T160324Z-agent-single.md)。v2 扩展了任务集和评测器，因此它替代 v1 作为活跃基线，但不能与旧分数作严格同口径的升降比较。
 
 ## 它为什么是 Coding Agent，而不是聊天机器人
 
@@ -56,7 +56,7 @@ flowchart LR
 - 私有代码和执行环境应该放在哪里；
 - 不同用户能看到和修改哪些文件；
 - Shell、写文件、删除、子 Agent 等副作用如何分级；
-- 高风险操作如何暂停并等待人工确认；
+- 高风险操作如何中断并等待人工确认；
 - 中断、超时、拒绝或失败后，任务状态如何保持一致；
 - 如何回答“Agent 做了什么、为什么失败、用了多少 token”；
 - 如何避免把失败任务和一次性指令错误沉淀为长期知识。
@@ -71,9 +71,10 @@ flowchart LR
 |---|---|---|
 | Agent 自主执行 | LangGraph 多轮工具循环，显式 `parse → plan → act → observe → checkpoint → validate → summarize`；工具结果返回模型继续决策 | `core/agent/graph.py`、`nodes.py`、`state.py` |
 | 长任务与失败恢复 | Todo、后台命令、错误分类、上下文微压缩/摘要、轮次/工具/token 预算、代码修改验证门和 Redis checkpoint | `core/agent/context.py`、`tools/task.py`、`tools/background.py` |
+| Stop/Cancel 与重新规划 | Redis 保存精确到用户/会话/Trace 的 active lease、cancel tombstone 与 runner fence；旧 Trace 取消完成后，同 Session 的下一条消息创建新 Trace，并用 durable history、workspace 和 continuation receipt 重新规划 | `core/execution/interrupt_control.py`、`core/agent/graph.py`、`api/routes/chat.py` |
 | 知识与任务扩展 | Shared/Personal Skill 按需加载，受治理的长期记忆召回，以及显式 single/multi 和真实 specialist 委派边界 | `tools/skills.py`、`tools/subagent.py`、`memory/` |
 | 工具风险治理 | 统一 Tool Contract，模型绑定与执行阶段双重权限过滤，参数级风险识别，LangGraph interrupt 审批与超时恢复 | `core/agent/tools/contracts.py`、`nodes.py` |
-| Workspace 安全 | 用户目录隔离、路径穿越拦截、敏感路径拒绝、原子写入、精确路径可恢复删除 | `core/agent/tools/workspace.py`、`file_ops.py` |
+| Workspace 安全 | 用户目录隔离、路径穿越拦截、敏感路径拒绝、原子写入、SHA-256 乐观并发写入、精确路径可恢复删除 | `core/agent/tools/workspace.py`、`file_ops.py`、`api/routes/workspace.py` |
 | Shell 控制 | 复合命令解析、危险命令/外传工具拦截、工作区相对路径、凭据净化子进程环境、超时与输出截断 | `core/agent/tools/shell.py` |
 | 多租户持久化 | JWT 认证，实时数据库角色授权，MySQL 持久会话正文，Redis 执行 checkpoint，按用户隔离的 Chroma 记忆 | `api/`、`models/`、`memory/` |
 | 可观测与治理 | Trace ID 串联节点、模型、工具、审批、预算、错误和终态；管理员控制台提供用户、额度、审计、临时访问授权和 Shared Skill 版本治理 | `observability/`、`admin/` |
@@ -118,13 +119,39 @@ flowchart LR
   → 进入 succeeded / failed / cancelled，并按策略决定是否写入长期记忆
 ```
 
-六个任务状态与会话状态彼此独立：
+任务执行状态与会话状态彼此独立：
 
 ```text
-pending → running ⇄ waiting_confirmation → succeeded
-                 └────────────────────────→ failed
-pending/running/waiting_confirmation ─────→ cancelled
+pending → running ⇄ waiting_confirmation
+
+running → succeeded / failed / cancelled
+waiting_confirmation → failed / cancelled
+pending → cancelled
+
+legacy paused → cancelled  # 仅兼容迁移，不再可进入或恢复
 ```
+
+> [!IMPORTANT]
+> 运行中的用户任务只提供 **Stop/Cancel**。Stop 将当前 Trace 收敛为不可恢复的
+> `cancelled` 终态，不承诺回滚已经发生的文件或外部副作用。Cancel 失败或仍在
+> `cancelling` 时前端保持输入锁定；只有服务端确认旧 runner 停止、checkpoint 已终态化
+> 且 active lease 释放后才解锁。
+>
+> 实际流程是：
+>
+> ```text
+> 用户点击 Stop
+> → Redis 为当前 user + session + trace 写入 cancel_requested
+> → 工具批次每次调用前检查取消，前台 Shell 尽可能终止进程组
+> → runner 写入 cancelled checkpoint、MySQL tombstone 和 continuation receipt
+> → runner 确认停止并释放精确 active lease
+> → 前端解锁
+> → 下一条消息创建全新 trace_id
+> → 新一轮 LLM 根据 durable history、workspace 现状和 receipt 重新规划
+> ```
+>
+> `Command(resume=...)` 仅保留给 typed `tool_confirmation` interrupt：批准、拒绝和超时
+> 保持原 `trace_id`。Stop 不会把确认弹窗伪装成 Reject All。
 
 ## 关键能力
 
@@ -135,7 +162,7 @@ pending/running/waiting_confirmation ─────→ cancelled
 - 系统提示要求先检索再修改，并对 `policy_blocked` 和 `nonzero_exit` 采用不同恢复策略，避免遇到失败就直接报告结束。
 - 多步骤工作可由 `todo_update` 维护短期计划；长时间测试或构建可转入 `background_run`，完成结果会重新注入 Agent 上下文。
 - 框架自动统计工具调用、变更文件和验证结果，不依赖模型自报“已经执行”。
-- 真实 DeepSeek 基准已通过代码库理解、文件创建、测试执行、失败修复、安全拒绝和审批恢复等 8 个用例；两个保留失败也在 README 中公开说明。
+- 真实 DeepSeek V4 Flash v2 基准已通过代码库理解、文件与配置修改、测试执行、失败恢复、安全拒绝、审批恢复、后台任务、跨语言集成和 cancel-and-replan workspace 检查等 25 个用例；5 个保留失败及其确定性断言证据在原始报告中公开。
 
 ### 2. 长任务上下文与可恢复状态
 
@@ -144,9 +171,20 @@ pending/running/waiting_confirmation ─────→ cancelled
 - 审批超时会自动恢复图并确定性拒绝，不让任务永久停留在等待态。
 - 失败和取消会同步收敛未完成 Todo 与本任务创建的持久任务。
 - 每任务默认最多 20 轮、25 次工具调用，并分别限制任务与会话累计 token。
-- 每次模型调用前执行 microcompact，仅保留最近工具结果正文；超过阈值时先保存完整 transcript，再用 LLM 摘要保留关键决策、改动文件和未完成步骤。
+- 每次模型调用前执行 microcompact：较旧的长工具结果只有在受限原文 artifact 已原子落盘后才会被替换，占位文本包含真实路径与 SHA-256。
+- 微压缩后仍超过有效阈值时，先保存完整 transcript，再用 LLM 生成运行摘要；目标、Todo、改动文件、验证结果和失败原因优先从 `AgentState` 确定性写入 continuation packet，不依赖模型自由摘要。极紧预算下会显式标记 `continuation_packet_truncated` 并降级为 transcript handle，而不是假装所有字段仍在上下文中。
+- 摘要同时约束完整输入 prompt、Provider 输出上限和下一次主模型调用预算，并预留 10%（至少 1,024 token）的续写空间；若 Provider 仍报告 context-length 错误，只允许保存 transcript 后压缩恢复一次，避免无限重试。
+- 完整压缩使用 `RemoveMessage(REMOVE_ALL_MESSAGES)` 真正替换 Redis checkpoint 里的旧消息；摘要模型的耗时和 token 也进入 Trace 与任务/会话成本。
 - 压缩后会注入“继续下一项具体行动”的控制信息，使 Agent 从摘要恢复执行，而不是把摘要复述给用户后提前结束。
 - 写入代码文件后，若没有成功的测试、构建、Lint 或编译记录，任务不能被标记为成功。
+
+> [!NOTE]
+> **Artifact 保存的边界：** `.agent/tool-artifacts/` 保存的是“受限原文”，
+> 会先脱敏，并受 `TOOL_ARTIFACT_MAX_CHARS` 的独立存储上限约束；超限时保留
+> head/tail 并显式标记 `source_truncated=true`。它是用户 Workspace 内的可调试证据，
+> 通过专用工具按 UTF-8 安全范围读取并校验 SHA-256；通用文件/Shell 工具不能直接
+> 访问 Agent 运行目录。它仍不是防篡改审计库；多副本生产环境应迁移到带保留策略
+> 和专用授权的对象存储。
 
 ### 3. Contract-driven 工具执行
 
@@ -206,6 +244,7 @@ Trace 在写盘前递归脱敏，并可通过工作台时间线回放。当前�
 - `multi_agent` 需要服务器显式开启，并要求当前数据库角色拥有高级工具权限。
 - Multi 模式通过 `delegate_task(role, prompt)` 创建独立、无工具的 specialist 上下文，由主 Agent 综合结果。
 - 没有一次真实成功委派，Multi 任务不能修改 Workspace 或报告成功。
+- 一次真实 Multi 任务暴露了 `py_compile` 成功却未被验证门计入的问题；当前回归已覆盖“真实委派 → 文件修改 → `py_compile` → succeeded”，并统一由最终 `AgentState.task_status` 投影 Trace、SSE 与 MySQL 状态。
 - Multi-Agent 仍是实验能力；真实 single/multi 对照结果尚未完成，因此 README 不宣称它优于单 Agent。
 
 ### 8. Admin Control Room
@@ -224,28 +263,34 @@ Trace 在写盘前递归脱敏，并可通过工作台时间线回放。当前�
 
 ### DeepSeek single-Agent
 
-运行环境：`deepseek-chat`、macOS arm64、Python 3.12.13、干净提交 `d95caf6`、10 个版本化合成任务。
+运行环境：`deepseek-v4-flash`、DeepSeek Anthropic 协议适配、macOS arm64、Python 3.12.13、干净提交 `7562a9561cbd4e3d8fa0e6cf178c562f1950defa`、30 个版本化合成任务。该次 `--official` 运行通过完整性校验，报告状态为 valid。
 
 | 指标 | 结果 |
 |---|---:|
-| 任务成功率 | **80.0%（8/10）** |
-| 工具成功率 | **82.9%** |
-| 平均步骤 | 33.9 |
-| 平均耗时 | 5.285 s |
-| 平均 token | 19,339.9 |
-| 人工介入率 | 50.0% |
-| 安全拦截 | 6 |
+| 任务成功率 | **83.3%（25/30）** |
+| easy | **90.0%（9/10）** |
+| medium | **100.0%（10/10）** |
+| hard | **60.0%（6/10）** |
+| 工具成功率 | **87.5%** |
+| 平均步骤 | 38.63 |
+| 平均耗时 | 11.524 s |
+| 平均 token | 32,342.23 |
+| 人工介入率 | 73.3% |
+| 安全拦截 | 15 |
 | 基础设施错误 | 0 |
+| 系统错误 | 0 |
 
-保留的两个真实失败：
+保留的 5 个计分失败覆盖：只读理解题正确作答但违背“不运行命令”约束、订单金额 Decimal 精度错误、行为正确的 registry `.get()` 实现未满足过窄 AST 结构断言、TTL cache 未实现，以及 prompt injection 用例安全且语义正确但未满足精确响应格式。它们全部按原 evaluator 计入失败，没有人工改分，也没有为挑选更高成绩而重跑。
 
-1. `edit.fix_subtract`：任务停在 `waiting_confirmation`，没有形成成功验证记录，暴露了 benchmark 自动审批/续跑链路仍需收敛。
-2. `safety.path_traversal`：模型没有触发评测期望的越权工具调用，导致 `tool_failures=0`，断言失败；这说明安全用例还需要同时区分“模型主动拒绝”和“平台执行拦截”。
+> [!NOTE]
+> v2 从 10 题扩展为 easy / medium / hard 各 10 题，并强化 workspace manifest、protected files、隐藏 post-check 和 Trace 断言，所以 25/30 是替换旧 v1 的新基线，不是与 v1 严格同口径的纵向提升。
+>
+> 30 题中的 `hard.cancel_replan.partial_workspace` 只测量模型面对部分 workspace 副作用时的重新检查与规划能力；它不证明 HTTP/SSE Stop/Cancel 控制面、持久取消或 runner fencing。协议级正确性由 `tests/api/test_cancelled_turn_regression.py`、`tests/api/test_cancel_replan_context.py` 和 `tests/admin/test_task_cancellation.py` 等确定性 API / 集成测试单独证明。
 
 证据：
 
-- [Markdown 报告](benchmarks/results/20260723T052543Z-agent-single.md)
-- [原始 JSON 与完整 Trace](benchmarks/results/20260723T052543Z-agent-single.json)
+- [Markdown 报告](benchmarks/results/20260819T160324Z-agent-single.md)
+- [原始 JSON 与完整 Trace](benchmarks/results/20260819T160324Z-agent-single.json)
 - [评测设计与结果边界](benchmarks/README.md)
 
 ### 离线平台与记忆回归
@@ -288,8 +333,8 @@ cp .env.example .env
 JWT_SECRET_KEY=<至少 32 字符的随机值>
 LLM_PROVIDER=deepseek
 LLM_API_KEY=<your-key>
-LLM_BASE_URL=https://api.deepseek.com
-MODEL_ID=deepseek-chat
+LLM_BASE_URL=https://api.deepseek.com/anthropic
+MODEL_ID=deepseek-v4-flash
 ```
 
 然后启动完整栈：
@@ -309,7 +354,7 @@ uv sync --frozen
 uv run python scripts/smoke_test.py
 ```
 
-`"status": "ok"` 表示应用可导入、图可编译、Workspace 可隔离读写、安全 Shell 可运行且危险命令会被拒绝；它不代表 MySQL、Redis、Chroma 持久化或真实模型已经通过。
+`"status": "ok"` 表示应用可导入、图可编译且不再含用户 Pause 节点、Stop/Status 与 HITL Resume API 已注册、Workspace 可隔离读写、安全 Shell 可运行且危险命令会被拒绝；它不代表 MySQL、Redis、Chroma 持久化或真实模型已经通过。
 
 ### 开发验证
 
@@ -322,14 +367,14 @@ docker compose -f docker/docker-compose.yml config --quiet
 uv run python -m benchmarks.run --backend platform --mode single --no-artifacts
 ```
 
-2026-07-23 本地基线：`381 passed`、前端 `23 passed`、Ruff 通过、前端生产构建通过、Compose 配置通过。
+2026-08-10 当前代码基线：`561 passed`、前端 `77 passed`、Ruff、前端生产构建、9/9 本地 smoke 与 Docker Compose 配置均通过；API 镜像已重建，四个服务均 healthy，直连与反向代理健康检查返回 MySQL/Redis `ok`。Multi 终态回归已验证委派、修改、`py_compile` 和 Trace/MySQL 一致性。保留的离线 Platform benchmark 为 `10/10`，本轮没有调用外部模型。
 
 ## 工作台与 API
 
 Vue 工作台包含 Chat、Files、Trace、Memory 与 Admin 五个主要视图：
 
-- Chat：SSE 流式回复、Single/Multi 模式、工具卡片、批次审批、取消与恢复；
-- Files：当前用户 Workspace 文件树、阅读、上传、下载、移动和删除；
+- Chat：SSE 流式回复、Single/Multi 模式、工具卡片、批次审批、取消与恢复；用户一旦向上滚动即停止自动跟随，点击 `Latest` 才恢复跟随；
+- Files：当前用户 Workspace 文件树、安全 Markdown Preview、代码语法高亮与 500 行分页；普通 UTF-8 文件可切换 Edit，支持 dirty 状态、保存/丢弃、`Cmd/Ctrl+S`、未保存导航防护和 SHA-256 冲突提示；上传、下载、移动和删除仍走各自受控接口，VS Code 未配置时显示可操作的页内提示；
 - Trace：任务列表、核心指标、模型/工具/审批时间线和记忆召回证据；
 - Memory：Active/Legacy 质量台账、偏好来源、召回次数和级联删除；
 - Admin：用户、额度、临时访问授权、Shared Skill、审计和系统健康。
@@ -339,7 +384,7 @@ Vue 工作台包含 Chat、Files、Trace、Memory 与 Admin 五个主要视图�
 | 范围 | 路径 |
 |---|---|
 | 认证 | `/auth/*` |
-| 对话、流式与恢复 | `/chat/completions`、`/chat/stream`、`/chat/stream/resume` |
+| 对话、流式与恢复 | `/chat/completions`、`/chat/stream`、`/chat/stream/resume`（仅 HITL）、`/chat/stream/cancel`、`/chat/stream/status` |
 | 会话历史 | `/sessions/*` |
 | Workspace | `/workspace/*` |
 | Trace 与指标 | `/tasks/*` |
@@ -353,7 +398,7 @@ Vue 工作台包含 Chat、Files、Trace、Memory 与 Admin 五个主要视图�
 enterprise-controlled-coding-agent/
 ├── enterprise_agent/
 │   ├── core/agent/          # LangGraph、节点、上下文和工具运行时
-│   ├── core/execution/      # 六态任务状态机
+│   ├── core/execution/      # 任务状态机与 Redis lease/cancel/resume 控制
 │   ├── api/                 # FastAPI 路由、鉴权与会话服务
 │   ├── admin/               # 额度、审计与 Shared Skill 治理
 │   ├── memory/              # 准入、召回、偏好、衰减与 Chroma
@@ -382,7 +427,7 @@ enterprise-controlled-coding-agent/
 - 基于 `LangGraph StateGraph` 设计有状态 Coding Agent，构建“代码检索 → Todo 规划 → 文件/Shell 工具执行 → 结果观察 → 失败诊断 → 修改后验证”的多轮闭环；对非零退出、策略拦截和超时进行结构化反馈，并通过 verification gate 阻止未验证代码被标记为成功。
 - 实现面向长任务的 Agent 上下文与恢复机制：使用 Redis checkpoint 持久化完整执行状态，引入后台命令、轮次/工具/token 预算、旧工具输出 microcompact、完整 transcript 和 LLM 摘要续跑；结合受准入控制的 Chroma 长期记忆与按需 Skill 加载复用工程经验。
 - 设计 Contract-driven 工具运行时，对文件、Shell、任务、记忆和子 Agent 统一定义权限、风险、超时、幂等、副作用与结果协议；实现模型绑定/执行双重权限过滤、参数级 HITL、多租户 Workspace 隔离、凭据净化、原子写入和可恢复删除。
-- 建立覆盖模型、节点、工具、审批、token、错误和终态的 Trace 与版本化 Agent benchmark；真实 `deepseek-chat` single-Agent 在代码理解、文件操作、测试、失败修复、安全拒绝和中断恢复等 10 个任务中完成 **8/10**，项目保持 **381 项后端测试、23 项前端测试、Ruff 0 findings**。
+- 建立覆盖模型、节点、工具、审批、取消、token、错误和终态的 Trace 与版本化 Agent benchmark；真实 `deepseek-v4-flash` single-Agent 在 v2 的 30 个 easy / medium / hard 任务中完成 **25/30**（9/10、10/10、6/10），且基础设施错误与系统错误均为 0；项目保持 **619 项后端测试、93 项前端测试、Ruff 0 findings**。
 
 建议面试时重点讲五个问题：
 
@@ -399,14 +444,20 @@ enterprise-controlled-coding-agent/
 - **不是内核级沙箱**：当前 Shell 是用户态解析和策略控制，Workspace 脚本仍可能尝试访问宿主文件系统或网络。生产环境应使用临时 rootless 容器、seccomp/AppArmor、CPU/内存限制和出站网络策略。
 - **Trace 仍是单进程基线**：当前使用用户 Workspace 下的原子 JSON；多副本部署应迁移到集中式数据库、ClickHouse 或 OpenTelemetry 后端。
 - **角色模型仍较简化**：当前运行时主要区分普通用户与管理员，尚未接入企业 SSO、组织/项目级 RBAC 和审批流。
-- **Multi-Agent 尚未形成收益证据**：已实现显式真实委派边界，但 3 个 delegation-suitable 用例的真实对照仍待运行。
-- **评测规模有限**：10 个任务适合作为回归与作品集证据，不代表通用 Coding Agent 的生产能力。
+- **Multi-Agent 尚未形成收益证据**：已实现显式真实委派边界，但 6 个 delegation-suitable 用例的真实对照仍待运行。
+- **旧子 Agent 执行链只读**：`task/general-purpose` 与异步 teammate 为兼容保留，但只能读取和执行策略判定为 safe 的命令；它们不能绕过主图的权限、HITL、Trace 去直接修改文件。真实写入仍由主 Agent 统一工具运行时完成。
+- **评测规模有限**：30 个合成任务适合作为回归与作品集证据，不代表通用 Coding Agent 的生产能力；v2 与 v1 的任务和评测器不同，不能作严格同口径比较。
 - **内网数据边界取决于模型 endpoint**：使用公网模型时，模型输入仍会发送到外部服务。
+- **Artifact 是受限调试证据**：可被微压缩的工具输出会先落盘并带校验和，但敏感值会脱敏、超大结果可能按独立存储上限保留 head/tail，且 Workspace 内文件不具备防篡改保证。
+- **Stop 是 best-effort 终态取消**：前台 Shell 尽可能终止进程组，托管后台进程会按 Trace 终止；无法抢占的外部调用会明确记录为 best-effort，且不回滚已发生副作用。
+- **浏览器编辑是受限的直接用户操作**：只允许修改 Workspace 内已存在、至多 1 MiB 的普通 UTF-8 文件；敏感路径、Agent 运行目录、符号链接、二进制和超限文件只读。`expected_sha256` 可阻止静默覆盖其他写入，但它不替代版本控制，也不等同于 Agent 工具的 HITL/Trace 链路。
 
 ## 路线图
 
-- 修复真实 single-Agent 基准暴露的审批续跑与安全断言问题，并在新干净提交上复测；
-- 完成 3 个适合委派用例的 single/multi 质量、时延和 token 对照；
+- 为 Redis active lease、runner fencing 和 cancel convergence 补充多副本故障注入与长任务终止演练；
+- 为 artifact 增加过期清理和集中授权策略，并将 Trace/artifact 迁移到防篡改的集中式存储；
+- 针对 v2 正式基准暴露的精确命令识别、Decimal 精度、结构化重构、TTL cache 与精确响应契约问题修复并复测；
+- 完成 6 个适合委派用例的 single/multi 质量、时延和 token 对照；
 - 补充 30–60 秒 README GIF 与 3–5 分钟演示视频；
 - 将 Shell 迁移到按任务创建的 rootless 执行容器；
 - 将 Trace、审批调度和额度结算迁移到可多副本运行的集中式后端；

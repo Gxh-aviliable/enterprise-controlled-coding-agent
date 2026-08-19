@@ -1,4 +1,4 @@
-"""Subagent tool for delegating work to specialized agents.
+"""Subagent tool for delegating read-only work to specialized agents.
 
 Provides task tool for spawning subagents with limited tool access
 to perform isolated exploration or execution work.
@@ -6,6 +6,8 @@ to perform isolated exploration or execution work.
 Supports multi-provider: Anthropic, GLM, DeepSeek, OpenAI.
 """
 
+import json
+import logging
 from typing import Dict, Optional
 
 from langchain_core.tools import tool
@@ -16,7 +18,10 @@ from enterprise_agent.core.agent.llm_factory import get_llm
 # Available agent types and their tool sets
 AGENT_TYPES = {
     "Explore": ["bash", "read_file"],
-    "general-purpose": ["bash", "read_file", "write_file", "edit_file"],
+    # Compatibility alias retained for callers that used the legacy name. It
+    # is intentionally read-only: child tool loops do not own the lead graph's
+    # permission, HITL, retry, Trace, or checkpoint boundary.
+    "general-purpose": ["bash", "read_file"],
     # A tool-free, isolated model context for planning, review, writing, and
     # other specialist opinions that should not mutate the workspace.
     "specialist": [],
@@ -36,17 +41,16 @@ SUBAGENT_SYSTEM_PROMPTS = {
 - Summarize your findings clearly and concisely
 - Do NOT modify any files — you are read-only""",
 
-    "general-purpose": """You are a general-purpose agent capable of reading and writing code.
+    "general-purpose": """You are a general-purpose analysis agent in a read-only child context.
 
 ## Capabilities
-- Run shell commands
-- Read, write, and edit files
+- Run only policy-classified safe shell commands
+- Read project files
 
 ## Guidelines
-- Complete the task described in the prompt
-- Be careful with file modifications — read before editing
-- Report a clear summary of what you did
-- If you encounter errors, try to fix them before reporting failure""",
+- Analyze the requested implementation and return a concrete patch plan
+- Do not modify files; the lead Agent applies changes through its governed runtime
+- Report a clear summary with filenames, risks, and validation suggestions""",
 
     "specialist": """You are an independent specialist subagent working in an isolated context.
 
@@ -63,31 +67,85 @@ SUBAGENT_SYSTEM_PROMPTS = {
 }
 
 
-def _execute_subagent_tool(tool_name: str, tool_input: Dict) -> str:
+def _execute_subagent_tool(
+    tool_name: str,
+    tool_input: Dict,
+    tool_call_id: str | None = None,
+) -> str:
     """Execute a tool call within subagent context.
 
     Uses the actual tool implementations from other modules.
     """
-    from enterprise_agent.core.agent.tools.file_ops import edit_file, read_file, write_file
+    from enterprise_agent.core.agent.tools.contracts import RiskLevel, resolve_tool_risk
+    from enterprise_agent.core.agent.tools.file_ops import read_file
     from enterprise_agent.core.agent.tools.shell import bash
 
     tool_map = {
         "bash": bash,
         "read_file": read_file,
-        "write_file": write_file,
-        "edit_file": edit_file,
     }
 
     tool = tool_map.get(tool_name)
     if not tool:
-        return f"Unknown tool: {tool_name}"
+        return f"Blocked: autonomous subagent tool is not allowed: {tool_name}"
+    if tool_name == "bash" and resolve_tool_risk(tool_name, tool_input) is not RiskLevel.SAFE:
+        return (
+            "Blocked: autonomous subagents may execute only policy-classified safe "
+            "shell commands; return the requested mutation to the lead Agent."
+        )
 
     # Execute the tool
     try:
-        result = tool.invoke(tool_input)
-        return str(result)[:settings.TOOL_OUTPUT_MAX_CHARS]
-    except Exception as e:
-        return f"Error: {e}"
+        from enterprise_agent.core.agent.tool_artifacts import (
+            ToolArtifactStore,
+            format_tool_output,
+        )
+        from enterprise_agent.core.agent.tools.contracts import normalize_tool_result
+        from enterprise_agent.core.agent.tools.workspace import (
+            get_current_session_id,
+            get_current_user_id,
+        )
+
+        raw_result = tool.invoke(tool_input)
+        raw_output = (
+            json.dumps(raw_result, ensure_ascii=False, sort_keys=True, default=str)
+            if isinstance(raw_result, (dict, list))
+            else str(raw_result)
+        )
+        normalized = normalize_tool_result(
+            tool_name=tool_name,
+            tool_call_id=tool_call_id or tool_name,
+            raw_result=raw_result,
+            duration_ms=0,
+            attempt_count=1,
+        )
+        receipt = None
+        artifact_error = None
+        if len(raw_output) > 100:
+            try:
+                receipt = ToolArtifactStore(user_id=get_current_user_id()).save(
+                    raw_output,
+                    trace_id=f"subagent-{get_current_session_id() or 'session'}",
+                    tool_call_id=tool_call_id or tool_name,
+                )
+            except Exception:
+                logging.exception("Subagent tool artifact persistence failed")
+                artifact_error = "artifact_write_failed"
+        if artifact_error and len(raw_output) > settings.TOOL_OUTPUT_MAX_CHARS:
+            return "Error: artifact_write_failed; large subagent output was not continued."
+        if receipt is not None or len(raw_output) > settings.TOOL_OUTPUT_MAX_CHARS or artifact_error:
+            return format_tool_output(
+                raw_output,
+                receipt=receipt,
+                status=normalized.status.value,
+                error_code=normalized.error_code,
+                exit_code=normalized.exit_code,
+                artifact_error=artifact_error,
+            )[0]
+        return raw_output
+    except Exception:
+        logging.exception("Autonomous subagent tool execution failed")
+        return "Error: subagent_tool_execution_failed"
 
 
 async def _run_subagent_async(prompt: str, agent_type: str) -> str:
@@ -120,18 +178,6 @@ async def _run_subagent_async(prompt: str, agent_type: str) -> str:
                 func=lambda path: _execute_subagent_tool("read_file", {"path": path}),
                 description="Read file",
             ))
-        elif name == "write_file":
-            tools.append(Tool(
-                name="write_file",
-                func=lambda args: _execute_subagent_tool("write_file", args),
-                description="Write file",
-            ))
-        elif name == "edit_file":
-            tools.append(Tool(
-                name="edit_file",
-                func=lambda args: _execute_subagent_tool("edit_file", args),
-                description="Edit file",
-            ))
 
     # Get LLM and bind tools
     try:
@@ -149,6 +195,12 @@ async def _run_subagent_async(prompt: str, agent_type: str) -> str:
 
     # Run subagent loop
     for _ in range(settings.SUBAGENT_MAX_ROUNDS):
+        from enterprise_agent.core.execution.interrupt_control import (
+            is_current_task_cancel_requested,
+        )
+
+        if await is_current_task_cancel_requested():
+            return "Subagent cancelled by the parent task Stop request."
         try:
             response = await llm_with_tools.ainvoke(messages)
         except Exception as e:
@@ -163,11 +215,13 @@ async def _run_subagent_async(prompt: str, agent_type: str) -> str:
         # Execute tool calls
         tool_results = []
         for tool_call in response.tool_calls:
+            if await is_current_task_cancel_requested():
+                return "Subagent cancelled before the next tool invocation."
             tool_name = tool_call.get("name")
             tool_args = tool_call.get("args", {})
             tool_id = tool_call.get("id", "")
 
-            output = _execute_subagent_tool(tool_name, tool_args)
+            output = _execute_subagent_tool(tool_name, tool_args, tool_id)
             tool_results.append(ToolMessage(content=output, tool_call_id=tool_id))
 
         messages.extend(tool_results)
@@ -186,16 +240,16 @@ async def task(prompt: str, agent_type: Optional[str] = "Explore") -> str:
     """Delegate work to a subagent for isolated execution. Returns a summary.
 
     Use when: (1) Search/explore large codebase (Explore agent, read-only)
-              (2) Self-contained implementation task (general-purpose, read/write)
+              (2) Ask for an independent implementation plan (general-purpose, read-only)
               (3) 3+ independent tasks — spawn multiple task() calls in parallel
 
     Examples:
         - Search patterns: task("Find database connection patterns", "Explore")
-        - Implement feature: task("Add JWT auth to Flask app", "general-purpose")
+        - Plan feature: task("Plan JWT auth for this Flask app", "general-purpose")
 
     Args:
         prompt: Task description (be specific about what to do)
-        agent_type: 'Explore' (read-only) or 'general-purpose' (read/write)
+        agent_type: 'Explore' or compatibility alias 'general-purpose' (both read-only)
 
     Returns:
         Summary of what the subagent did and its findings
