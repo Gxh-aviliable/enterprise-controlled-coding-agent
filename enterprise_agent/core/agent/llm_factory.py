@@ -37,7 +37,7 @@ def _get_deepseek_llm() -> BaseChatModel:
     Uses ChatAnthropic for the Anthropic-compatible endpoint
     (/anthropic) or ChatOpenAI for the OpenAI-compatible endpoint.
 
-    Note: DeepSeek thinking models (deepseek-v4-pro) have long response times
+    Note: DeepSeek V4 thinking mode can have long response times
     during thinking generation, so timeout is increased to 300 seconds.
     Also disables SDK internal retries to prevent duplicate retry logic.
     """
@@ -149,7 +149,7 @@ PROVIDER_INFO = {
     },
     "deepseek": {
         "name": "DeepSeek",
-        "models": ["deepseek-v4-flash", "deepseek-chat", "deepseek-coder"],
+        "models": ["deepseek-v4-flash", "deepseek-v4-pro"],
         "tool_support": True,
         "embedding_support": False,
         "base_url": "https://api.deepseek.com",

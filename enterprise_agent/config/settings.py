@@ -77,7 +77,7 @@ class Settings(BaseSettings):
     LLM_PROVIDER: str = "deepseek"
     LLM_API_KEY: str = ""  # Universal API key
     LLM_BASE_URL: Optional[str] = "https://api.deepseek.com/anthropic"  # Anthropic-compatible endpoint
-    MODEL_ID: str = "deepseek-v4-pro"  # Model identifier
+    MODEL_ID: str = "deepseek-v4-flash"  # Model identifier
 
     # Legacy Anthropic config (for backward compatibility)
     ANTHROPIC_API_KEY: str = ""
@@ -154,7 +154,7 @@ class Settings(BaseSettings):
     MEMORY_CLEANUP_THRESHOLD: float = 0.1  # 留存分数低于此值则清理
     MEMORY_CLEANUP_INTERVAL_HOURS: int = 1  # 清理任务间隔（小时）
     ENABLE_LLM_IMPORTANCE_EVAL: bool = True  # 是否启用 LLM 重要性评估
-    IMPORTANCE_EVAL_MODEL: str = "deepseek-chat"  # 重要性评估使用的模型
+    IMPORTANCE_EVAL_MODEL: str = "deepseek-v4-flash"  # 重要性评估使用的模型
 
     # Output Verification (trust but verify - prevent hallucination)
     ENABLE_EDIT_VERIFICATION: bool = True  # Auto re-read after edit_file

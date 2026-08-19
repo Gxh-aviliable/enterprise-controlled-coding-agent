@@ -327,8 +327,8 @@ cp .env.example .env
 JWT_SECRET_KEY=<至少 32 字符的随机值>
 LLM_PROVIDER=deepseek
 LLM_API_KEY=<your-key>
-LLM_BASE_URL=https://api.deepseek.com
-MODEL_ID=deepseek-chat
+LLM_BASE_URL=https://api.deepseek.com/anthropic
+MODEL_ID=deepseek-v4-flash
 ```
 
 然后启动完整栈：
