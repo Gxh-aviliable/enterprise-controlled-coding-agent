@@ -74,7 +74,6 @@ pyproject.toml
   → api/routes/chat.py:_task_input
   → core/agent/graph.py:build_agent_graph
   → task_parse / init_context / plan_task
-  → pause_*_gate / user_pause_* （安全边界协作式暂停）
   → llm_call
   → route_after_llm
   → prepare_tool_execution / tool_confirm
@@ -89,9 +88,9 @@ pyproject.toml
 
 - 携带 JWT 调用 `/chat/stream`；
 - 消费 `text/event-stream`；
-- 在收到 `interrupt` 后调用 `/chat/stream/resume`；
-- 通过 `/chat/stream/pause` 请求暂停，收到 `paused` 后通过 `/chat/stream/continue` 续跑同一 Trace；
-- 在需要时调用取消接口；
+- 在收到 typed `tool_confirmation` interrupt 后调用 `/chat/stream/resume`，并保持原 Trace；
+- 在需要时调用 `/chat/stream/cancel`，只在 `/chat/stream/status` 确认原 Trace 已 `cancelled` 后解锁输入；
+- 取消后的下一条消息启动新 Trace，而不是 resume 旧 Graph；
 
 的 HTTP 客户端。
 
@@ -1741,7 +1740,7 @@ enterprise-controlled-coding-agent/
 │   ├── api/                    # FastAPI 控制面
 │   ├── core/
 │   │   ├── agent/              # AgentState、Graph、Nodes、Tools、LLM
-│   │   └── execution/          # 七态任务状态机与 Redis 暂停控制
+│   │   └── execution/          # 任务状态机与 Redis interrupt/lease 控制
 │   ├── memory/                 # 长期记忆准入、召回、衰减
 │   ├── observability/          # Trace 存储与指标
 │   ├── auth/                   # JWT、权限和邮件
@@ -1946,7 +1945,7 @@ sequenceDiagram
     API->>G: astream(_task_input, thread_id=session_id)
     G->>R: 每个节点后保存 checkpoint
     G-->>API: messages / updates
-    API-->>C: delta / tool_start / interrupt / paused / tool_result
+    API-->>C: delta / tool_start / interrupt / tool_result / cancelled
     API->>DB: 持续更新助手消息状态和正文
     API-->>C: [DONE]
 ```
@@ -2050,7 +2049,6 @@ RedisSaver 用 `thread_id` 找到这段对话的 Agent checkpoint。因此：
 |---|---|
 | `task_started` | 一趟新任务已建立，包含 trace_id |
 | `interrupt` | typed `tool_confirmation` 已暂停，等待用户确认 |
-| `paused` | typed `user_pause` 已在安全边界 checkpoint，可 Continue |
 | `tool_result` | 规范化工具结果与摘要 |
 | `tool_end` | 工具卡片终态 |
 | `cancelled` | 用户主动取消 |
@@ -2182,20 +2180,21 @@ active / archived / deleted
 
 ### 11.2 Agent 任务状态
 
-`AgentState.task_status` 使用字符串保存七种值，对应
+`AgentState.task_status` 使用字符串保存执行状态，对应
 `enterprise_agent/core/execution/state_machine.py:TaskStatus`；合法迁移由
 `transition_task_status` 统一校验：
 
 ```text
-pending / running / paused / waiting_confirmation / succeeded / failed / cancelled
+pending / running / waiting_confirmation / succeeded / failed / cancelled
 ```
 
 它描述“一条用户请求的执行结果”。
 
 > [!IMPORTANT]
-> `paused` 表示用户 Pause 请求已在安全边界被 Agent 确认并写入
-> RedisSaver checkpoint；`waiting_confirmation` 只表示敏感工具在等待
-> HITL 决策。两者使用不同 typed interrupt，而 `cancelled` 仍是不可恢复终态。
+> `waiting_confirmation` 表示敏感工具在等待 typed `tool_confirmation`
+> HITL 决策，它是唯一可 `Command(resume)` 的中断。`cancelled` 是不可恢复终态。
+> `TaskStatus.PAUSED` 在兼容窗口内仍可解析，仅为了把旧 checkpoint 终态化为
+> `cancelled`；当前状态机不再允许进入或恢复 `paused`。
 
 ### 11.3 Todo 或持久任务状态
 
@@ -2205,7 +2204,7 @@ Todo 和 `.tasks/` 任务板描述 Agent 计划中的工作项。它们不是 La
 
 ---
 
-## 12. 七态状态机
+## 12. 任务状态机与 legacy PAUSED 兼容
 
 源码定位：
 
@@ -2216,8 +2215,6 @@ stateDiagram-v2
     [*] --> pending
     pending --> running
     pending --> cancelled
-    running --> paused
-    paused --> running
     running --> waiting_confirmation
     waiting_confirmation --> running
     running --> succeeded
@@ -2225,8 +2222,8 @@ stateDiagram-v2
     running --> cancelled
     waiting_confirmation --> failed
     waiting_confirmation --> cancelled
-    paused --> failed
-    paused --> cancelled
+    legacy_paused --> failed: 仅迁移
+    legacy_paused --> cancelled: 仅迁移
 ```
 
 ### 12.1 为什么同状态更新允许通过
@@ -3068,10 +3065,9 @@ ContextVar 让同一进程中的工具知道当前 user/session，但 API 在进
 - `api/routes/chat.py:get_pending_confirmation`
 
 > [!IMPORTANT]
-> 当前有两种独立中断：HITL 使用 typed `tool_confirmation`，用户主动 Pause
-> 使用 typed `user_pause`。两者都由 RedisSaver 保存 checkpoint，但恢复 API
-> 与 payload 不可混用。红色 Stop 执行 `/chat/stream/cancel`，任务会进入
-> 不可恢复的 `cancelled`。
+> typed `tool_confirmation` 是当前唯一可恢复中断，由 RedisSaver 保存
+> checkpoint，并在原 Trace 上使用 `Command(resume=...)`。红色 Stop 执行
+> `/chat/stream/cancel`，任务进入不可恢复的 `cancelled`；后续任务创建新 Trace。
 
 ```mermaid
 sequenceDiagram
@@ -3140,165 +3136,88 @@ resume payload：
 
 ## 34. 取消任务
 
-`request_task_cancellation()` 处理两种情况：
+### 34.1 Redis 是多 worker 下的权威控制面
 
-### 34.1 SSE 正在运行
-
-- 设置当前 Trace 对应的 cancel event；
-- 生成器检测后停止；
-- 标记 cancelled，并在 checkpoint 中幂等追加 Assistant cancellation tombstone；
-- 清理后台进程管理器；
-- 将对应 MySQL assistant 行收敛为 `cancelled`，并防止晚到的 SSE finally 将它回退为 `interrupted`。
-
-Tombstone 不会删除被终止的用户问题：保留它才能正确回答
-“我刚才问了什么”；但它会把消息序列从错误的 `Human → Human`
-闭合为 `Human → Assistant(cancelled) → Human`，防止模型继续执行上一个请求。
-
-### 34.2 图正停在 interrupt
-
-- `tool_confirmation` 用拒绝 payload 恢复，`user_pause` 用 `action=cancel`
-  恢复；
-- 清理未完成 interrupt；
-- 收敛工具、Todo 和 Trace；
-- 不让 checkpoint 永久处于悬挂状态。
-
-### 34.3 用户 Pause/Continue：已实现的协作式暂停
-
-#### 为什么 RedisSaver 不会自动带来暂停按钮
-
-RedisSaver 解决的是“节点执行完或 interrupt 发生后，图状态保存在哪里”。它不会：
-
-- 自动给状态机增加 `paused`；
-- 自动产生 Pause/Resume API；
-- 在任意 Python、模型或工具调用中间抢占执行；
-- 把当前的 Stop/Cancel 终态改成可恢复暂停；
-- 自动处理多副本之间的暂停控制信号。
-
-因此本项目在 RedisSaver 之上另外实现了
-`core/execution/pause_control.py`、七态状态机、安全边界 pause gate、typed
-`user_pause` interrupt 和独立 Pause/Status/Continue API。
-
-当前代码的真实语义是：
+开始新任务时，API 为精确的 `user_id + session_id + trace_id` 申请
+active-trace lease。lease 同时保存 owner token、runner token、fence 和
+runner epoch。进程内的 event/map 只是低延迟优化，不是多 worker 下的
+任务归属事实。
 
 ```text
-HITL：
-prepare_tool_execution 写 waiting_confirmation
-→ RedisSaver checkpoint
-→ tool_confirm 调用 interrupt()
-→ /stream/resume 使用 Command(resume=...)
-
-用户 Pause：
-→ /stream/pause 写入精确到 user + session + trace 的 Redis 请求
-→ pause_*_gate 在安全边界写 paused 并 checkpoint
-→ user_pause_* 调用 interrupt(type=user_pause)
-→ /stream/continue 校验同一 Trace 并 Command(resume=...)
-
-红色 Stop：
-前端中止 SSE
-→ /stream/cancel
-→ Redis checkpoint 写入 task_status = cancelled + Assistant tombstone
-→ MySQL assistant 行幂等收敛为 cancelled
-→ 不允许恢复为 running
+POST /stream/cancel(session_id, trace_id)
+→ 校验 MySQL 会话归属和 Redis active Trace 精确匹配
+→ 原子写入 trace-specific cancel tombstone
+→ runner 在模型/流边界以及每次工具调用前检查
+→ 持久化 cancelled checkpoint、Assistant tombstone 和 continuation receipt
+→ 持有正确 runner token 的一方标记 stopped
+→ 仅在 runner stopped 后释放精确 lease
 ```
 
-#### 当前实现流程
+Cancel endpoint 在老 runner 尚未确认停止时返回 `cancelling`，不会伪造
+`cancelled`。前端在这种状态或请求失败时保持输入锁定，允许重试
+或重新查询 `/stream/status`。
 
-当前实现把“控制请求”和“图 checkpoint”分开：
+runner/fence 身份也用于丢弃老 Trace 的晚到 delta、tool event、done 和
+checkpoint 终结回调。老 runner 不能释放新 Trace 的 lease，也不能修改新任务
+时间线。
 
-```text
-用户点击暂停
-→ Pause API 校验 user_id、session_id、trace_id
-→ Redis 以 SET NX EX 写入精确绑定 user + session + trace 的 pause_requested
-→ Agent 在下一节点安全边界读取控制标记
-→ pause_*_gate 将 task_status 写成 paused，并记录 pause metadata
-→ pause_*_gate 节点完成，RedisSaver 保存完整 checkpoint
-→ 对应的 user_pause_* 节点调用 interrupt(type="user_pause")
-→ SSE 向前端发送 paused，界面显示“已暂停”
-→ 用户点击继续
-→ Continue API 再次校验用户、会话、trace 和 interrupt 类型
-→ Redis SET NX EX 获取该 trace 的短期 resume lock
-→ Command(resume={"action": "continue", "trace_id": trace_id})
-→ interrupt 返回，task_status 从 paused 转回 running
-→ user_pause_* 清除该 trace 的 pause_requested
-→ 从保存的图位置继续
-```
+### 34.2 运行中、工具中和 waiting-confirmation 的 Stop
 
-这里特意把“写 `paused` 并保存 checkpoint”放在 `interrupt()` 之前。原因是
-`interrupt()` 后面的代码直到恢复时才会执行；如果先 interrupt、再设置 paused，
-暂停期间 Redis 和前端反而看不到权威的 paused 状态。正确做法与现有
-`prepare_tool_execution → tool_confirm` 两节点模式相同。
+- 运行中：流处理器观察 cancel tombstone，关闭 Graph stream，写入终态后才释放 lease。
+- 工具中：批次中的每个调用前都重新查 Redis。POSIX 前台 Shell 使用
+  `Popen` 和独立进程组，尽可能 TERM/KILL；没有立即中断原语的外部
+  操作明确记录为 best-effort cancellation。托管 `background_run` 会按原 Trace
+  终止进程组。
+- waiting-confirmation：确认弹窗里的“终止任务”调用 Cancel，不是
+  Reject All。后端直接终态化该 Trace，不用拒绝 payload 恢复图。
 
-```mermaid
-sequenceDiagram
-    participant FE as Frontend
-    participant API as Pause/Continue API
-    participant CTRL as Redis control
-    participant PREP as pause_*_gate
-    participant CP as RedisSaver
-    participant GATE as user_pause_*
+Stop 只保证不再启动后续 Agent 工作，不承诺回滚已经完成的文件写入
+或外部副作用。
 
-    FE->>API: pause(trace_id)
-    API->>API: 校验用户、会话和 Trace
-    API->>CTRL: pause_requested=true
-    PREP->>CTRL: 在安全边界读取标记
-    PREP->>PREP: task_status=paused
-    PREP->>CP: 节点完成并保存 checkpoint
-    PREP->>GATE: 进入暂停中断节点
-    GATE->>CP: interrupt(type=user_pause)
-    GATE-->>FE: paused SSE
-    FE->>API: continue(trace_id)
-    API->>API: 重新鉴权并核对 checkpoint
-    API->>CTRL: 获取该 Trace 的 resume lock
-    API->>GATE: Command(resume={action: continue})
-    GATE->>GATE: paused → running
-    GATE->>CTRL: 清除该 Trace 的 pause_requested
-```
+### 34.3 Cancel-and-replan 为什么必须创建新 Trace
 
-#### 必须明确的边界
+一份 cancellation continuation receipt 至少保存：
 
-- `pause_requested` 已绑定 `user_id + session_id + trace_id`，不会让迟到的请求
-  错误暂停同一会话的下一条任务。
-- 安全检查点已覆盖首轮/下一轮 LLM、工具派发、确认后工具执行、
-  工具 checkpoint、验证、压缩和最终收敛前。
-- 模型或前台工具正在阻塞时，只能等它返回下一安全边界；这叫协作式暂停，不是
-  强制抢占。
-- 需要立即停止 Shell 进程时应走 Cancel/进程组终止，而不是把 Pause 偷换成 Kill。
-- 暂停不应结算为任务终态，也不应关闭 Todo、写入长期记忆或释放全部恢复证据。
-- Continue 会核对 checkpoint 内的 `trace_id` 和 `user_pause` interrupt 类型，
-  防止恢复旧任务或误消费 HITL 中断。
-- 控制标记存在 Redis 共享后端；单进程的 `_cancel_events` 仍只用于终止当前
-  SSE 执行，不是 Pause 的权威状态。
-- Pause 通过 `SET NX EX` 幂等写入，Continue 通过短期 Redis resume lock 防止
-  双重 `Command(resume=...)`；过期或不匹配的 checkpoint 返回明确 `409`。
+- 原任务目标；
+- 已完成事项与未完成事项；
+- 修改文件；
+- 验证结果；
+- 已知风险。
 
-#### 已有回归覆盖
+同 Session 只有在服务端确认老 Trace 已经 `cancelled` 且 lease 已释放后，
+才能发送下一条消息。新请求创建全新 `trace_id`，不对老图使用
+`Command(resume)`。第一轮 LLM 根据经过裁剪和去重的 durable chat history、当前
+workspace 真实状态以及 receipt 自主重新规划。
 
-- `running → paused → running` 和 `paused → cancelled` 合法迁移；
-- 非暂停状态、错误 Trace、跨用户恢复全部拒绝；
-- Graph 拓扑中的 pause gate 覆盖 LLM 前、工具前、工具后等安全边界；
-- 重复 Pause 幂等，重复 Continue 被 resume lock 拒绝；
-- `paused` 在 typed interrupt 前已由 RedisSaver checkpoint，且 Continue 必须使用同一 Trace；
-- 缺失 checkpoint、错误 Trace 或非本用户会话会返回明确失败；
-- `user_pause` 与 `tool_confirmation` 两类 interrupt 不会互相消费；
-- 前端在请求发出后先显示 `Pausing`，只有收到 `paused` SSE 才显示已暂停。
-- 输入框始终只有一个主按钮：运行中为 Stop，暂停后为 Continue；Pause 和暂停后的
-  Cancel 位于 Execution mode 控制条，避免两个同等级图标造成语义混淆。
-- Pause 请求返回前若用户先 Stop，前端会按 session、Trace 和当前状态丢弃迟到的
-  Pause 响应，已取消任务不会重新显示为 paused。
+Redis checkpoint 已经过期时，API 从 MySQL 恢复模型上下文，避免 UI 看得到
+历史，Agent 却只看到一句“继续”。`plan_task_node` 只标记 planning phase，它不是
+一个真实规划器；真正的新计划发生在新 Trace 的 LLM 调用中。
+
+### 34.4 旧 paused 数据如何迁移
+
+当前图不再包含 pause gate 或 `user_pause` 节点。启动迁移会把旧
+`paused` / `pause_requested` / `resuming` checkpoint 和 Trace 幂等终态化为
+`cancelled`，原因为 `user_pause_feature_retired`，写入 receipt，并清理
+`agent:pause:*` key。历史 Trace 中的 paused 事件可以只读展示，但不再可恢复。
+
+`TaskStatus.PAUSED` 在兼容期结束前仍保留用于解析旧序列化值，只允许转到
+`failed/cancelled`。滚动发布必须先经过保留旧节点且识别 retirement marker
+的 Phase A 桥接版，再发布删除节点/API 的 Phase B。详见
+[Pause/Continue 下线与 Cancel-and-Replan 滚动迁移](cancel-and-replan-rolling-migration.md)。
 
 ---
 
 ## 35. 为什么恢复前必须重新鉴权
 
-暂停可能持续几分钟。在这期间：
+工具确认可能持续几分钟。在这期间：
 
 - 用户可能被停用；
 - 管理员可能降级角色；
 - 会话可能被删除；
 - token 可能属于另一个用户。
 
-因此 `/stream/resume`、`/stream/pause`、`/stream/status`、`/stream/continue`、
-`/confirm`、`/pending_confirm`、取消等路由都先查 MySQL 会话归属，再访问
+因此 `/stream/resume`、`/stream/status`、`/stream/cancel`、`/confirm`、
+`/pending_confirm` 等路由都先查 MySQL 会话归属，再访问
 Redis checkpoint 或该 Trace 的精确控制键。
 
 ---
@@ -3311,14 +3230,16 @@ Redis checkpoint 或该 Trace 的精确控制键。
 | 用户拒绝 | waiting → running/终态 | rejected | rejected |
 | 确认超时 | waiting → running/failed | rejected | confirmation_timeout |
 | dangerous Shell | 通常保持执行流程 | blocked/policy_blocked | safety interception |
-| 用户取消 | cancelled | 未执行调用关闭 | cancelled |
-| 用户主动暂停 | paused → running | 已开始调用到安全边界才停，后续调用保留 | pause_requested + task_paused + resume_requested + task_resumed |
+| Stop running/tool | cancelling → cancelled | 未执行调用关闭，已发生副作用不回滚 | cancel_requested + cancelled + receipt |
+| Stop waiting-confirmation | cancelled | 待确认调用关闭，不伪装 Reject All | cancel_requested + cancelled |
+| Cancel 失败/未收敛 | 保持原活动态 | 不启动新调用 | 前端锁定并重查 status |
+| 取消后下一条消息 | 新 Trace running | 由新 LLM 规划 | durable history + receipt + workspace |
+| legacy paused 迁移 | cancelled | 不恢复旧图 | user_pause_feature_retired |
 
 ### 36.1 对应测试
 
 - `tests/api/test_chat_task_security.py`
-- `tests/core/execution/test_pause_control.py`
-- `tests/core/execution/test_pause_nodes.py`
+- `tests/core/execution/test_interrupt_control.py`
 - `tests/core/execution/test_lifecycle_nodes.py`
 - `tests/core/test_nodes.py`
 - `tests/core/test_graph.py`
@@ -3328,9 +3249,10 @@ Redis checkpoint 或该 Trace 的精确控制键。
 
 - interrupt 后为什么节点会从头重放？
 - Approve All 为什么还可能再次弹确认？
-- 取消一个等待确认的任务，为什么要先拒绝式恢复？
-- 为什么只有 RedisSaver 还不够，项目仍需要 Redis control、pause gate 和 typed interrupt？
-- 为什么 `paused` 必须在独立节点中先 checkpoint，再进入 `interrupt()`？
+- 为什么取消一个等待确认的任务不能伪装成 Reject All？
+- 为什么只有 RedisSaver 还不够，项目仍需要 active lease、cancel tombstone 和 runner fence？
+- 为什么 Cancel endpoint 不能在老 runner 停止前返回 cancelled？
+- 为什么 Cancel 后的继续必须是新 Trace 的 LLM 重新规划？
 
 ---
 

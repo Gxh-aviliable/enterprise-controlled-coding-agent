@@ -430,6 +430,12 @@ class TeammateRunner:
 
             # Call LLM
             try:
+                from enterprise_agent.core.execution.interrupt_control import (
+                    is_current_task_cancel_requested,
+                )
+
+                if await is_current_task_cancel_requested():
+                    return
                 response = await llm_with_tools.ainvoke(self.messages)
             except Exception as e:
                 # Error - may need to shutdown
@@ -444,6 +450,8 @@ class TeammateRunner:
 
             if hasattr(response, "tool_calls") and response.tool_calls:
                 for tool_call in response.tool_calls:
+                    if await is_current_task_cancel_requested():
+                        return
                     tool_name = tool_call.get("name")
                     tool_input = tool_call.get("args", {})
                     tool_id = tool_call.get("id", "")

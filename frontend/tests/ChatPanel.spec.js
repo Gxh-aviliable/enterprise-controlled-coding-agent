@@ -9,10 +9,8 @@ vi.mock('../src/api/client.js', () => ({
   getAgentCapabilities: vi.fn(),
   streamMessage: vi.fn(),
   resumeStream: vi.fn(),
-  pauseStream: vi.fn().mockResolvedValue({ status: 'pause_requested' }),
-  continuePausedStream: vi.fn(),
   getStreamStatus: vi.fn().mockResolvedValue({ status: 'terminal' }),
-  cancelStream: vi.fn().mockResolvedValue({}),
+  cancelStream: vi.fn(),
 }))
 
 const savedHistory = {
@@ -23,6 +21,16 @@ const savedHistory = {
     { role: 'user', content: '你好啊' },
     { role: 'assistant', content: '你好，有什么可以帮你？' }
   ]
+}
+
+function deferred() {
+  let resolve
+  let reject
+  const promise = new Promise((resolvePromise, rejectPromise) => {
+    resolve = resolvePromise
+    reject = rejectPromise
+  })
+  return { promise, resolve, reject }
 }
 
 function mountChatPanel() {
@@ -50,24 +58,83 @@ describe('ChatPanel session history restoration', () => {
     })
     api.streamMessage.mockReset()
     api.resumeStream.mockReset()
-    api.pauseStream.mockReset()
-    api.pauseStream.mockResolvedValue({ status: 'pause_requested' })
-    api.continuePausedStream.mockReset()
     api.getStreamStatus.mockReset()
     api.getStreamStatus.mockResolvedValue({ status: 'terminal' })
     api.cancelStream.mockReset()
-    api.cancelStream.mockResolvedValue({})
+    api.cancelStream.mockImplementation(async (sessionId, traceId) => {
+      const cancelledTraceId = traceId || 'trace-from-active-lease'
+      api.getStreamStatus.mockResolvedValueOnce({
+        status: 'cancelled',
+        session_id: sessionId,
+        trace_id: cancelledTraceId
+      })
+      return {
+        status: 'cancelled',
+        session_id: sessionId,
+        trace_id: cancelledTraceId
+      }
+    })
   })
 
-  it('loads saved history when mounted with an already-selected session', async () => {
+  it('loads legacy role/content history when mounted with an already-selected session', async () => {
     const wrapper = mountChatPanel()
     await flushPromises()
 
     expect(api.getSessionMessages).toHaveBeenCalledTimes(1)
     expect(api.getSessionMessages).toHaveBeenCalledWith('session-existing')
+    expect(wrapper.findAll('[data-entry-role]').map(entry => entry.attributes('data-entry-role'))).toEqual([
+      'user', 'assistant'
+    ])
     expect(wrapper.text()).toContain('你好啊')
     expect(wrapper.text()).toContain('你好，有什么可以帮你？')
 
+    wrapper.unmount()
+  })
+
+  it('replays a saved assistant timeline in text, tool, text order', async () => {
+    api.getSessionMessages.mockResolvedValueOnce({
+      session_id: 'session-existing',
+      message_count: 2,
+      history_status: 'durable',
+      messages: [
+        { role: 'user', content: '检查当前配置' },
+        {
+          role: 'assistant',
+          content: '旧的聚合正文不应被显示',
+          timeline: [
+            { role: 'assistant', content: '先读取配置。' },
+            { role: 'assistant', content: '   ' },
+            {
+              role: 'tool_call',
+              toolCallId: 'call-history-read',
+              toolName: 'read_file',
+              toolStatus: 'done',
+              toolResult: 'DEBUG=false',
+              toolError: '',
+              toolDuration: 18
+            },
+            { role: 'assistant', content: '配置读取完成。' }
+          ]
+        }
+      ]
+    })
+
+    const wrapper = mountChatPanel()
+    await flushPromises()
+
+    const entries = wrapper.findAll('[data-entry-role]')
+    expect(entries.map(entry => entry.attributes('data-entry-role'))).toEqual([
+      'user', 'assistant', 'tool_call', 'assistant'
+    ])
+    expect(entries[1].text()).toContain('先读取配置。')
+    expect(entries[2].find('tool-call-card-stub').attributes()).toMatchObject({
+      name: 'read_file',
+      status: 'done',
+      result: 'DEBUG=false',
+      duration: '18'
+    })
+    expect(entries[3].text()).toContain('配置读取完成。')
+    expect(wrapper.text()).not.toContain('旧的聚合正文不应被显示')
     wrapper.unmount()
   })
 
@@ -134,6 +201,23 @@ describe('ChatPanel session history restoration', () => {
 
     expect(wrapper.text()).toContain('Earlier Redis-only messages expired')
     expect(wrapper.text()).toContain('你好啊')
+    wrapper.unmount()
+  })
+
+  it('keeps an existing session locked when authoritative status lookup fails', async () => {
+    api.getStreamStatus.mockRejectedValueOnce(new Error('status service unavailable'))
+    const wrapper = mountChatPanel()
+    await flushPromises()
+
+    expect(wrapper.text()).toContain('Task status unknown')
+    expect(wrapper.text()).toContain('status service unavailable')
+    expect(wrapper.find('textarea').attributes('disabled')).toBeDefined()
+    expect(wrapper.find('[data-testid="check-stream-status"]').exists()).toBe(true)
+
+    api.getStreamStatus.mockResolvedValueOnce({ status: 'terminal' })
+    await wrapper.find('[data-testid="check-stream-status"]').trigger('click')
+    await flushPromises()
+    expect(wrapper.find('textarea').attributes('disabled')).toBeUndefined()
     wrapper.unmount()
   })
 
@@ -220,6 +304,198 @@ describe('ChatPanel session history restoration', () => {
     const tool = wrapper.find('tool-call-card-stub')
     expect(tool.attributes('status')).toBe('error')
     expect(tool.attributes('error')).toContain('authoritative tool result')
+    wrapper.unmount()
+  })
+
+  it('keeps assistant text and tool calls in SSE arrival order', async () => {
+    api.getSessionMessages.mockResolvedValueOnce({
+      session_id: 'session-existing',
+      message_count: 0,
+      history_status: 'durable',
+      messages: []
+    })
+    const wrapper = mountChatPanel()
+    await flushPromises()
+    await wrapper.find('textarea').setValue('按顺序检查配置')
+    await wrapper.find('.btn-send').trigger('click')
+
+    const streamOptions = api.streamMessage.mock.calls[0][0]
+    streamOptions.onTaskStarted({
+      event: 'task_started',
+      session_id: 'session-existing',
+      trace_id: 'trace-ordered',
+      status: 'pending'
+    })
+    streamOptions.onDelta('先读取当前配置。')
+    streamOptions.onToolStart('read_file', 'call-read')
+    streamOptions.onToolResult('call-read', 'DEBUG=false', {
+      id: 'call-read', name: 'read_file', status: 'success', ok: true
+    })
+    streamOptions.onToolEnd('read_file', {
+      id: 'call-read', name: 'read_file', status: 'success', ok: true, duration_ms: 18
+    })
+    streamOptions.onDelta('配置读取完成。')
+    streamOptions.onDone()
+    await flushPromises()
+
+    const entries = wrapper.findAll('[data-entry-role]')
+    expect(entries.map(entry => entry.attributes('data-entry-role'))).toEqual([
+      'user', 'assistant', 'tool_call', 'assistant'
+    ])
+    expect(entries[1].text()).toContain('先读取当前配置。')
+    expect(entries[2].find('tool-call-card-stub').attributes('name')).toBe('read_file')
+    expect(entries[2].find('tool-call-card-stub').attributes('status')).toBe('done')
+    expect(entries[3].text()).toContain('配置读取完成。')
+    expect(entries[1].text()).not.toContain('配置读取完成。')
+    wrapper.unmount()
+  })
+
+  it('creates a tool entry when a provider omits tool_start', async () => {
+    api.getSessionMessages.mockResolvedValueOnce({
+      session_id: 'session-existing',
+      message_count: 0,
+      history_status: 'durable',
+      messages: []
+    })
+    const wrapper = mountChatPanel()
+    await flushPromises()
+    await wrapper.find('textarea').setValue('运行工具并汇报')
+    await wrapper.find('.btn-send').trigger('click')
+
+    const streamOptions = api.streamMessage.mock.calls[0][0]
+    streamOptions.onTaskStarted({
+      event: 'task_started',
+      session_id: 'session-existing',
+      trace_id: 'trace-missing-start',
+      status: 'pending'
+    })
+    streamOptions.onToolResult('call-late', 'ok', {
+      id: 'call-late', name: 'bash', status: 'success', ok: true
+    })
+    streamOptions.onToolEnd('bash', {
+      id: 'call-late', name: 'bash', status: 'success', ok: true, duration_ms: 4
+    })
+    streamOptions.onDelta('工具已经完成。')
+    await flushPromises()
+
+    const entries = wrapper.findAll('[data-entry-role]')
+    expect(entries.map(entry => entry.attributes('data-entry-role'))).toEqual([
+      'user', 'tool_call', 'assistant'
+    ])
+    expect(entries[1].find('tool-call-card-stub').attributes('result')).toBe('ok')
+    expect(entries[2].text()).toContain('工具已经完成。')
+    wrapper.unmount()
+  })
+
+  it('deduplicates repeated tool_start events without splitting later text', async () => {
+    api.getSessionMessages.mockResolvedValueOnce({
+      session_id: 'session-existing',
+      message_count: 0,
+      history_status: 'durable',
+      messages: []
+    })
+    const wrapper = mountChatPanel()
+    await flushPromises()
+    await wrapper.find('textarea').setValue('检查重复事件')
+    await wrapper.find('.btn-send').trigger('click')
+
+    const streamOptions = api.streamMessage.mock.calls[0][0]
+    streamOptions.onTaskStarted({
+      event: 'task_started',
+      session_id: 'session-existing',
+      trace_id: 'trace-duplicate-start',
+      status: 'pending'
+    })
+    streamOptions.onToolStart('bash', 'call-same')
+    streamOptions.onToolStart('bash', 'call-same')
+    streamOptions.onDelta('只创建一张工具卡。')
+    await flushPromises()
+
+    expect(wrapper.findAll('[data-entry-role="tool_call"]')).toHaveLength(1)
+    expect(wrapper.findAll('[data-entry-role="assistant"]')).toHaveLength(1)
+    expect(wrapper.find('[data-entry-role="assistant"]').text()).toContain('只创建一张工具卡。')
+    wrapper.unmount()
+  })
+
+  it('places resumed assistant text after a confirmed tool card', async () => {
+    api.getSessionMessages.mockResolvedValueOnce({
+      session_id: 'session-existing',
+      message_count: 0,
+      history_status: 'durable',
+      messages: []
+    })
+    const wrapper = mountChatPanel()
+    await flushPromises()
+    await wrapper.find('textarea').setValue('执行需要确认的操作')
+    await wrapper.find('.btn-send').trigger('click')
+
+    const initialStream = api.streamMessage.mock.calls[0][0]
+    initialStream.onTaskStarted({
+      event: 'task_started',
+      session_id: 'session-existing',
+      trace_id: 'trace-confirm-order',
+      status: 'pending'
+    })
+    initialStream.onDelta('这一步需要确认。')
+    initialStream.onToolStart('bash', 'call-confirm')
+    initialStream.onInterrupt({
+      message: 'Confirm tool execution?',
+      tools: [{ id: 'call-confirm', name: 'bash', description: 'Run command' }]
+    })
+    await flushPromises()
+
+    document.body.querySelector('.btn-approve').click()
+    await flushPromises()
+    const resumedStream = api.resumeStream.mock.calls[0][0]
+    resumedStream.onToolResult('call-confirm', 'command complete', {
+      id: 'call-confirm', name: 'bash', status: 'success', ok: true
+    })
+    resumedStream.onToolEnd('bash', {
+      id: 'call-confirm', name: 'bash', status: 'success', ok: true, duration_ms: 12
+    })
+    resumedStream.onDelta('操作已经完成。')
+    await flushPromises()
+
+    const entries = wrapper.findAll('[data-entry-role]')
+    expect(entries.map(entry => entry.attributes('data-entry-role'))).toEqual([
+      'user', 'assistant', 'tool_call', 'assistant'
+    ])
+    expect(entries[1].text()).toContain('这一步需要确认。')
+    expect(entries[2].find('tool-call-card-stub').attributes('status')).toBe('done')
+    expect(entries[3].text()).toContain('操作已经完成。')
+    wrapper.unmount()
+  })
+
+  it('places a stop notice after a running tool when no text delta exists', async () => {
+    api.getSessionMessages.mockResolvedValueOnce({
+      session_id: 'session-existing',
+      message_count: 0,
+      history_status: 'durable',
+      messages: []
+    })
+    const wrapper = mountChatPanel()
+    await flushPromises()
+    await wrapper.find('textarea').setValue('运行后停止')
+    await wrapper.find('.btn-send').trigger('click')
+
+    const streamOptions = api.streamMessage.mock.calls[0][0]
+    streamOptions.onTaskStarted({
+      event: 'task_started',
+      session_id: 'session-existing',
+      trace_id: 'trace-stop-at-tool',
+      status: 'pending'
+    })
+    streamOptions.onToolStart('bash', 'call-running')
+    await flushPromises()
+    await wrapper.find('[data-testid="stop-task"]').trigger('click')
+    await flushPromises()
+
+    const entries = wrapper.findAll('[data-entry-role]')
+    expect(entries.map(entry => entry.attributes('data-entry-role'))).toEqual([
+      'user', 'tool_call', 'assistant'
+    ])
+    expect(entries[1].find('tool-call-card-stub').attributes('status')).toBe('error')
+    expect(entries[2].text()).toContain('Generation stopped before any response was received')
     wrapper.unmount()
   })
 
@@ -314,78 +590,7 @@ describe('ChatPanel session history restoration', () => {
     wrapper.unmount()
   })
 
-  it('requests a safe-boundary pause without aborting and continues the same trace', async () => {
-    const wrapper = mountChatPanel()
-    await flushPromises()
-    await wrapper.find('textarea').setValue('执行一个长任务')
-    await wrapper.find('.btn-send').trigger('click')
-
-    const streamOptions = api.streamMessage.mock.calls[0][0]
-    streamOptions.onTaskStarted({
-      event: 'task_started',
-      session_id: 'session-existing',
-      trace_id: 'trace-pause-1',
-      status: 'pending'
-    })
-    streamOptions.onDelta('已经完成第一步')
-    await flushPromises()
-
-    expect(wrapper.findAll('.input-wrapper > .btn-send')).toHaveLength(1)
-    expect(wrapper.find('.input-wrapper [data-testid="stop-task"]').exists()).toBe(true)
-    expect(wrapper.find('.input-wrapper [data-testid="pause-task"]').exists()).toBe(false)
-    expect(wrapper.find('.execution-mode-bar [data-testid="pause-task"]').exists()).toBe(true)
-    expect(streamOptions.signal.aborted).toBe(false)
-    await wrapper.find('[data-testid="pause-task"]').trigger('click')
-    await flushPromises()
-
-    expect(api.pauseStream).toHaveBeenCalledWith({
-      session_id: 'session-existing',
-      trace_id: 'trace-pause-1'
-    })
-    expect(wrapper.text()).toContain('Pausing at next safe boundary')
-    expect(wrapper.find('.status-badge.pausing').exists()).toBe(true)
-    expect(wrapper.find('textarea').attributes('disabled')).toBeDefined()
-    expect(wrapper.findAll('.input-wrapper > .btn-send')).toHaveLength(1)
-    expect(wrapper.find('[data-testid="stop-task"]').exists()).toBe(true)
-    expect(wrapper.find('[data-testid="pause-task"]').attributes('disabled')).toBeDefined()
-    expect(streamOptions.signal.aborted).toBe(false)
-
-    streamOptions.onPaused({
-      event: 'paused',
-      session_id: 'session-existing',
-      trace_id: 'trace-pause-1',
-      status: 'paused'
-    })
-    await flushPromises()
-
-    expect(wrapper.text()).toContain('Paused')
-    expect(wrapper.find('.status-badge.paused').exists()).toBe(true)
-    expect(wrapper.text()).toContain('已经完成第一步')
-    expect(wrapper.findAll('.input-wrapper > .btn-send')).toHaveLength(1)
-    expect(wrapper.find('[data-testid="continue-task"]').exists()).toBe(true)
-    expect(wrapper.find('.input-wrapper [data-testid="stop-task"]').exists()).toBe(false)
-    expect(wrapper.find('[data-testid="cancel-paused-task"]').exists()).toBe(true)
-    expect(api.cancelStream).not.toHaveBeenCalled()
-
-    await wrapper.find('[data-testid="continue-task"]').trigger('click')
-    await flushPromises()
-    expect(wrapper.find('.status-badge.resuming').text()).toContain('Resuming')
-    expect(api.continuePausedStream).toHaveBeenCalledTimes(1)
-    const continueOptions = api.continuePausedStream.mock.calls[0][0]
-    expect(continueOptions).toMatchObject({
-      session_id: 'session-existing',
-      trace_id: 'trace-pause-1'
-    })
-    continueOptions.onDelta('，继续完成第二步')
-    continueOptions.onDone()
-    await flushPromises()
-
-    expect(wrapper.text()).toContain('已经完成第一步，继续完成第二步')
-    expect(wrapper.find('textarea').attributes('disabled')).toBeUndefined()
-    wrapper.unmount()
-  })
-
-  it('restores a durable paused checkpoint and continues after remount', async () => {
+  it('restores a legacy paused checkpoint as Stop-only and terminally cancels it', async () => {
     api.getStreamStatus.mockResolvedValueOnce({
       status: 'paused',
       trace_id: 'trace-restored',
@@ -397,19 +602,20 @@ describe('ChatPanel session history restoration', () => {
 
     expect(api.getStreamStatus).toHaveBeenCalledWith('session-existing')
     expect(wrapper.findAll('.input-wrapper > .btn-send')).toHaveLength(1)
-    expect(wrapper.find('[data-testid="continue-task"]').exists()).toBe(true)
-    expect(wrapper.find('[data-testid="cancel-paused-task"]').exists()).toBe(true)
+    expect(wrapper.find('[data-testid="continue-task"]').exists()).toBe(false)
+    expect(wrapper.find('[data-testid="pause-task"]').exists()).toBe(false)
+    expect(wrapper.find('[data-testid="stop-task"]').exists()).toBe(true)
+    expect(wrapper.text()).toContain('can no longer be continued')
     expect(wrapper.find('textarea').attributes('disabled')).toBeDefined()
 
-    await wrapper.find('[data-testid="continue-task"]').trigger('click')
-    expect(api.continuePausedStream.mock.calls[0][0]).toMatchObject({
-      session_id: 'session-existing',
-      trace_id: 'trace-restored'
-    })
+    await wrapper.find('[data-testid="stop-task"]').trigger('click')
+    await flushPromises()
+    expect(api.cancelStream).toHaveBeenCalledWith('session-existing', 'trace-restored')
+    expect(wrapper.find('textarea').attributes('disabled')).toBeUndefined()
     wrapper.unmount()
   })
 
-  it('aborts a running SSE before cancelling its exact trace', async () => {
+  it('keeps the SSE request alive until exact-trace cancellation is authoritative', async () => {
     const wrapper = mountChatPanel()
     await flushPromises()
     await wrapper.find('textarea').setValue('你现在有什么tools')
@@ -427,8 +633,12 @@ describe('ChatPanel session history restoration', () => {
     api.cancelStream.mockImplementationOnce(async (sessionId, traceId) => {
       expect(sessionId).toBe('session-existing')
       expect(traceId).toBe('trace-stop-running')
-      expect(streamOptions.signal.aborted).toBe(true)
-      return { status: 'cancelled' }
+      expect(streamOptions.signal.aborted).toBe(false)
+      api.getStreamStatus.mockResolvedValueOnce({
+        status: 'cancelled',
+        trace_id: 'trace-stop-running'
+      })
+      return { status: 'cancelled', trace_id: 'trace-stop-running' }
     })
     expect(wrapper.findAll('.input-wrapper > .btn-send')).toHaveLength(1)
     expect(wrapper.find('.input-wrapper [data-testid="stop-task"]').exists()).toBe(true)
@@ -436,70 +646,280 @@ describe('ChatPanel session history restoration', () => {
     await flushPromises()
 
     expect(api.cancelStream).toHaveBeenCalledTimes(1)
+    expect(streamOptions.signal.aborted).toBe(true)
     expect(wrapper.text()).toContain('Generation stopped before any response was received')
     expect(wrapper.find('textarea').attributes('disabled')).toBeUndefined()
     wrapper.unmount()
   })
 
-  it('ignores a late pause response after Stop has already cancelled the task', async () => {
-    let resolvePause
-    api.pauseStream.mockImplementationOnce(() => new Promise(resolve => {
-      resolvePause = resolve
-    }))
+  it('keeps input locked after cancel failure and allows an exact-trace retry', async () => {
+    const firstCancel = deferred()
+    api.cancelStream.mockImplementationOnce(() => firstCancel.promise)
     const wrapper = mountChatPanel()
     await flushPromises()
-    await wrapper.find('textarea').setValue('执行一个长任务')
+    await wrapper.find('textarea').setValue('请执行长任务')
     await wrapper.find('.btn-send').trigger('click')
 
     const streamOptions = api.streamMessage.mock.calls[0][0]
     streamOptions.onTaskStarted({
       event: 'task_started',
       session_id: 'session-existing',
-      trace_id: 'trace-pause-race',
-      status: 'pending'
+      trace_id: 'trace-retry-cancel'
     })
-    await flushPromises()
-
-    const pauseClick = wrapper.find('[data-testid="pause-task"]').trigger('click')
-    await flushPromises()
-    expect(wrapper.find('.status-badge.pausing').exists()).toBe(true)
-
-    expect(wrapper.find('.input-wrapper [data-testid="stop-task"]').exists()).toBe(true)
-    expect(wrapper.findAll('.input-wrapper > .btn-send')).toHaveLength(1)
     await wrapper.find('[data-testid="stop-task"]').trigger('click')
     await flushPromises()
-    resolvePause({
-      status: 'paused',
-      trace_id: 'trace-pause-race'
-    })
-    await pauseClick
+
+    expect(wrapper.text()).toContain('Cancelling')
+    expect(wrapper.find('textarea').attributes('disabled')).toBeDefined()
+    expect(streamOptions.signal.aborted).toBe(false)
+
+    firstCancel.reject(new Error('Redis unavailable'))
     await flushPromises()
 
-    expect(api.cancelStream).toHaveBeenCalledWith('session-existing', 'trace-pause-race')
-    expect(wrapper.find('.status-badge.paused').exists()).toBe(false)
-    expect(wrapper.find('[data-testid="continue-task"]').exists()).toBe(false)
+    expect(wrapper.text()).toContain('Cancellation needs attention')
+    expect(wrapper.text()).toContain('Redis unavailable')
+    expect(wrapper.find('textarea').attributes('disabled')).toBeDefined()
+    expect(wrapper.find('[data-testid="check-stream-status"]').exists()).toBe(true)
+    expect(api.streamMessage).toHaveBeenCalledTimes(1)
+
+    await wrapper.find('[data-testid="stop-task"]').trigger('click')
+    await flushPromises()
+
+    expect(api.cancelStream).toHaveBeenCalledTimes(2)
+    expect(api.cancelStream).toHaveBeenLastCalledWith('session-existing', 'trace-retry-cancel')
+    expect(wrapper.find('textarea').attributes('disabled')).toBeUndefined()
+    expect(streamOptions.signal.aborted).toBe(true)
+    wrapper.unmount()
+  })
+
+  it('cancels through the active lease when Stop happens before task_started', async () => {
+    const wrapper = mountChatPanel()
+    await flushPromises()
+    await wrapper.find('textarea').setValue('立即停止')
+    await wrapper.find('.btn-send').trigger('click')
+    const streamOptions = api.streamMessage.mock.calls[0][0]
+
+    await wrapper.find('[data-testid="stop-task"]').trigger('click')
+    await flushPromises()
+
+    expect(api.cancelStream).toHaveBeenCalledWith('session-existing', '')
+    expect(api.getStreamStatus).toHaveBeenLastCalledWith('session-existing')
+    expect(streamOptions.signal.aborted).toBe(true)
     expect(wrapper.find('textarea').attributes('disabled')).toBeUndefined()
     wrapper.unmount()
   })
 
-  it('keeps Stop as a terminal cancellation while a task is paused', async () => {
-    api.getStreamStatus.mockResolvedValueOnce({
-      status: 'paused',
-      trace_id: 'trace-cancel-paused',
-      interrupt_type: 'user_pause',
-      interrupt: { type: 'user_pause' }
+  it('keeps a wrong-trace cancel response locked until status confirms the original trace', async () => {
+    api.cancelStream.mockResolvedValueOnce({
+      status: 'cancelled',
+      trace_id: 'trace-wrong'
     })
     const wrapper = mountChatPanel()
     await flushPromises()
+    await wrapper.find('textarea').setValue('取消精确 trace')
+    await wrapper.find('.btn-send').trigger('click')
+    const streamOptions = api.streamMessage.mock.calls[0][0]
+    streamOptions.onTaskStarted({
+      event: 'task_started',
+      session_id: 'session-existing',
+      trace_id: 'trace-right'
+    })
 
-    expect(wrapper.find('.input-wrapper [data-testid="stop-task"]').exists()).toBe(false)
-    expect(wrapper.findAll('.input-wrapper > .btn-send')).toHaveLength(1)
-    await wrapper.find('[data-testid="cancel-paused-task"]').trigger('click')
+    await wrapper.find('[data-testid="stop-task"]').trigger('click')
     await flushPromises()
 
-    expect(api.cancelStream).toHaveBeenCalledWith('session-existing', 'trace-cancel-paused')
-    expect(wrapper.find('[data-testid="continue-task"]').exists()).toBe(false)
+    expect(wrapper.text()).toContain('different trace')
+    expect(wrapper.find('textarea').attributes('disabled')).toBeDefined()
+    expect(streamOptions.signal.aborted).toBe(false)
+
+    api.getStreamStatus.mockResolvedValueOnce({ status: 'cancelled', trace_id: 'trace-right' })
+    await wrapper.find('[data-testid="check-stream-status"]').trigger('click')
+    await flushPromises()
+
     expect(wrapper.find('textarea').attributes('disabled')).toBeUndefined()
+    expect(streamOptions.signal.aborted).toBe(true)
+    wrapper.unmount()
+  })
+
+  it('verifies a cancelled SSE event against status before unlocking', async () => {
+    const statusCheck = deferred()
+    const wrapper = mountChatPanel()
+    await flushPromises()
+    await wrapper.find('textarea').setValue('等待权威取消')
+    await wrapper.find('.btn-send').trigger('click')
+    const streamOptions = api.streamMessage.mock.calls[0][0]
+    streamOptions.onTaskStarted({
+      event: 'task_started',
+      session_id: 'session-existing',
+      trace_id: 'trace-sse-cancelled'
+    })
+    api.getStreamStatus.mockImplementationOnce(() => statusCheck.promise)
+
+    streamOptions.onCancelled({
+      event: 'cancelled',
+      session_id: 'session-existing',
+      trace_id: 'trace-sse-cancelled',
+      message: 'Cancellation observed'
+    })
+    await flushPromises()
+
+    expect(wrapper.text()).toContain('Cancelling')
+    expect(wrapper.find('textarea').attributes('disabled')).toBeDefined()
+    expect(wrapper.text()).not.toContain('Generation stopped by user')
+
+    statusCheck.resolve({ status: 'cancelled', trace_id: 'trace-sse-cancelled' })
+    await flushPromises()
+
+    expect(wrapper.find('textarea').attributes('disabled')).toBeUndefined()
+    expect(wrapper.text()).toContain('Generation stopped before any response was received')
+    wrapper.unmount()
+  })
+
+  it('terminates a waiting confirmation without resuming or rejecting its graph', async () => {
+    const cancelRequest = deferred()
+    api.cancelStream.mockImplementationOnce(() => cancelRequest.promise)
+    const wrapper = mountChatPanel()
+    await flushPromises()
+    await wrapper.find('textarea').setValue('执行敏感工具')
+    await wrapper.find('.btn-send').trigger('click')
+    const streamOptions = api.streamMessage.mock.calls[0][0]
+    streamOptions.onTaskStarted({
+      event: 'task_started',
+      session_id: 'session-existing',
+      trace_id: 'trace-confirm-stop'
+    })
+    streamOptions.onToolStart('write_file', 'call-confirm-stop')
+    streamOptions.onInterrupt({
+      type: 'tool_confirmation',
+      message: 'Confirm write?',
+      tools: [{ id: 'call-confirm-stop', name: 'write_file', description: 'Write file' }]
+    })
+    await flushPromises()
+
+    const terminateButton = document.body.querySelector('[data-testid="terminate-task"]')
+    expect(terminateButton).not.toBeNull()
+    terminateButton.click()
+    await flushPromises()
+
+    expect(api.cancelStream).toHaveBeenCalledWith('session-existing', 'trace-confirm-stop')
+    expect(api.resumeStream).not.toHaveBeenCalled()
+    expect(document.body.querySelector('.btn-reject').disabled).toBe(true)
+    expect(document.body.querySelector('.btn-approve').disabled).toBe(true)
+    expect(wrapper.find('textarea').attributes('disabled')).toBeDefined()
+
+    api.getStreamStatus.mockResolvedValueOnce({ status: 'cancelled', trace_id: 'trace-confirm-stop' })
+    cancelRequest.resolve({ status: 'cancelled', trace_id: 'trace-confirm-stop' })
+    await flushPromises()
+
+    expect(document.body.querySelector('[data-testid="terminate-task"]')).toBeNull()
+    expect(api.resumeStream).not.toHaveBeenCalled()
+    expect(wrapper.find('textarea').attributes('disabled')).toBeUndefined()
+    wrapper.unmount()
+  })
+
+  it('ignores every late event from a cancelled trace after a new trace starts', async () => {
+    const wrapper = mountChatPanel()
+    await flushPromises()
+    await wrapper.find('textarea').setValue('第一个任务')
+    await wrapper.find('.btn-send').trigger('click')
+    const oldStream = api.streamMessage.mock.calls[0][0]
+    oldStream.onTaskStarted({
+      event: 'task_started',
+      session_id: 'session-existing',
+      trace_id: 'trace-old'
+    })
+    await wrapper.find('[data-testid="stop-task"]').trigger('click')
+    await flushPromises()
+
+    await wrapper.find('textarea').setValue('第二个任务')
+    await wrapper.find('.btn-send').trigger('click')
+    const newStream = api.streamMessage.mock.calls[1][0]
+    newStream.onTaskStarted({
+      event: 'task_started',
+      session_id: 'session-existing',
+      trace_id: 'trace-new'
+    })
+    newStream.onDelta('NEW_TRACE_CONTENT')
+
+    oldStream.onDelta('LATE_OLD_DELTA')
+    oldStream.onToolStart('late_old_tool', 'late-call')
+    oldStream.onToolResult('late-call', 'late result', { name: 'late_old_tool' })
+    oldStream.onDone()
+    oldStream.onCancelled({ trace_id: 'trace-old' })
+    await flushPromises()
+
+    expect(wrapper.text()).toContain('NEW_TRACE_CONTENT')
+    expect(wrapper.text()).not.toContain('LATE_OLD_DELTA')
+    expect(wrapper.text()).not.toContain('late_old_tool')
+    expect(wrapper.find('textarea').attributes('disabled')).toBeDefined()
+    expect(api.getStreamStatus).toHaveBeenCalledTimes(2)
+    newStream.onDone()
+    wrapper.unmount()
+  })
+
+  it('rejects mismatched trace metadata inside the current stream epoch', async () => {
+    const wrapper = mountChatPanel()
+    await flushPromises()
+    await wrapper.find('textarea').setValue('校验 SSE trace')
+    await wrapper.find('.btn-send').trigger('click')
+    const streamOptions = api.streamMessage.mock.calls[0][0]
+    streamOptions.onTaskStarted({
+      event: 'task_started',
+      session_id: 'session-existing',
+      trace_id: 'trace-authoritative'
+    })
+
+    streamOptions.onDelta('WRONG_TRACE_DELTA', { trace_id: 'trace-stale' })
+    streamOptions.onToolStart('wrong_trace_tool', 'wrong-call', { trace_id: 'trace-stale' })
+    streamOptions.onCancelled({ event: 'cancelled', trace_id: 'trace-stale' })
+    streamOptions.onDelta('RIGHT_TRACE_DELTA', { trace_id: 'trace-authoritative' })
+    await flushPromises()
+
+    expect(wrapper.text()).not.toContain('WRONG_TRACE_DELTA')
+    expect(wrapper.text()).not.toContain('wrong_trace_tool')
+    expect(wrapper.text()).toContain('RIGHT_TRACE_DELTA')
+    expect(wrapper.find('textarea').attributes('disabled')).toBeDefined()
+    expect(api.getStreamStatus).toHaveBeenCalledTimes(1)
+    streamOptions.onDone()
+    wrapper.unmount()
+  })
+
+  it('ignores a late cancel response after switching sessions', async () => {
+    const oldCancel = deferred()
+    api.cancelStream.mockImplementationOnce(() => oldCancel.promise)
+    const wrapper = mountChatPanel()
+    await flushPromises()
+    await wrapper.find('textarea').setValue('旧 session 任务')
+    await wrapper.find('.btn-send').trigger('click')
+    const oldStream = api.streamMessage.mock.calls[0][0]
+    oldStream.onTaskStarted({
+      event: 'task_started',
+      session_id: 'session-existing',
+      trace_id: 'trace-old-session'
+    })
+    await wrapper.find('[data-testid="stop-task"]').trigger('click')
+    await flushPromises()
+
+    await wrapper.setProps({ sessionId: 'session-other' })
+    await flushPromises()
+    oldCancel.resolve({ status: 'cancelled', trace_id: 'trace-old-session' })
+    await flushPromises()
+
+    await wrapper.find('textarea').setValue('新 session 任务')
+    await wrapper.find('.btn-send').trigger('click')
+    const currentStream = api.streamMessage.mock.calls[1][0]
+    currentStream.onTaskStarted({
+      event: 'task_started',
+      session_id: 'session-other',
+      trace_id: 'trace-current-session'
+    })
+    currentStream.onDelta('CURRENT_AFTER_OLD_CANCEL')
+    await flushPromises()
+
+    expect(wrapper.text()).toContain('CURRENT_AFTER_OLD_CANCEL')
+    expect(wrapper.find('textarea').attributes('disabled')).toBeDefined()
+    expect(api.getStreamStatus).toHaveBeenCalledTimes(2)
+    currentStream.onDone()
     wrapper.unmount()
   })
 
@@ -528,6 +948,10 @@ describe('ChatPanel session history restoration', () => {
       approved: false,
       approved_ids: []
     })
+
+    await wrapper.find('[data-testid="stop-task"]').trigger('click')
+    await flushPromises()
+    expect(api.cancelStream).toHaveBeenCalledWith('session-existing', 'trace-confirmation')
     wrapper.unmount()
   })
 
@@ -549,6 +973,36 @@ describe('ChatPanel session history restoration', () => {
 
     expect(streamOptions.signal.aborted).toBe(true)
     expect(api.cancelStream).not.toHaveBeenCalled()
+    wrapper.unmount()
+  })
+
+  it('ignores a late status response from the previously selected session', async () => {
+    const oldStatus = deferred()
+    api.getStreamStatus.mockImplementationOnce(() => oldStatus.promise)
+    const wrapper = mountChatPanel()
+    await flushPromises()
+
+    await wrapper.setProps({ sessionId: 'session-other' })
+    await flushPromises()
+    await wrapper.find('textarea').setValue('新 session 任务')
+    await wrapper.find('.btn-send').trigger('click')
+    const newStream = api.streamMessage.mock.calls[0][0]
+    newStream.onTaskStarted({
+      event: 'task_started',
+      session_id: 'session-other',
+      trace_id: 'trace-session-other'
+    })
+
+    oldStatus.resolve({ status: 'running', trace_id: 'trace-stale-session' })
+    await flushPromises()
+    newStream.onDelta('CURRENT_SESSION_CONTENT')
+    await flushPromises()
+
+    expect(wrapper.text()).toContain('CURRENT_SESSION_CONTENT')
+    expect(wrapper.text()).not.toContain('can no longer be continued')
+    await wrapper.find('[data-testid="stop-task"]').trigger('click')
+    await flushPromises()
+    expect(api.cancelStream).toHaveBeenCalledWith('session-other', 'trace-session-other')
     wrapper.unmount()
   })
 })

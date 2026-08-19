@@ -2,9 +2,11 @@ import json
 import os
 import re
 import shlex
+import signal
 import subprocess
 import sys
 import tempfile
+import time
 from pathlib import Path
 from typing import Optional
 
@@ -307,6 +309,46 @@ def _read_captured_stream(handle) -> tuple[str, bool, int]:
     return payload.decode("utf-8", errors="replace").strip(), True, total_bytes
 
 
+def _terminate_process_group(process: subprocess.Popen) -> str:
+    """Terminate a foreground command and its POSIX descendants when possible."""
+    if process.poll() is not None:
+        return "already_exited"
+    mode = "best_effort_windows" if os.name == "nt" else "process_group_term"
+    try:
+        if os.name == "nt":
+            process.terminate()
+        else:
+            os.killpg(process.pid, signal.SIGTERM)
+        process.wait(timeout=1)
+        return mode
+    except (OSError, subprocess.TimeoutExpired):
+        if process.poll() is not None:
+            return mode
+        try:
+            if os.name == "nt":
+                process.kill()
+                mode = "best_effort_windows_kill"
+            else:
+                os.killpg(process.pid, signal.SIGKILL)
+                mode = "process_group_kill"
+            process.wait(timeout=1)
+        except (OSError, subprocess.TimeoutExpired):
+            return "best_effort_unconfirmed"
+        return mode
+
+
+def _foreground_cancel_requested() -> bool:
+    """Poll the exact trace tombstone; direct shell unit calls have no identity."""
+    try:
+        from enterprise_agent.core.execution.interrupt_control import (
+            is_current_task_cancel_requested_sync,
+        )
+
+        return is_current_task_cancel_requested_sync()
+    except (ImportError, RuntimeError):
+        return False
+
+
 @tool
 def bash(command: str) -> str:
     """Run a command in workspace using Bash on POSIX or cmd.exe on Windows.
@@ -338,36 +380,65 @@ def bash(command: str) -> str:
         with tempfile.TemporaryFile(mode="w+b") as stdout_file, tempfile.TemporaryFile(
             mode="w+b"
         ) as stderr_file:
-            result = subprocess.run(
+            process_group_args = (
+                {"creationflags": subprocess.CREATE_NEW_PROCESS_GROUP}
+                if os.name == "nt"
+                else {"start_new_session": True}
+            )
+            process = subprocess.Popen(
                 command,
                 cwd=workdir,
                 stdout=stdout_file,
                 stderr=stderr_file,
-                timeout=settings.COMMAND_TIMEOUT_SECONDS,
                 env=env,
                 **_shell_execution_kwargs(),
+                **process_group_args,
             )
+            deadline = time.monotonic() + settings.COMMAND_TIMEOUT_SECONDS
+            cancelled = False
+            timed_out = False
+            termination_mode = None
+            while process.poll() is None:
+                if _foreground_cancel_requested():
+                    cancelled = True
+                    termination_mode = _terminate_process_group(process)
+                    break
+                if time.monotonic() >= deadline:
+                    timed_out = True
+                    termination_mode = _terminate_process_group(process)
+                    break
+                try:
+                    process.wait(timeout=0.1)
+                except subprocess.TimeoutExpired:
+                    continue
+
             stdout, stdout_truncated, stdout_bytes = _read_captured_stream(stdout_file)
             stderr, stderr_truncated, stderr_bytes = _read_captured_stream(stderr_file)
 
         # Preserve a complete structured envelope and exit code. Individual
         # streams are bounded at their source before entering API memory.
-        output = json.dumps({
+        payload = {
             "stdout": stdout if stdout else "(no output)",
             "stderr": stderr,
-            "exit_code": result.returncode,
+            "exit_code": process.returncode if process.returncode is not None else -1,
             "source_truncated": stdout_truncated or stderr_truncated,
             "stdout_original_bytes": stdout_bytes,
             "stderr_original_bytes": stderr_bytes,
-        }, ensure_ascii=False)
-        return output
-
-    except subprocess.TimeoutExpired:
-        return json.dumps({
-            "stdout": "",
-            "stderr": f"Command timed out ({settings.COMMAND_TIMEOUT_SECONDS}s limit)",
-            "exit_code": -1,
-        }, ensure_ascii=False)
+        }
+        if cancelled:
+            payload.update({
+                "stderr": stderr or "Command cancelled by task Stop request",
+                "error_code": "task_cancelled",
+                "cancellation": "best_effort" if termination_mode.startswith("best_effort") else "terminated",
+                "termination_mode": termination_mode,
+            })
+        elif timed_out:
+            payload.update({
+                "stderr": stderr or f"Command timed out ({settings.COMMAND_TIMEOUT_SECONDS}s limit)",
+                "error_code": "tool_timeout",
+                "termination_mode": termination_mode,
+            })
+        return json.dumps(payload, ensure_ascii=False)
     except Exception as e:
         return json.dumps({
             "stdout": "",

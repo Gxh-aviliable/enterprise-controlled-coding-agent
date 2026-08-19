@@ -42,18 +42,31 @@ def run() -> dict:
         graph_nodes = set(graph.get_graph().nodes)
         routes = {route.path for route in app.routes}
         workspace_file = Path(tmpdir) / "user_4242" / "smoke" / "hello.txt"
-        pause_nodes = {
+        retired_pause_nodes = {
             "pause_before_llm_gate",
             "user_pause_before_llm",
+            "pause_before_tool_dispatch_gate",
+            "user_pause_before_tool_dispatch",
             "pause_before_tool_execution_gate",
             "user_pause_before_tool_execution",
+            "pause_after_tool_gate",
+            "user_pause_after_tool",
+            "pause_after_verification_gate",
+            "user_pause_after_verification",
             "pause_before_finalize_gate",
             "user_pause_before_finalize",
+            "pause_after_compression_gate",
+            "user_pause_after_compression",
         }
-        pause_routes = {
+        retired_pause_routes = {
             "/chat/stream/pause",
             "/chat/stream/continue",
+        }
+        required_interrupt_routes = {
+            "/chat/stream/resume",
+            "/chat/stream/cancel",
             "/chat/stream/status",
+            "/chat/confirm",
         }
 
         checks = {
@@ -64,8 +77,9 @@ def run() -> dict:
             "dangerous_shell_blocked": blocked_result["exit_code"] != 0,
             "graph_compiled": {"init_context", "llm_call", "tool_executor"}.issubset(graph_nodes),
             "api_routes_loaded": {"/health", "/chat/stream", "/workspace/tree"}.issubset(routes),
-            "pause_graph_compiled": pause_nodes.issubset(graph_nodes),
-            "pause_api_routes_loaded": pause_routes.issubset(routes),
+            "user_pause_graph_removed": graph_nodes.isdisjoint(retired_pause_nodes),
+            "user_pause_api_removed": routes.isdisjoint(retired_pause_routes),
+            "interrupt_api_routes_loaded": required_interrupt_routes.issubset(routes),
         }
 
         if not all(checks.values()):

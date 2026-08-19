@@ -26,6 +26,7 @@ class AgentState(TypedDict):
     task_started_at: Optional[str]
     task_finished_at: Optional[str]
     failure_reason: Optional[str]
+    continuation_receipt: Optional[Dict[str, Any]]
 
     # 任务追踪
     current_task: Optional[Dict[str, Any]]
@@ -59,19 +60,11 @@ class AgentState(TypedDict):
     verification_attempts: int
     confirmation_deadline: Optional[str]
 
-    # Cooperative user pause.  The Redis control request is separate from the
-    # checkpointed state; these fields describe the pause after a safe graph
-    # boundary has acknowledged it.
-    pause_requested_at: Optional[str]
-    paused_at: Optional[str]
-    pause_reason: Optional[str]
-    pause_resume_target: Optional[str]
-
     # TodoWrite nag reminder (s03)
     rounds_without_todo: int  # 计数：连续多少轮没有使用TodoWrite
     used_todo_last_round: bool  # 标记：上一轮是否使用了TodoWrite
     has_open_todos: bool  # 标记：是否有未完成的todo项
 
     # Memory accumulator (task-level storage, not per-round fragments)
-    memory_accumulator: Dict[str, Any]  # 跨轮积累的任务内容（user_request, assistant_responses, tool_actions, etc.）
+    memory_accumulator: Dict[str, Any]  # 当前 trace 内积累的任务内容
     retrieved_memory_context: str  # 本次任务临时注入；不写入聊天消息历史

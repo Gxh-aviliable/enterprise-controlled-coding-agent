@@ -6,7 +6,7 @@
 
 在 Agent 执行层之外，项目还提供浏览器工作台和企业控制面，负责身份认证、Workspace 隔离、工具权限、人工审批、任务恢复、全链路 Trace 与长期记忆治理。项目关注的问题不是再做一个聊天界面，而是：
 
-> 如何让一个会自主读代码、改代码、跑测试和处理失败的 Agent，在企业内网中仍然可限制、可在安全边界协作式暂停、可为敏感工具等待人工确认、可恢复、可验证、可追溯？
+> 如何让一个会自主读代码、改代码、跑测试和处理失败的 Agent，在企业内网中仍然可限制、可终止、可为敏感工具等待人工确认、可恢复、可验证、可追溯？
 
 `LangGraph` · `FastAPI` · `Vue 3` · `Redis` · `MySQL` · `ChromaDB` · `Docker Compose`
 
@@ -56,7 +56,7 @@ flowchart LR
 - 私有代码和执行环境应该放在哪里；
 - 不同用户能看到和修改哪些文件；
 - Shell、写文件、删除、子 Agent 等副作用如何分级；
-- 高风险操作如何暂停并等待人工确认；
+- 高风险操作如何中断并等待人工确认；
 - 中断、超时、拒绝或失败后，任务状态如何保持一致；
 - 如何回答“Agent 做了什么、为什么失败、用了多少 token”；
 - 如何避免把失败任务和一次性指令错误沉淀为长期知识。
@@ -71,7 +71,7 @@ flowchart LR
 |---|---|---|
 | Agent 自主执行 | LangGraph 多轮工具循环，显式 `parse → plan → act → observe → checkpoint → validate → summarize`；工具结果返回模型继续决策 | `core/agent/graph.py`、`nodes.py`、`state.py` |
 | 长任务与失败恢复 | Todo、后台命令、错误分类、上下文微压缩/摘要、轮次/工具/token 预算、代码修改验证门和 Redis checkpoint | `core/agent/context.py`、`tools/task.py`、`tools/background.py` |
-| 协作式暂停与继续 | Redis 保存精确到用户/会话/Trace 的暂停请求；Agent 在安全边界先 checkpoint `paused`，再以 typed `user_pause` interrupt 挂起，并从同一 Trace 继续 | `core/execution/pause_control.py`、`core/agent/graph.py`、`api/routes/chat.py` |
+| Stop/Cancel 与重新规划 | Redis 保存精确到用户/会话/Trace 的 active lease、cancel tombstone 与 runner fence；旧 Trace 取消完成后，同 Session 的下一条消息创建新 Trace，并用 durable history、workspace 和 continuation receipt 重新规划 | `core/execution/interrupt_control.py`、`core/agent/graph.py`、`api/routes/chat.py` |
 | 知识与任务扩展 | Shared/Personal Skill 按需加载，受治理的长期记忆召回，以及显式 single/multi 和真实 specialist 委派边界 | `tools/skills.py`、`tools/subagent.py`、`memory/` |
 | 工具风险治理 | 统一 Tool Contract，模型绑定与执行阶段双重权限过滤，参数级风险识别，LangGraph interrupt 审批与超时恢复 | `core/agent/tools/contracts.py`、`nodes.py` |
 | Workspace 安全 | 用户目录隔离、路径穿越拦截、敏感路径拒绝、原子写入、SHA-256 乐观并发写入、精确路径可恢复删除 | `core/agent/tools/workspace.py`、`file_ops.py`、`api/routes/workspace.py` |
@@ -119,50 +119,39 @@ flowchart LR
   → 进入 succeeded / failed / cancelled，并按策略决定是否写入长期记忆
 ```
 
-七个任务状态与会话状态彼此独立：
+任务执行状态与会话状态彼此独立：
 
 ```text
 pending → running ⇄ waiting_confirmation
-              ⇅
-            paused
 
 running → succeeded / failed / cancelled
 waiting_confirmation → failed / cancelled
-paused → failed / cancelled
 pending → cancelled
+
+legacy paused → cancelled  # 仅兼容迁移，不再可进入或恢复
 ```
 
 > [!IMPORTANT]
-> **Pause 与 Stop 是两种不同的任务控制。** Pause 将请求写入 Redis，Agent 到达
-> 下一安全边界后先把 `task_status=paused` checkpoint 到 RedisSaver，再进入
-> `interrupt(type="user_pause")`；Continue 会重新校验用户、会话、Trace 与 interrupt
-> 类型，并用 `Command(resume={"action": "continue", "trace_id": ...})` 继续同一任务。
-> 红色 **Stop/Cancel** 仍会把任务收敛为不可恢复的 `cancelled` 终态。
-> 为避免把 Pause 和 Stop 画成两个同等级主按钮，输入框右侧始终只显示一个
-> 随状态变化的主操作：运行中是 Stop，暂停后是 Continue；Pause 和暂停后的
-> Cancel 放在上方 Execution mode 控制条，作为带文字说明的次级任务操作。
-> 终止后后端会在 Redis checkpoint 中追加幂等取消标记，并同步
-> MySQL assistant 行；因此保留上一个问题供“刚才问了什么”引用，但不会
-> 把它与下一条消息合并成待回答的 `Human → Human`。
+> 运行中的用户任务只提供 **Stop/Cancel**。Stop 将当前 Trace 收敛为不可恢复的
+> `cancelled` 终态，不承诺回滚已经发生的文件或外部副作用。Cancel 失败或仍在
+> `cancelling` 时前端保持输入锁定；只有服务端确认旧 runner 停止、checkpoint 已终态化
+> 且 active lease 释放后才解锁。
 >
 > 实际流程是：
 >
 > ```text
-> 用户点击暂停
-> → Redis 写入 pause_requested
-> → Agent 在节点安全边界检查
-> → task_status = paused
-> → 完成 pause gate 节点并保存完整 checkpoint
-> → 下一节点执行 typed interrupt(type="user_pause")
-> → 前端显示“已暂停”
-> → 用户点击继续
-> → 重新校验用户、会话和 trace_id
-> → Command(resume={"action": "continue", "trace_id": trace_id})
-> → task_status = running
+> 用户点击 Stop
+> → Redis 为当前 user + session + trace 写入 cancel_requested
+> → 工具批次每次调用前检查取消，前台 Shell 尽可能终止进程组
+> → runner 写入 cancelled checkpoint、MySQL tombstone 和 continuation receipt
+> → runner 确认停止并释放精确 active lease
+> → 前端解锁
+> → 下一条消息创建全新 trace_id
+> → 新一轮 LLM 根据 durable history、workspace 现状和 receipt 重新规划
 > ```
 >
-> 这是协作式暂停，不会强杀正在进行的模型请求或工具调用；点击后界面先显示
-> “正在暂停”，真正到达安全边界并收到 `paused` SSE 后才算暂停完成。
+> `Command(resume=...)` 仅保留给 typed `tool_confirmation` interrupt：批准、拒绝和超时
+> 保持原 `trace_id`。Stop 不会把确认弹窗伪装成 Reject All。
 
 ## 关键能力
 
@@ -359,7 +348,7 @@ uv sync --frozen
 uv run python scripts/smoke_test.py
 ```
 
-`"status": "ok"` 表示应用可导入、图与 Pause 安全边界可编译、暂停控制 API 已注册、Workspace 可隔离读写、安全 Shell 可运行且危险命令会被拒绝；它不代表 MySQL、Redis、Chroma 持久化或真实模型已经通过。
+`"status": "ok"` 表示应用可导入、图可编译且不再含用户 Pause 节点、Stop/Status 与 HITL Resume API 已注册、Workspace 可隔离读写、安全 Shell 可运行且危险命令会被拒绝；它不代表 MySQL、Redis、Chroma 持久化或真实模型已经通过。
 
 ### 开发验证
 
@@ -389,7 +378,7 @@ Vue 工作台包含 Chat、Files、Trace、Memory 与 Admin 五个主要视图�
 | 范围 | 路径 |
 |---|---|
 | 认证 | `/auth/*` |
-| 对话、流式与恢复 | `/chat/completions`、`/chat/stream`、`/chat/stream/resume`（HITL）、`/chat/stream/pause`、`/chat/stream/continue`、`/chat/stream/status` |
+| 对话、流式与恢复 | `/chat/completions`、`/chat/stream`、`/chat/stream/resume`（仅 HITL）、`/chat/stream/cancel`、`/chat/stream/status` |
 | 会话历史 | `/sessions/*` |
 | Workspace | `/workspace/*` |
 | Trace 与指标 | `/tasks/*` |
@@ -403,7 +392,7 @@ Vue 工作台包含 Chat、Files、Trace、Memory 与 Admin 五个主要视图�
 enterprise-controlled-coding-agent/
 ├── enterprise_agent/
 │   ├── core/agent/          # LangGraph、节点、上下文和工具运行时
-│   ├── core/execution/      # 七态任务状态机与 Redis 暂停控制
+│   ├── core/execution/      # 任务状态机与 Redis lease/cancel/resume 控制
 │   ├── api/                 # FastAPI 路由、鉴权与会话服务
 │   ├── admin/               # 额度、审计与 Shared Skill 治理
 │   ├── memory/              # 准入、召回、偏好、衰减与 Chroma
@@ -432,7 +421,7 @@ enterprise-controlled-coding-agent/
 - 基于 `LangGraph StateGraph` 设计有状态 Coding Agent，构建“代码检索 → Todo 规划 → 文件/Shell 工具执行 → 结果观察 → 失败诊断 → 修改后验证”的多轮闭环；对非零退出、策略拦截和超时进行结构化反馈，并通过 verification gate 阻止未验证代码被标记为成功。
 - 实现面向长任务的 Agent 上下文与恢复机制：使用 Redis checkpoint 持久化完整执行状态，引入后台命令、轮次/工具/token 预算、旧工具输出 microcompact、完整 transcript 和 LLM 摘要续跑；结合受准入控制的 Chroma 长期记忆与按需 Skill 加载复用工程经验。
 - 设计 Contract-driven 工具运行时，对文件、Shell、任务、记忆和子 Agent 统一定义权限、风险、超时、幂等、副作用与结果协议；实现模型绑定/执行双重权限过滤、参数级 HITL、多租户 Workspace 隔离、凭据净化、原子写入和可恢复删除。
-- 建立覆盖模型、节点、工具、审批、暂停、token、错误和终态的 Trace 与版本化 Agent benchmark；真实 `deepseek-chat` single-Agent 在代码理解、文件操作、测试、失败修复、安全拒绝和中断恢复等 10 个任务中完成 **8/10**，项目保持 **535 项后端测试、76 项前端测试、Ruff 0 findings**。
+- 建立覆盖模型、节点、工具、审批、取消、token、错误和终态的 Trace 与版本化 Agent benchmark；真实 `deepseek-chat` single-Agent 在代码理解、文件操作、测试、失败修复、安全拒绝和中断恢复等 10 个任务中完成 **8/10**，项目保持 **535 项后端测试、76 项前端测试、Ruff 0 findings**。
 
 建议面试时重点讲五个问题：
 
@@ -454,12 +443,12 @@ enterprise-controlled-coding-agent/
 - **评测规模有限**：10 个任务适合作为回归与作品集证据，不代表通用 Coding Agent 的生产能力。
 - **内网数据边界取决于模型 endpoint**：使用公网模型时，模型输入仍会发送到外部服务。
 - **Artifact 是受限调试证据**：可被微压缩的工具输出会先落盘并带校验和，但敏感值会脱敏、超大结果可能按独立存储上限保留 head/tail，且 Workspace 内文件不具备防篡改保证。
-- **暂停是安全边界协作式暂停**：模型请求或前台工具一旦开始不会被 Pause 强杀，而是在返回后的下一安全边界进入 `paused`；需要立即终止时应使用 Stop/Cancel，后者是不可恢复终态。
+- **Stop 是 best-effort 终态取消**：前台 Shell 尽可能终止进程组，托管后台进程会按 Trace 终止；无法抢占的外部调用会明确记录为 best-effort，且不回滚已发生副作用。
 - **浏览器编辑是受限的直接用户操作**：只允许修改 Workspace 内已存在、至多 1 MiB 的普通 UTF-8 文件；敏感路径、Agent 运行目录、符号链接、二进制和超限文件只读。`expected_sha256` 可阻止静默覆盖其他写入，但它不替代版本控制，也不等同于 Agent 工具的 HITL/Trace 链路。
 
 ## 路线图
 
-- 为 Redis 协同暂停补充多副本故障注入与长任务恢复演练，并评估将工具批次拆成单调用 checkpoint 以获得更细的暂停粒度；
+- 为 Redis active lease、runner fencing 和 cancel convergence 补充多副本故障注入与长任务终止演练；
 - 为 artifact 增加过期清理和集中授权策略，并将 Trace/artifact 迁移到防篡改的集中式存储；
 - 修复真实 single-Agent 基准暴露的审批续跑与安全断言问题，并在新干净提交上复测；
 - 完成 3 个适合委派用例的 single/multi 质量、时延和 token 对照；

@@ -13,6 +13,14 @@ from enterprise_agent.core.agent import nodes
 from enterprise_agent.core.agent.state import AgentState
 
 
+class _AsyncSessionContext:
+    async def __aenter__(self):
+        return MagicMock()
+
+    async def __aexit__(self, *_args):
+        return False
+
+
 def _message_signature(message):
     return (
         getattr(message, "type", ""),
@@ -54,10 +62,13 @@ async def test_stopped_turn_is_closed_once_before_next_same_session_model_call(
 
     builder = StateGraph(AgentState)
     builder.add_node("task_parse", parse_task)
-    builder.add_node("model", call_model_only_for_next_trace)
+    # Cancellation terminalization deliberately clears interrupts as the
+    # production ``persist_memory`` node, so this compact graph keeps that
+    # identity while still invoking the model only for the fresh trace.
+    builder.add_node("persist_memory", call_model_only_for_next_trace)
     builder.set_entry_point("task_parse")
-    builder.add_edge("task_parse", "model")
-    builder.add_edge("model", END)
+    builder.add_edge("task_parse", "persist_memory")
+    builder.add_edge("persist_memory", END)
     graph = builder.compile(checkpointer=InMemorySaver())
     config = {"configurable": {"thread_id": "same-session"}}
 
@@ -65,7 +76,21 @@ async def test_stopped_turn_is_closed_once_before_next_same_session_model_call(
     monkeypatch.setattr(nodes, "_build_runtime_system_prompt", lambda _state: "system")
     monkeypatch.setattr(nodes, "_record_trace", lambda *_args, **_kwargs: None)
     monkeypatch.setattr(chat, "get_agent_graph", lambda: graph)
-    monkeypatch.setattr(chat, "clear_task_pause_request", AsyncMock(return_value=True))
+    monkeypatch.setattr(chat, "get_active_trace_lease", AsyncMock(return_value=None))
+    monkeypatch.setattr(chat, "get_trace_cancel_request", AsyncMock(return_value=None))
+    monkeypatch.setattr(
+        chat,
+        "request_trace_cancellation",
+        AsyncMock(return_value={"status": "requested"}),
+    )
+    monkeypatch.setattr(chat, "clear_legacy_pause_key", AsyncMock(return_value=True))
+    monkeypatch.setattr(chat, "async_session_factory", lambda: _AsyncSessionContext())
+    monkeypatch.setattr(chat, "get_latest_assistant_task", AsyncMock(return_value=None))
+    monkeypatch.setattr(
+        chat,
+        "_durable_cancellation_confirmed",
+        AsyncMock(return_value=True),
+    )
     monkeypatch.setattr(chat, "get_trace_store", MagicMock(return_value=MagicMock()))
     durable_cancel = AsyncMock()
     monkeypatch.setattr(chat, "_safe_mark_durable_assistant_cancelled", durable_cancel)
@@ -73,7 +98,7 @@ async def test_stopped_turn_is_closed_once_before_next_same_session_model_call(
     monkeypatch.setattr(chat, "_active_stream_traces", {})
     monkeypatch.setattr(
         "enterprise_agent.core.agent.tools.background.clear_background_manager",
-        lambda _session_id: None,
+        lambda _session_id, _trace_id: None,
     )
 
     # The browser has already aborted the SSE, leaving no in-process cancel
@@ -125,11 +150,11 @@ async def test_stopped_turn_is_closed_once_before_next_same_session_model_call(
         for message in after_second_cancel.values["messages"]
     ] == [_message_signature(message) for message in first_messages]
     assert durable_cancel.await_count == 2
-    assert durable_cancel.await_args_list[0].kwargs == {
-        "session_id": "same-session",
-        "user_id": 1,
-        "trace_id": "trace-cancelled",
-    }
+    first_cancel_kwargs = durable_cancel.await_args_list[0].kwargs
+    assert first_cancel_kwargs["session_id"] == "same-session"
+    assert first_cancel_kwargs["user_id"] == 1
+    assert first_cancel_kwargs["trace_id"] == "trace-cancelled"
+    assert first_cancel_kwargs["reason"] == "Cancelled by user"
 
     await chat._ensure_session_accepts_new_task(
         graph,

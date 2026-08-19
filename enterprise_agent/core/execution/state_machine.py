@@ -36,7 +36,6 @@ TERMINAL_STATUSES = {
 ALLOWED_TRANSITIONS = {
     TaskStatus.PENDING: {TaskStatus.RUNNING, TaskStatus.CANCELLED},
     TaskStatus.RUNNING: {
-        TaskStatus.PAUSED,
         TaskStatus.WAITING_CONFIRMATION,
         TaskStatus.SUCCEEDED,
         TaskStatus.FAILED,
@@ -47,8 +46,9 @@ ALLOWED_TRANSITIONS = {
         TaskStatus.FAILED,
         TaskStatus.CANCELLED,
     },
+    # Retained temporarily so pre-retirement checkpoints can be terminalized.
+    # User pause is no longer enterable or resumable.
     TaskStatus.PAUSED: {
-        TaskStatus.RUNNING,
         TaskStatus.FAILED,
         TaskStatus.CANCELLED,
     },

@@ -77,7 +77,7 @@ uv run python -m benchmarks.run --backend platform --mode single --no-artifacts
 
 - Chroma 测试使用进程内 collection 和确定性离线 embedding。
 - MySQL/Redis 路由逻辑主要通过替身和隔离 API 测试，完整服务启动由 Docker smoke 覆盖。
-- Pause/Continue 同时覆盖 Redis 控制键、真实 LangGraph checkpoint 恢复和副作用恰好一次；它证明安全边界暂停，不代表能够强杀正在进行的模型或前台工具调用。
+- Stop/Cancel 覆盖 Redis active-trace lease、精确 trace 取消标记、runner fencing、工具确认原 trace 恢复与取消后新 trace 重规划；已发生的文件或外部副作用不承诺回滚，无法立即中断的操作会明确记为 best-effort cancellation。
 - `platform` benchmark 不调用模型，不代表 Agent 推理能力。
 - `agent` benchmark 会调用配置的第三方或私有模型 endpoint，发送合成提示和工具上下文并产生费用。
 - 当前 Shell 测试证明策略行为，不证明内核级隔离。

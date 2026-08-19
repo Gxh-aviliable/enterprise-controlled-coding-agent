@@ -32,10 +32,10 @@ parse → plan → execute → checkpoint → validate → summarize
 
 1. Agent 先读取入口、测试和相关实现。
 2. `plan_task` 建立执行计划。
-3. 在一次模型或工具调用进行时点击 Pause；界面先显示 `Pausing`，到下一安全边界后才显示 `Paused`。
-4. 点击 Continue，展示经用户/会话/Trace 和 typed `user_pause` 校验后从同一 checkpoint 续跑。
+3. 在一次工具调用进行时点击 Stop；说明前端在服务端确认原 Trace 已 `cancelled` 前保持输入锁定，不会创建重叠任务。
+4. 取消完成后发送“继续完成剩余修复”；展示新 `trace_id`，并说明新一轮 LLM 根据聊天历史、workspace 现状和 continuation receipt 重新规划，没有 resume 旧 Graph。
 5. 文件修改进入 review 风险并触发独立的 `tool_confirmation` HITL。
-6. Approve Current Batch 后从 checkpoint 恢复，Agent 修改文件并运行窄测试。
+6. Approve Current Batch 后从 checkpoint 恢复，确认这一 HITL 恢复保持当前 `trace_id`；Agent 修改文件并运行窄测试。
 7. verification gate 要求代码修改后存在成功验证；最终回答包含文件、命令、退出状态和限制。
 
 可在 Files 中打开被修改文件，先用安全 Preview 查看 Markdown/代码，再切换 Edit 做一次
@@ -43,7 +43,7 @@ parse → plan → execute → checkpoint → validate → summarize
 阻止并发静默覆盖，敏感路径、Agent 运行目录、符号链接、二进制和超限文件保持只读；它
 不冒充 Agent 工具调用或 HITL Trace。
 
-口头明确：Pause 是协作式安全边界暂停，不会强杀已开始的模型/工具调用；红色 Stop 才是不可恢复的终态 Cancel。
+口头明确：Stop 是不可恢复的终态 Cancel，不承诺回滚已发生的文件或外部副作用；前台 Shell 使用进程组尽力终止，无法立即抢占的操作会记录为 best-effort cancellation。
 
 如果模型现场不可用，运行：
 
@@ -72,14 +72,14 @@ uv run python -m benchmarks.run --backend platform --mode single --no-artifacts
 
 在 Trace 页面回答三个问题：
 
-1. 在哪一步失败或暂停？
+1. 在哪一步失败、等待确认或被取消？
 2. 为什么失败或需要确认？
 3. 花了多少时间和 token？
 
 展示：
 
 - 同一个 Trace ID 串联节点、模型、工具、HITL 和终态；
-- `pause_requested → task_paused → resume_requested → task_resumed` 与 HITL 事件分开记录；
+- `cancel_requested → task_cancelled → continuation_receipt` 与 HITL 的 `confirmation_requested → resumed` 分开记录；
 - 模型与工具耗时；
 - token、工具次数和预算；
 - 风险、退出码、错误类型和重试；

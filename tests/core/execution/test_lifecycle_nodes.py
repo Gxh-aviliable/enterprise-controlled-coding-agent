@@ -202,6 +202,111 @@ async def test_executor_denies_tool_missing_from_jwt_permissions():
     assert record["error_code"] == "permission_denied"
 
 
+async def test_executor_checks_cancel_before_each_tool_in_a_batch(monkeypatch):
+    """A Stop observed after one result must fence every later tool call."""
+    cancelled = False
+    invocations = []
+
+    class FakeRead:
+        name = "read_file"
+
+        async def ainvoke(self, tool_input):
+            nonlocal cancelled
+            invocations.append(tool_input["path"])
+            if tool_input["path"] == "first.txt":
+                cancelled = True
+                return "first tool may already have completed"
+            raise AssertionError("second tool ran after cancellation")
+
+    async def fake_cancel_request(_state):
+        return {"reason": "Stop requested"} if cancelled else None
+
+    fake_read = FakeRead()
+    monkeypatch.setattr("enterprise_agent.core.agent.nodes.ALL_TOOLS", [fake_read])
+    monkeypatch.setattr(
+        "enterprise_agent.core.agent.nodes.get_tools_for_permissions",
+        lambda *_args, **_kwargs: [fake_read],
+    )
+    monkeypatch.setattr(
+        "enterprise_agent.core.agent.nodes._tool_cancel_request",
+        fake_cancel_request,
+    )
+
+    result = await tool_executor_node({
+        "session_id": "cancel-mid-batch",
+        "trace_id": "trace-cancel-mid-batch",
+        "user_id": 120,
+        "permissions": ["tools:basic"],
+        "task_status": "running",
+        "pending_tool_calls": [
+            {"id": "read-first", "name": "read_file", "args": {"path": "first.txt"}},
+            {"id": "read-second", "name": "read_file", "args": {"path": "second.txt"}},
+        ],
+    })
+
+    assert invocations == ["first.txt"]
+    assert result["task_status"] == "cancelled"
+    records = {
+        record["tool_call_id"]: record
+        for record in result["tool_execution_records"]
+    }
+    assert records["read-first"]["ok"] is True
+    assert records["read-second"]["error_code"] == "task_cancelled"
+    assert records["read-second"]["attempt_count"] == 0
+
+
+async def test_executor_checks_cancel_before_retry_invocation(monkeypatch):
+    """A retryable failure must not trigger another call after Stop arrives."""
+    cancelled = False
+    invocation_count = 0
+
+    class RetryableRead:
+        name = "read_file"
+
+        async def ainvoke(self, _tool_input):
+            nonlocal cancelled, invocation_count
+            invocation_count += 1
+            cancelled = True
+            raise RuntimeError("connection timeout")
+
+    async def fake_cancel_request(_state):
+        return {"reason": "Stop requested during retry delay"} if cancelled else None
+
+    async def no_retry_delay(_seconds):
+        return None
+
+    fake_read = RetryableRead()
+    monkeypatch.setattr("enterprise_agent.core.agent.nodes.ALL_TOOLS", [fake_read])
+    monkeypatch.setattr(
+        "enterprise_agent.core.agent.nodes.get_tools_for_permissions",
+        lambda *_args, **_kwargs: [fake_read],
+    )
+    monkeypatch.setattr(
+        "enterprise_agent.core.agent.nodes._tool_cancel_request",
+        fake_cancel_request,
+    )
+    monkeypatch.setattr("enterprise_agent.core.agent.nodes.asyncio.sleep", no_retry_delay)
+
+    result = await tool_executor_node({
+        "session_id": "cancel-before-retry",
+        "trace_id": "trace-cancel-before-retry",
+        "user_id": 121,
+        "permissions": ["tools:basic"],
+        "task_status": "running",
+        "pending_tool_calls": [{
+            "id": "retry-read",
+            "name": "read_file",
+            "args": {"path": "unstable.txt"},
+        }],
+    })
+
+    assert invocation_count == 1
+    assert result["task_status"] == "cancelled"
+    record = result["tool_execution_records"][0]
+    assert record["error_code"] == "task_cancelled"
+    assert record["attempt_count"] == 1
+
+
 async def test_executor_tracks_code_change_and_successful_validation(monkeypatch, tmp_path):
     monkeypatch.setenv("WORKSPACE_BASE", str(tmp_path))
     write_result = await tool_executor_node({

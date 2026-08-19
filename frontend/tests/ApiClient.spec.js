@@ -81,33 +81,6 @@ describe('API client task-control events', () => {
     localStorage.clear()
   })
 
-  it('routes task_started and paused without treating pause as completion or HITL', async () => {
-    vi.stubGlobal('fetch', vi.fn().mockResolvedValue(streamResponse(
-      { event: 'task_started', session_id: 'session-1', trace_id: 'trace-1', status: 'pending' },
-      { event: 'paused', session_id: 'session-1', trace_id: 'trace-1', status: 'paused' }
-    )))
-    const onTaskStarted = vi.fn()
-    const onPaused = vi.fn()
-    const onInterrupt = vi.fn()
-    const onDone = vi.fn()
-
-    await streamMessage({
-      session_id: 'session-1',
-      content: 'pause me safely',
-      onTaskStarted,
-      onPaused,
-      onInterrupt,
-      onDone
-    })
-
-    expect(onTaskStarted).toHaveBeenCalledWith(expect.objectContaining({ trace_id: 'trace-1' }))
-    expect(onPaused).toHaveBeenCalledWith(expect.objectContaining({
-      trace_id: 'trace-1', status: 'paused'
-    }))
-    expect(onInterrupt).not.toHaveBeenCalled()
-    expect(onDone).not.toHaveBeenCalled()
-  })
-
   it('routes cancelled as a terminal control event without reporting normal completion', async () => {
     vi.stubGlobal('fetch', vi.fn().mockResolvedValue(streamResponse(
       { event: 'cancelled', session_id: 'session-1', trace_id: 'trace-2', message: 'Cancelled' }
@@ -126,27 +99,6 @@ describe('API client task-control events', () => {
     expect(onDone).not.toHaveBeenCalled()
   })
 
-  it('routes a typed user_pause interrupt to onPaused, not tool confirmation', async () => {
-    vi.stubGlobal('fetch', vi.fn().mockResolvedValue(streamResponse({
-      event: 'interrupt',
-      data: { type: 'user_pause', trace_id: 'trace-3', resume_target: 'tool_executor' }
-    })))
-    const onPaused = vi.fn()
-    const onInterrupt = vi.fn()
-
-    await streamMessage({
-      session_id: 'session-1',
-      content: 'pause',
-      onPaused,
-      onInterrupt
-    })
-
-    expect(onPaused).toHaveBeenCalledWith(expect.objectContaining({
-      event: 'paused', type: 'user_pause', trace_id: 'trace-3'
-    }))
-    expect(onInterrupt).not.toHaveBeenCalled()
-  })
-
   it('keeps a typed tool_confirmation interrupt on the HITL callback', async () => {
     const confirmation = {
       type: 'tool_confirmation',
@@ -156,18 +108,15 @@ describe('API client task-control events', () => {
     vi.stubGlobal('fetch', vi.fn().mockResolvedValue(streamResponse({
       event: 'interrupt', data: confirmation
     })))
-    const onPaused = vi.fn()
     const onInterrupt = vi.fn()
 
     await streamMessage({
       session_id: 'session-1',
       content: 'write',
-      onPaused,
       onInterrupt
     })
 
     expect(onInterrupt).toHaveBeenCalledWith(confirmation)
-    expect(onPaused).not.toHaveBeenCalled()
   })
 
   it('sends the exact trace id when cancelling a task', async () => {
@@ -182,6 +131,19 @@ describe('API client task-control events', () => {
     expect(parsed.searchParams.get('session_id')).toBe('session with space')
     expect(parsed.searchParams.get('trace_id')).toBe('trace/exact?1')
     expect(options.method).toBe('POST')
+  })
+
+  it('preserves a structured cancellation error message', async () => {
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue({
+      ok: false,
+      status: 409,
+      json: vi.fn().mockResolvedValue({
+        detail: { code: 'trace_mismatch', message: 'The requested trace is no longer active.' }
+      })
+    }))
+
+    await expect(cancelStream('session-1', 'trace-stale'))
+      .rejects.toThrow('The requested trace is no longer active.')
   })
 })
 

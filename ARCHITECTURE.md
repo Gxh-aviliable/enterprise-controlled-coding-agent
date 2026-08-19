@@ -1,6 +1,6 @@
 # Mini Claude Code Architecture
 
-> Current implementation baseline: 2026-08-10
+> Current implementation baseline: 2026-08-19
 > Scope: architecture in the current implementation baseline; planned components are explicitly labelled.
 
 ## 1. System context
@@ -37,7 +37,7 @@ flowchart LR
 
 ## 3. Current Agent execution path
 
-The current graph is a reactive tool loop. It retries transient model failures, retries only idempotent tools, limits rounds, checkpoints state in Redis, supports sensitive-tool approval, and cooperatively pauses a user task at explicit safe boundaries.
+The current graph is a reactive tool loop. It retries transient model failures, retries only idempotent tools, limits rounds, checkpoints state in Redis, supports sensitive-tool approval, and terminates a stopped Trace without resuming it.
 
 ```mermaid
 flowchart TD
@@ -45,39 +45,23 @@ flowchart TD
     A --> B[check_background]
     B --> C[check_inbox]
     C --> PL[plan_task]
-    PL --> PB[pause_before_llm_gate]
-    PB --> D[pre_microcompact]
+    PL --> D[pre_microcompact]
     D --> E[llm_call]
-    E -->|tool calls| PD[pause_before_tool_dispatch_gate]
-    PD --> PE[prepare_tool_execution]
+    E -->|tool calls| PE[prepare_tool_execution]
     PE --> F[tool_confirm]
-    F -->|approved or safe| PX[pause_before_tool_execution_gate]
-    PX --> G[tool_executor]
+    F -->|approved or safe| G[tool_executor]
     E -->|text response| H[save_memory]
     G --> CP[checkpoint_task]
-    CP --> PA[pause_after_tool_gate]
-    PA --> H
+    CP --> H
     E -->|token threshold| I[compress_context]
     H -->|continue| D
     H -->|code change lacks passing check| V[verification_gate]
-    V --> PV[pause_after_verification_gate]
-    PV --> D
+    V --> D
     H -->|manual compact| J[manual_compress]
-    H -->|complete or budget end| PF[pause_before_finalize_gate]
-    PF --> FN[finalize_task]
+    H -->|complete or budget end| FN[finalize_task]
     FN --> K[END]
-    I --> PC[pause_after_compression_gate]
-    J --> PC
-    PC --> E
-
-    PB -. pause requested .-> UP[user_pause typed interrupt]
-    PD -. pause requested .-> UP
-    PX -. pause requested .-> UP
-    PA -. pause requested .-> UP
-    PV -. pause requested .-> UP
-    PF -. pause requested .-> UP
-    PC -. pause requested .-> UP
-    UP -. Command resumes same Trace .-> RT[checkpointed resume target]
+    I --> E
+    J --> E
 ```
 
 Current request sequence:
@@ -90,9 +74,9 @@ Current request sequence:
 6. `tool_executor` invokes tools, truncates output, counts calls and retries transient read-only failures.
 7. The checkpoint and verification gate record file changes and require a successful relevant check before a code-modifying task can be marked successful.
 8. `save_memory` accumulates a task-level summary; RedisSaver checkpoints graph state after nodes.
-9. SSE exposes token deltas, tool start/result events, typed confirmation/user-pause interrupts, cancellation, and completion.
+9. SSE exposes token deltas, tool start/result events, typed tool-confirmation interrupts, cancellation, and completion.
 
-These phases and the seven-state task lifecycle are implemented. Pause is cooperative: an in-flight model or tool call finishes before the next safe-boundary check.
+`plan_task` is a lifecycle marker rather than a separate deterministic planner. A fresh Trace's first LLM call performs the real planning from durable chat history, current workspace state and any continuation receipt left by a cancelled Trace.
 
 ## 4. Tool and workspace boundary
 
@@ -117,64 +101,63 @@ There are currently four different state concepts:
 |---|---|---|
 | Conversation session | MySQL `SessionStatus`: `active`, `archived`, `deleted` | This is lifecycle metadata, not task execution status |
 | Conversation transcript | MySQL `ChatMessage`, ordered by per-session record ID | Durable user/assistant history; legacy Redis-only gaps remain explicitly marked |
-| Agent checkpoint | `AgentState` persisted by RedisSaver | Seven-state lifecycle including `paused`, execution phase, mode, budgets, tool records and task-linked artifacts |
+| Agent checkpoint | `AgentState` persisted by RedisSaver | Executable lifecycle, execution phase, mode, budgets, tool records and task-linked artifacts; legacy `paused` values are migration-only |
 | Operational task board | JSON files under `<workspace>/.tasks/` | Supports pending/in-progress/completed/failed/cancelled; distributed storage remains future work |
 
-The execution state machine validates `pending`, `running`, `paused`, `waiting_confirmation`, `succeeded`, `failed`, and `cancelled` transitions without replacing conversation-session status. Failure and cancellation close open Todo items and persistent task artifacts created by that run; pausing is non-terminal and preserves recovery evidence.
+The execution state machine validates `pending`, `running`, `waiting_confirmation`, `succeeded`, `failed`, and `cancelled` transitions without replacing conversation-session status. `TaskStatus.PAUSED` remains temporarily parseable only for rolling-migration compatibility and cannot be entered or resumed. Failure and cancellation close open Todo items and persistent task artifacts created by that run.
 
-### 5.1 Redis-coordinated cooperative Pause/Continue
+### 5.1 Redis-authoritative Stop/Cancel and fresh-Trace replan
 
-RedisSaver checkpoints graph state under `thread_id=session_id`. The runtime now
-adds a separate Redis control record scoped by `user_id + session_id + trace_id`,
-so a late Pause cannot affect the next task in the same conversation. The
-implemented protocol is:
+RedisSaver checkpoints graph state under `thread_id=session_id`. Execution
+ownership is separate: a Redis active-trace lease, cancel tombstone and runner
+fence are scoped by `user_id + session_id + trace_id`. The process-local event
+and active-Trace map are latency optimizations, never the authority.
 
 ```mermaid
 sequenceDiagram
     participant UI as Frontend
     participant API as Task control API
-    participant C as Redis control key
+    participant C as Redis lease and cancel control
     participant G as LangGraph
     participant S as RedisSaver
+    participant DB as MySQL history
 
-    UI->>API: POST /chat/stream/pause(session_id, trace_id)
-    API->>API: Verify user, session and trace ownership
-    API->>C: SET pause_requested for exact trace
-    G->>C: Check at next safe node boundary
-    G->>G: pause_*_gate writes task_status=paused and metadata
-    G->>S: Complete gate node and checkpoint
-    G->>S: user_pause_* calls interrupt(type=user_pause)
-    G-->>UI: SSE paused event
-    UI->>API: POST /chat/stream/continue(session_id, trace_id)
-    API->>API: Re-verify ownership and paused interrupt
-    API->>C: SET NX EX exact-trace resume lock
-    API->>G: Command(resume={action: continue, trace_id})
-    G->>C: Clear the exact matching pause request
-    G->>G: task_status = running
+    UI->>API: POST /chat/stream/cancel(session_id, trace_id)
+    API->>API: Verify user, session and exact active Trace
+    API->>C: Atomically set exact cancel tombstone
+    G->>C: Check before every tool and at model/stream boundaries
+    G->>G: Stop foreground process group; terminate managed background jobs
+    G->>S: Persist task_status=cancelled and close the stream
+    G->>DB: Persist assistant tombstone and continuation receipt
+    G->>C: Mark runner stopped, then release exact lease
+    API-->>UI: status=cancelled for the exact Trace
+    UI->>API: Send next message after authoritative cancellation
+    API->>C: Claim a new active lease with a new trace_id
+    API->>DB: Load trimmed/deduplicated durable history and receipt
+    API->>G: Start a fresh invocation (never Command(resume))
 ```
 
-The ordering intentionally differs from “interrupt first, set paused later”.
-Code after `interrupt()` does not run until resume, so `paused` is written
-by a preceding `pause_*_gate` node and checkpointed before the interrupt node.
-This mirrors the existing `prepare_tool_execution -> tool_confirm` HITL pattern.
+Cancel is terminal and does not promise rollback of files or external effects
+that already happened. A response remains `cancelling` while the old runner has
+not acknowledged stop; the frontend stays locked and cannot start an overlapping
+task. Only a stopped runner may release its exact lease. Runner/fence identity
+also prevents late delta, tool, done or checkpoint callbacks from an old Trace
+from mutating the new timeline.
 
-Pause gates cover the first/next model round, tool dispatch, post-confirmation
-tool execution, post-tool checkpoint, post-verification, post-compression and
-finalization. Continue revalidates ownership, exact checkpoint Trace and the
-`user_pause` interrupt type, then uses a Redis resume lock to reject duplicate
-resume attempts. `/chat/stream/status` lets a refreshed client recover the
-authoritative paused state.
+Foreground POSIX Shell uses a process group and TERM/KILL escalation when
+possible. Operations without an immediate interruption primitive are recorded
+as best-effort cancellation. Managed `background_run` processes are terminated
+for the exact Trace on Stop. Tool batches check Redis cancellation immediately
+before every call.
 
-This is **cooperative**, not preemptive, suspension. A request received during
-one blocking model or foreground-tool call takes effect only after that call
-returns to the next gate. The red **Stop** button remains the separate terminal
-Cancel path; it resumes a paused interrupt with `action=cancel` and converges
-the task to irreversible `cancelled` rather than pretending to be Pause. The
-cancel path also closes the checkpoint turn with an idempotent Assistant
-tombstone, synchronizes the matching MySQL assistant row, and prevents a late
-SSE finalizer from downgrading the terminal status. This preserves the stopped
-question for conversational reference without presenting it as another pending
-request on the next model call.
+Sensitive-tool confirmation remains the sole resumable interrupt. Approval,
+rejection and timeout revalidate checkpoint identity, keep the original
+`trace_id`, acquire the token-owned Redis resume lock, and use
+`Command(resume=...)`. A Stop while waiting for confirmation terminalizes the
+Trace instead of submitting a synthetic “Reject All” decision.
+
+See [the two-phase rolling migration](docs/cancel-and-replan-rolling-migration.md)
+for retirement of legacy `paused` checkpoints and `agent:pause:*` keys.
 
 ### 5.2 Explicit Multi-Agent boundary
 
@@ -247,7 +230,7 @@ flowchart LR
     RECEIPT --> MODEL["Bounded ToolMessage preview"]
     MODEL --> MICRO["Older bodies become verified restricted-evidence handles"]
     MICRO --> CHECK{"Still above effective threshold?"}
-    CHECK -->|No| LLM["Continue Agent loop"]
+    CHECK -->|No| LLM["Next Agent loop"]
     CHECK -->|Yes| TRANS["Atomic normalized transcript"]
     TRANS --> SUMMARY["Deterministic state packet + LLM narrative"]
     SUMMARY --> REPLACE["RemoveMessage(REMOVE_ALL_MESSAGES)<br/>then compressed messages"]

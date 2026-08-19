@@ -2,7 +2,9 @@ import asyncio
 import json
 import logging
 import re
+import time
 import uuid
+from contextlib import aclosing
 from datetime import datetime, timedelta, timezone
 
 from fastapi import APIRouter, Depends, HTTPException
@@ -23,9 +25,13 @@ from enterprise_agent.api.schemas.chat import (
     SessionResponse,
 )
 from enterprise_agent.api.services.chat_history import (
+    build_model_history,
+    claim_latest_continuation_receipt,
     create_assistant_message,
     find_assistant_message_id,
+    get_latest_assistant_task,
     mark_assistant_message_cancelled,
+    merge_timeline,
     message_counts_by_session,
     persist_legacy_messages,
     serialize_message,
@@ -38,11 +44,26 @@ from enterprise_agent.api.services.chat_history import (
 from enterprise_agent.config.settings import settings
 from enterprise_agent.core.agent.graph import get_agent_graph
 from enterprise_agent.core.agent.tools.workspace import set_current_user_id
-from enterprise_agent.core.execution.pause_control import (
+from enterprise_agent.core.execution.interrupt_control import (
     acquire_task_resume_lock,
-    clear_task_pause_request,
+    claim_active_trace_lease,
+    clear_legacy_pause_key,
+    get_active_trace_lease,
+    get_trace_cancel_request,
+    mark_active_trace_runner_stopped,
+    owns_current_task_runner,
+    release_active_trace_lease,
     release_task_resume_lock,
-    request_task_pause,
+    renew_active_trace_runner,
+    request_trace_cancellation,
+    reserve_active_trace_runner,
+    reset_current_task_control_identity,
+    reset_current_task_runner_identity,
+    scan_legacy_pause_keys,
+    set_current_task_control_identity,
+    set_current_task_runner_identity,
+    set_user_pause_protocol_retired,
+    start_active_trace_runner,
 )
 from enterprise_agent.core.execution.state_machine import (
     ExecutionPhase,
@@ -70,6 +91,30 @@ def _extract_delta(content) -> str:
                 parts.append(block.text)
         return "".join(parts)
     return str(content) if content else ""
+
+
+def _final_response_content(result: dict) -> str:
+    """Extract the final assistant text from a terminal graph result."""
+    messages = result.get("messages", [])
+    if not messages:
+        return ""
+    last_message = messages[-1]
+    raw_content = (
+        last_message.content
+        if hasattr(last_message, "content")
+        else last_message.get("content", "")
+        if isinstance(last_message, dict)
+        else str(last_message)
+    )
+    if isinstance(raw_content, list):
+        parts = []
+        for block in raw_content:
+            if isinstance(block, dict) and block.get("type") == "text":
+                parts.append(str(block.get("text", "")))
+            elif hasattr(block, "text"):
+                parts.append(str(block.text))
+        return "\n".join(part for part in parts if part)
+    return str(raw_content or "")
 
 
 def _sse_event(payload: dict) -> str:
@@ -150,6 +195,22 @@ def _terminal_stream_event(
     }
 
 
+def _scoped_stream_event(
+    event: dict,
+    *,
+    session_id: str,
+    trace_id: str,
+    fence: int | str,
+) -> dict:
+    """Attach the exact runner scope to every mutable SSE event."""
+    return {
+        **event,
+        "session_id": session_id,
+        "trace_id": trace_id,
+        "stream_fence": fence,
+    }
+
+
 def _tool_sse_events(node_output: dict) -> list[dict]:
     """Build authoritative completion events for the current executor batch.
 
@@ -196,6 +257,69 @@ def _tool_sse_events(node_output: dict) -> list[dict]:
     return events
 
 
+class _StreamTimelineRecorder:
+    """Compact the visible SSE stream into durable assistant/tool blocks."""
+
+    def __init__(self) -> None:
+        self.entries: list[dict] = []
+
+    def record_delta(self, delta: str) -> None:
+        if delta:
+            self.entries = merge_timeline(
+                self.entries,
+                [{"role": "assistant", "content": delta}],
+            )
+
+    def record_event(self, event: dict) -> None:
+        event_name = str(event.get("event") or "")
+        if event_name == "tool_start":
+            self._record_tool(event, default_status="running")
+            return
+        if event_name in {"tool_result", "tool_end"}:
+            self._record_tool(event, default_status="error")
+            return
+        if event_name != "interrupt":
+            return
+
+        payload = event.get("data") if isinstance(event.get("data"), dict) else {}
+        for tool in payload.get("tools", []) or []:
+            if not isinstance(tool, dict):
+                continue
+            self._record_tool(
+                {
+                    "id": tool.get("id", ""),
+                    "name": tool.get("name", ""),
+                    "status": "waiting",
+                },
+                default_status="waiting",
+            )
+
+    def _record_tool(self, event: dict, *, default_status: str) -> None:
+        raw_status = str(event.get("status") or "").lower()
+        if raw_status:
+            status = raw_status
+        elif event.get("ok") is True:
+            status = "done"
+        elif event.get("ok") is False:
+            status = "error"
+        else:
+            status = default_status
+
+        entry = {
+            "role": "tool_call",
+            "toolCallId": str(event.get("id") or ""),
+            "toolName": str(event.get("name") or "tool"),
+            "toolStatus": status,
+        }
+        if "result" in event:
+            entry["toolResult"] = event.get("result")
+        if event.get("error_code"):
+            entry["toolError"] = f"Tool failed: {event['error_code']}"
+        if "duration_ms" in event:
+            entry["toolDuration"] = event.get("duration_ms")
+        self.entries = merge_timeline(self.entries, [entry])
+
+
 _SUPPRESS_MAX_CHUNKS = 30  # Safety timeout for summary mode
 
 # Per-trace cancellation events. A session can outlive many task traces, so a
@@ -208,6 +332,125 @@ CANCELLATION_TOMBSTONE = (
     "*[Generation stopped by user. The preceding request was cancelled and "
     "will not be continued.]*"
 )
+
+
+async def _claim_new_trace_control(
+    *,
+    user_id: int,
+    session_id: str,
+    trace_id: str,
+) -> dict:
+    """Atomically claim the session before any new trace state is persisted."""
+    lease = await claim_active_trace_lease(
+        user_id,
+        session_id,
+        trace_id,
+        ttl_seconds=settings.ACTIVE_TRACE_LEASE_SECONDS,
+    )
+    if lease is None:
+        active = await get_active_trace_lease(user_id, session_id)
+        active_trace = active.get("trace_id") if active else "unknown"
+        raise HTTPException(
+            status_code=409,
+            detail=f"Task {active_trace} is still active for this session.",
+        )
+    return lease
+
+
+async def _reserve_existing_trace_runner(
+    *,
+    user_id: int,
+    session_id: str,
+    trace_id: str,
+) -> dict:
+    """Reserve one runner for a stopped HITL trace, including legacy checkpoints."""
+    if await get_trace_cancel_request(user_id, session_id, trace_id):
+        raise HTTPException(status_code=409, detail="This task is being cancelled.")
+    active = await get_active_trace_lease(user_id, session_id)
+    if active is None:
+        lease = await claim_active_trace_lease(
+            user_id,
+            session_id,
+            trace_id,
+            ttl_seconds=settings.ACTIVE_TRACE_LEASE_SECONDS,
+        )
+    else:
+        if active.get("trace_id") != trace_id:
+            raise HTTPException(status_code=409, detail="Another trace owns this session.")
+        lease = await reserve_active_trace_runner(
+            user_id,
+            session_id,
+            trace_id,
+            active["lease_token"],
+            ttl_seconds=settings.ACTIVE_TRACE_LEASE_SECONDS,
+        )
+    if lease is None:
+        raise HTTPException(status_code=409, detail="This confirmation is already being resumed.")
+    return lease
+
+
+async def _mark_runner_stopped_and_release(
+    *,
+    user_id: int,
+    session_id: str,
+    trace_id: str,
+    lease_token: str,
+    runner_token: str,
+    reason: str,
+    release: bool,
+) -> str:
+    """Acknowledge runner quiescence before an exact compare-and-release."""
+    await mark_active_trace_runner_stopped(
+        user_id,
+        session_id,
+        trace_id,
+        lease_token,
+        runner_token,
+        reason=reason,
+        ttl_seconds=settings.ACTIVE_TRACE_LEASE_SECONDS,
+    )
+    if not release:
+        return "retained"
+    return await release_active_trace_lease(
+        user_id,
+        session_id,
+        trace_id,
+        lease_token,
+    )
+
+
+async def _runner_cancel_request(
+    *,
+    user_id: int,
+    session_id: str,
+    trace_id: str,
+    local_event: asyncio.Event | None = None,
+) -> dict | None:
+    if local_event is not None and local_event.is_set():
+        return await get_trace_cancel_request(user_id, session_id, trace_id) or {
+            "reason": "Cancelled by user",
+        }
+    return await get_trace_cancel_request(user_id, session_id, trace_id)
+
+
+async def _wait_for_cancelled_lease_release(
+    *,
+    user_id: int,
+    session_id: str,
+    trace_id: str,
+    timeout: float,
+) -> bool:
+    """Wait briefly for the owner runner to persist cancellation and quiesce."""
+    deadline = time.monotonic() + max(0.0, timeout)
+    while True:
+        lease = await get_active_trace_lease(user_id, session_id)
+        if lease is None:
+            return True
+        if lease.get("trace_id") != trace_id:
+            return False
+        if time.monotonic() >= deadline:
+            return False
+        await asyncio.sleep(0.05)
 
 
 def _interrupt_payload(interrupt_obj) -> dict | None:
@@ -287,14 +530,6 @@ def _stream_interrupt_event(
             payload.get("deadline"),
         )
         return {"event": "interrupt", "data": payload}, "interrupted"
-    if interrupt_type == "user_pause":
-        return {
-            "event": "paused",
-            "session_id": session_id,
-            "trace_id": trace_id,
-            "status": TaskStatus.PAUSED.value,
-            "data": payload,
-        }, "paused"
     raise RuntimeError(f"Unsupported interrupt type: {interrupt_type}")
 
 
@@ -339,33 +574,131 @@ def _schedule_confirmation_timeout(
             ):
                 return
 
-            set_current_user_id(user_id)
-            await graph.ainvoke(
-                Command(resume={
-                    "approved": False,
-                    "approved_ids": [],
-                    "reason": "confirmation_timeout",
-                }),
-                config,
+            resume_lock_token = await acquire_task_resume_lock(
+                user_id,
+                session_id,
+                trace_id,
             )
-            checkpoint_trace_id = values.get("trace_id")
-            if checkpoint_trace_id:
-                async with async_session_factory() as history_db:
-                    message_id = await find_assistant_message_id(
-                        history_db,
+            if not resume_lock_token:
+                return
+            lease = None
+            control_token = None
+            runner_context_token = None
+            terminal_persisted = False
+            assistant_status = "failed"
+            try:
+                lease = await _reserve_existing_trace_runner(
+                    user_id=user_id,
+                    session_id=session_id,
+                    trace_id=trace_id,
+                )
+                if not await start_active_trace_runner(
+                    user_id,
+                    session_id,
+                    trace_id,
+                    lease["lease_token"],
+                    lease["runner_token"],
+                    ttl_seconds=settings.ACTIVE_TRACE_LEASE_SECONDS,
+                ):
+                    return
+                set_current_user_id(user_id)
+                control_token = set_current_task_control_identity(
+                    user_id,
+                    session_id,
+                    trace_id,
+                )
+                runner_context_token = set_current_task_runner_identity(
+                    user_id,
+                    session_id,
+                    trace_id,
+                    lease["lease_token"],
+                    lease["runner_token"],
+                )
+                result = await graph.ainvoke(
+                    Command(resume={
+                        "approved": False,
+                        "approved_ids": [],
+                        "reason": "confirmation_timeout",
+                    }),
+                    config,
+                )
+                assistant_status, timeout_error = _task_terminal_outcome(
+                    result,
+                    session_id=session_id,
+                    user_id=user_id,
+                    trace_id=trace_id,
+                )
+                if assistant_status == "failed" and result.get("task_status") not in {
+                    TaskStatus.FAILED.value,
+                    TaskStatus.SUCCEEDED.value,
+                    TaskStatus.CANCELLED.value,
+                }:
+                    await _safe_mark_task_terminal(
+                        graph,
+                        config,
+                        TaskStatus.FAILED,
+                        timeout_error,
+                        expected_trace_id=trace_id,
+                    )
+                if assistant_status == "cancelled":
+                    await _safe_mark_durable_assistant_cancelled(
                         session_id=session_id,
                         user_id=user_id,
-                        trace_id=checkpoint_trace_id,
+                        trace_id=trace_id,
+                        values=result,
+                        reason=timeout_error or "Cancelled by user",
                     )
-                    if message_id is not None:
-                        await update_assistant_message(
+                    terminal_persisted = await _durable_cancellation_confirmed(
+                        session_id=session_id,
+                        user_id=user_id,
+                        trace_id=trace_id,
+                    )
+                else:
+                    async with async_session_factory() as history_db:
+                        message_id = await find_assistant_message_id(
+                            history_db,
+                            session_id=session_id,
+                            user_id=user_id,
+                            trace_id=trace_id,
+                        )
+                        if message_id is None:
+                            message_id = await create_assistant_message(
+                                history_db,
+                                session_id=session_id,
+                                user_id=user_id,
+                                trace_id=trace_id,
+                                status="interrupted",
+                            )
+                        terminal_persisted = await update_assistant_message(
                             history_db,
                             message_id=message_id,
                             user_id=user_id,
                             content="\n\n*[Tool confirmation timed out and was rejected.]*",
-                            status="failed",
+                            status=assistant_status,
                             append=True,
                         )
+            finally:
+                if runner_context_token is not None:
+                    reset_current_task_runner_identity(runner_context_token)
+                if control_token is not None:
+                    reset_current_task_control_identity(control_token)
+                if lease is not None:
+                    await _mark_runner_stopped_and_release(
+                        user_id=user_id,
+                        session_id=session_id,
+                        trace_id=trace_id,
+                        lease_token=lease["lease_token"],
+                        runner_token=lease["runner_token"],
+                        reason="confirmation_timeout",
+                        release=terminal_persisted
+                        and assistant_status in {"completed", "failed", "cancelled"},
+                    )
+                await release_task_resume_lock(
+                    user_id,
+                    session_id,
+                    trace_id,
+                    resume_lock_token,
+                )
             logging.info("[confirm] Session %s expired and was rejected", session_id)
         except asyncio.CancelledError:
             return
@@ -631,20 +964,26 @@ async def _persist_stream_segment(
     user_id: int,
     content: str,
     status: str,
-) -> None:
+    timeline_entries: list[dict] | None = None,
+) -> bool:
     """Persist one completed SSE segment with an independent DB session."""
     try:
         async with async_session_factory() as history_db:
-            await update_assistant_message(
+            updated = await update_assistant_message(
                 history_db,
                 message_id=message_id,
                 user_id=user_id,
                 content=content,
                 status=status,
                 append=True,
+                timeline_entries=timeline_entries,
             )
+            if not updated:
+                raise RuntimeError("Assistant stream row no longer exists.")
+        return True
     except Exception:
         logging.exception("Failed to persist assistant stream segment message_id=%s", message_id)
+        return False
 
 
 async def migrate_readable_checkpoint_histories() -> int:
@@ -689,6 +1028,146 @@ async def migrate_readable_checkpoint_histories() -> int:
                     exc_info=True,
                 )
     return migrated
+
+
+async def retire_legacy_user_pause_tasks() -> int:
+    """Idempotently terminalize every pre-removal user-pause artifact.
+
+    Phase-B instances call this before readiness.  A matching running v2 lease
+    is a deployment-order violation and fails startup instead of racing an
+    owner that can still write the checkpoint.
+    """
+    await set_user_pause_protocol_retired("user_pause_feature_retired")
+    retired = 0
+    graph = get_agent_graph()
+    trace_store = get_trace_store()
+    async with async_session_factory() as db:
+        result = await db.execute(
+            select(Session).where(Session.status != SessionStatus.DELETED)
+        )
+        sessions = result.scalars().all()
+        for session in sessions:
+            config = {"configurable": {"thread_id": session.id}}
+            snapshot = await graph.aget_state(config)
+            values = snapshot.values if snapshot and snapshot.values else {}
+            interrupt_payload = _snapshot_interrupt_payload(snapshot) or {}
+            is_legacy_checkpoint = (
+                values.get("task_status")
+                in {TaskStatus.PAUSED.value, "pause_requested", "resuming"}
+                or interrupt_payload.get("type") == "user_pause"
+            )
+            if is_legacy_checkpoint:
+                active = await get_active_trace_lease(session.user_id, session.id)
+                legacy_trace_id = str(
+                    values.get("trace_id") or interrupt_payload.get("trace_id") or ""
+                )
+                if active and active.get("trace_id") != legacy_trace_id:
+                    raise RuntimeError(
+                        "Legacy pause checkpoint and active lease disagree: "
+                        f"session={session.id} checkpoint={legacy_trace_id} "
+                        f"lease={active.get('trace_id')}"
+                    )
+                if active and active.get("runner_state") != "stopped":
+                    raise RuntimeError(
+                        "Cannot retire a legacy pause while its runner lease is active: "
+                        f"session={session.id} trace={active.get('trace_id')}"
+                    )
+                if await _retire_legacy_pause_checkpoint(
+                    graph,
+                    config,
+                    snapshot,
+                    session_id=session.id,
+                    user_id=session.user_id,
+                ):
+                    retired += 1
+                    if active:
+                        await _mark_runner_stopped_and_release(
+                            user_id=session.user_id,
+                            session_id=session.id,
+                            trace_id=str(active["trace_id"]),
+                            lease_token=active["lease_token"],
+                            runner_token=active["runner_token"],
+                            reason="user_pause_feature_retired",
+                            release=True,
+                        )
+
+            # Trace JSON is an audit projection and can outlive its checkpoint.
+            # Terminalize orphaned lifecycle projections without deleting their
+            # historical paused events.
+            for trace in trace_store.list_traces(session.user_id, limit=500):
+                if trace.get("session_id") != session.id or trace.get("status") not in {
+                    TaskStatus.PAUSED.value,
+                    "pause_requested",
+                    "resuming",
+                }:
+                    continue
+                trace_id = str(trace.get("trace_id") or "")
+                if not trace_id:
+                    continue
+                trace_store.finish_trace(
+                    user_id=session.user_id,
+                    trace_id=trace_id,
+                    status=TaskStatus.CANCELLED.value,
+                    error="user_pause_feature_retired",
+                )
+                await _safe_mark_durable_assistant_cancelled(
+                    session_id=session.id,
+                    user_id=session.user_id,
+                    trace_id=trace_id,
+                    values={"current_user_request": trace.get("request_summary", "")},
+                    reason="user_pause_feature_retired",
+                )
+                await clear_legacy_pause_key(session.user_id, session.id, trace_id)
+                retired += 1
+
+    # Delete any orphan control key that no longer has a MySQL Session row.
+    for key in await scan_legacy_pause_keys():
+        parts = key.split(":", 4)
+        if len(parts) != 5:
+            continue
+        try:
+            key_user_id = int(parts[2])
+        except ValueError:
+            continue
+        await clear_legacy_pause_key(key_user_id, parts[3], parts[4])
+    return retired
+
+
+async def restore_pending_confirmation_timeouts() -> int:
+    """Re-arm durable tool-confirmation deadlines after a worker restart."""
+    restored = 0
+    graph = get_agent_graph()
+    async with async_session_factory() as db:
+        result = await db.execute(
+            select(Session).where(Session.status != SessionStatus.DELETED)
+        )
+        for session in result.scalars().all():
+            snapshot = await graph.aget_state(
+                {"configurable": {"thread_id": session.id}}
+            )
+            values = snapshot.values if snapshot and snapshot.values else {}
+            interrupt_payload = _snapshot_interrupt_payload(snapshot) or {}
+            if (
+                values.get("task_status") != TaskStatus.WAITING_CONFIRMATION.value
+                or interrupt_payload.get("type") != "tool_confirmation"
+                or values.get("user_id") != session.user_id
+            ):
+                continue
+            trace_id = str(values.get("trace_id") or "")
+            if not trace_id:
+                continue
+            _schedule_confirmation_timeout(
+                session.id,
+                trace_id,
+                session.user_id,
+                str(
+                    values.get("confirmation_deadline")
+                    or interrupt_payload.get("deadline")
+                    or ""
+                ),
+            )
+            restored += 1
+    return restored
 
 
 router = APIRouter(prefix="/chat", tags=["chat"])
@@ -831,6 +1310,8 @@ def _task_input(
     permissions: list[str],
     content: str,
     mode: str = "single_agent",
+    history_messages: list[dict[str, str]] | None = None,
+    continuation_receipt: dict | None = None,
 ) -> dict:
     """Build a backward-compatible graph input for a new task run."""
     return {
@@ -843,12 +1324,130 @@ def _task_input(
         "task_status": TaskStatus.PENDING.value,
         "execution_phase": ExecutionPhase.PARSING.value,
         "task_started_at": datetime.now(timezone.utc).isoformat(),
-        "pause_requested_at": None,
-        "paused_at": None,
-        "pause_reason": None,
-        "pause_resume_target": None,
-        "messages": [{"role": "user", "content": content}],
+        "continuation_receipt": continuation_receipt,
+        "messages": [
+            *(history_messages or []),
+            {"role": "user", "content": content},
+        ],
     }
+
+
+async def _claim_new_task_context(
+    db: AsyncSession,
+    *,
+    session_id: str,
+    user_id: int,
+    trace_id: str,
+    graph,
+) -> tuple[list[dict[str, str]], dict | None]:
+    """Return durable fallback history and the one-shot cancellation receipt.
+
+    A readable Redis checkpoint already contains the canonical LangGraph
+    message list, so injecting MySQL rows in that case would duplicate every
+    previous turn.  MySQL becomes model input only when checkpoint messages are
+    unavailable.
+    """
+    snapshot = await graph.aget_state({"configurable": {"thread_id": session_id}})
+    values = snapshot.values if snapshot and snapshot.values else {}
+    history_messages: list[dict[str, str]] = []
+    if not values.get("messages"):
+        durable_rows = await list_durable_messages(
+            db,
+            session_id=session_id,
+            user_id=user_id,
+        )
+        history_messages = build_model_history(
+            durable_rows,
+            max_messages=settings.MAX_MESSAGES_PER_SESSION,
+            max_characters=settings.DURABLE_HISTORY_MAX_CHARS,
+        )
+
+    continuation_receipt = await claim_latest_continuation_receipt(
+        db,
+        session_id=session_id,
+        user_id=user_id,
+        consumer_trace_id=trace_id,
+    )
+    return history_messages, continuation_receipt
+
+
+def _receipt_item_content(item: dict) -> str:
+    return str(
+        item.get("content")
+        or item.get("title")
+        or item.get("description")
+        or item.get("activeForm")
+        or ""
+    ).strip()
+
+
+def _build_continuation_receipt(
+    values: dict,
+    *,
+    trace_id: str,
+    reason: str,
+    fallback_goal: str = "",
+) -> dict:
+    """Create a compact evidence hand-off for a fresh post-cancel trace."""
+    todos = [item for item in values.get("todos", []) if isinstance(item, dict)]
+    completed_items = [
+        _receipt_item_content(item)
+        for item in todos
+        if item.get("status") == "completed" and _receipt_item_content(item)
+    ][:20]
+    incomplete_items = [
+        _receipt_item_content(item)
+        for item in todos
+        if item.get("status") in {"pending", "in_progress"}
+        and _receipt_item_content(item)
+    ][:20]
+    if not incomplete_items:
+        incomplete_items = [
+            "Re-inspect the workspace and chat evidence to determine remaining work."
+        ]
+
+    validations = []
+    for item in values.get("validation_results", []) or []:
+        if not isinstance(item, dict):
+            continue
+        validations.append({
+            "command": str(item.get("command") or "")[:500],
+            "ok": bool(item.get("ok")),
+            "status": str(item.get("status") or "")[:50],
+            "exit_code": item.get("exit_code"),
+        })
+        if len(validations) >= 20:
+            break
+
+    current_task = values.get("current_task")
+    current_task = current_task if isinstance(current_task, dict) else {}
+    original_goal = str(
+        values.get("current_user_request")
+        or current_task.get("request")
+        or fallback_goal
+        or "Unknown cancelled task goal"
+    )[:10_000]
+    receipt = {
+        "schema_version": 1,
+        "trace_id": trace_id,
+        "cancelled_at": datetime.now(timezone.utc).isoformat(),
+        "cancellation_reason": str(reason or "Cancelled by user")[:500],
+        "original_task_goal": original_goal,
+        "completed_items": completed_items,
+        "incomplete_items": incomplete_items,
+        "modified_files": [
+            str(path)[:1000] for path in (values.get("changed_files", []) or [])[:100]
+        ],
+        "validation_results": validations,
+        "risks": [
+            "Cancellation is terminal and does not roll back file or external side effects already completed.",
+            (
+                "Operations that cannot be interrupted immediately are cancelled on a "
+                "best-effort basis; verify workspace and external state before continuing."
+            ),
+        ],
+    }
+    return receipt
 
 
 def _message_tool_calls(message) -> list[dict]:
@@ -897,9 +1496,25 @@ async def _safe_mark_durable_assistant_cancelled(
     session_id: str,
     user_id: int,
     trace_id: str,
+    values: dict | None = None,
+    reason: str = "Cancelled by user",
 ) -> None:
-    """Best-effort MySQL convergence for every cancellation entry point."""
+    """Best-effort MySQL convergence and durable continuation hand-off."""
     try:
+        fallback_goal = ""
+        try:
+            fallback_goal = str(
+                get_trace_store().get_trace(user_id, trace_id).get("request_summary")
+                or ""
+            )
+        except (FileNotFoundError, ValueError):
+            pass
+        receipt = _build_continuation_receipt(
+            values or {},
+            trace_id=trace_id,
+            reason=reason,
+            fallback_goal=fallback_goal,
+        )
         async with async_session_factory() as history_db:
             updated = await mark_assistant_message_cancelled(
                 history_db,
@@ -907,14 +1522,69 @@ async def _safe_mark_durable_assistant_cancelled(
                 user_id=user_id,
                 trace_id=trace_id,
                 tombstone=CANCELLATION_TOMBSTONE,
+                continuation_receipt=receipt,
             )
             if not updated:
+                # Pre-durable legacy checkpoints and a Stop that wins before
+                # first checkpoint can lack an assistant row for this exact
+                # trace.  Create the audit anchor instead of silently losing
+                # the terminal receipt.
+                await create_assistant_message(
+                    history_db,
+                    session_id=session_id,
+                    user_id=user_id,
+                    trace_id=trace_id,
+                    status="interrupted",
+                )
+                updated = await mark_assistant_message_cancelled(
+                    history_db,
+                    session_id=session_id,
+                    user_id=user_id,
+                    trace_id=trace_id,
+                    tombstone=CANCELLATION_TOMBSTONE,
+                    continuation_receipt=receipt,
+                )
+            try:
+                get_trace_store().record_event(
+                    user_id=user_id,
+                    trace_id=trace_id,
+                    event_type="control",
+                    name="continuation_receipt_persisted",
+                    status="success" if updated else "error",
+                    data=receipt,
+                )
+            except (FileNotFoundError, ValueError):
                 logging.warning(
-                    "No durable assistant message found for cancelled trace %s",
+                    "Trace was unavailable while recording continuation receipt %s",
                     trace_id,
                 )
     except Exception:
         logging.warning("Failed to persist cancelled assistant message", exc_info=True)
+
+
+async def _durable_cancellation_confirmed(
+    *,
+    session_id: str,
+    user_id: int,
+    trace_id: str,
+) -> bool:
+    """Require both the terminal assistant row and its continuation receipt."""
+    try:
+        async with async_session_factory() as history_db:
+            evidence = await get_latest_assistant_task(
+                history_db,
+                session_id=session_id,
+                user_id=user_id,
+                trace_id=trace_id,
+            )
+    except Exception:
+        logging.warning("Failed to verify durable cancellation", exc_info=True)
+        return False
+    return bool(
+        evidence
+        and evidence.get("status") == "cancelled"
+        and evidence.get("continuation_receipt")
+    )
 
 
 def _start_task_trace(
@@ -957,7 +1627,13 @@ async def _safe_mark_task_terminal(
         try:
             status = transition_task_status(current, target)
         except InvalidTaskTransitionError:
-            if current == target.value:
+            if target == TaskStatus.CANCELLED and current in {
+                TaskStatus.PAUSED.value,
+                "pause_requested",
+                "resuming",
+            }:
+                status = target.value
+            elif current == target.value:
                 status = target.value
             else:
                 logging.warning("Cannot mark task %s from terminal status %s", target.value, current)
@@ -969,6 +1645,12 @@ async def _safe_mark_task_terminal(
             "pending_tool_calls": [],
             "should_end": True,
         }
+        from enterprise_agent.core.agent.nodes import terminalize_open_work_items
+
+        terminal_update.update({
+            "todos": terminalize_open_work_items(values, status),
+            "has_open_todos": False,
+        })
         if target == TaskStatus.CANCELLED:
             trace_id = str(values.get("trace_id") or expected_trace_id or "")
             if trace_id:
@@ -976,27 +1658,26 @@ async def _safe_mark_task_terminal(
                     values,
                     trace_id,
                 )
-        await graph.aupdate_state(config, terminal_update)
-        from enterprise_agent.core.agent.nodes import terminalize_open_work_items
-        terminal_todos = terminalize_open_work_items(values, status)
+            # A cancellation is a terminal fence, not a resumable checkpoint.
+            # At this point callers have stopped/closed the owner runner.
+            await graph.aupdate_state(
+                config,
+                terminal_update,
+                as_node="persist_memory",
+            )
+        else:
+            await graph.aupdate_state(config, terminal_update)
         trace_id = values.get("trace_id")
         user_id = values.get("user_id")
-        await graph.aupdate_state(
-            config,
-            {
-                "todos": terminal_todos,
-                "has_open_todos": False,
-            },
-        )
         if trace_id and user_id is not None:
             try:
-                await clear_task_pause_request(
+                await clear_legacy_pause_key(
                     int(user_id),
                     str(values.get("session_id") or config["configurable"]["thread_id"]),
                     str(trace_id),
                 )
             except Exception:
-                logging.warning("Failed to clear terminal pause request", exc_info=True)
+                logging.warning("Failed to clear legacy pause request", exc_info=True)
             try:
                 get_trace_store().finish_trace(
                     user_id=user_id,
@@ -1088,28 +1769,92 @@ async def _converge_stream_cancellation(
         return fallback_status
 
 
+async def _retire_legacy_pause_checkpoint(
+    graph,
+    config: dict,
+    snapshot,
+    *,
+    session_id: str,
+    user_id: int,
+) -> bool:
+    """Terminalize a straggling pre-removal user-pause checkpoint in place."""
+    values = snapshot.values if snapshot and snapshot.values else {}
+    interrupt_payload = _snapshot_interrupt_payload(snapshot) or {}
+    legacy_statuses = {TaskStatus.PAUSED.value, "pause_requested", "resuming"}
+    if values.get("task_status") not in legacy_statuses and interrupt_payload.get(
+        "type"
+    ) != "user_pause":
+        return False
+    trace_id = str(values.get("trace_id") or interrupt_payload.get("trace_id") or "")
+    if not trace_id:
+        return False
+    _require_checkpoint_identity(
+        values,
+        session_id=session_id,
+        user_id=user_id,
+        trace_id=trace_id,
+    )
+    reason = "user_pause_feature_retired"
+    await _safe_mark_task_terminal(
+        graph,
+        config,
+        TaskStatus.CANCELLED,
+        reason,
+        expected_trace_id=trace_id,
+    )
+    await clear_legacy_pause_key(user_id, session_id, trace_id)
+    await _safe_mark_durable_assistant_cancelled(
+        session_id=session_id,
+        user_id=user_id,
+        trace_id=trace_id,
+        values=values,
+        reason=reason,
+    )
+    return True
+
+
 async def _ensure_session_accepts_new_task(
     graph,
     *,
     session_id: str,
     user_id: int,
 ) -> None:
-    """Prevent a new trace from overwriting a resumable checkpoint."""
-    active_trace = _active_stream_traces.get(session_id)
-    if active_trace:
+    """Prevent a new trace from overwriting any authoritative active owner."""
+    active_lease = await get_active_trace_lease(user_id, session_id)
+    if active_lease:
         raise HTTPException(
             status_code=409,
-            detail=f"Task {active_trace} is still active for this session.",
+            detail=(
+                f"Task {active_lease.get('trace_id', '')} is still active for this session."
+            ),
         )
 
-    snapshot = await graph.aget_state({"configurable": {"thread_id": session_id}})
+    # The process-local map remains a latency/debugging optimization only.
+    active_trace = _active_stream_traces.get(session_id)
+    if active_trace:
+        logging.warning(
+            "Discarding stale process-local active trace %s for session %s",
+            active_trace,
+            session_id,
+        )
+        _active_stream_traces.pop(session_id, None)
+
+    config = {"configurable": {"thread_id": session_id}}
+    snapshot = await graph.aget_state(config)
+    if await _retire_legacy_pause_checkpoint(
+        graph,
+        config,
+        snapshot,
+        session_id=session_id,
+        user_id=user_id,
+    ):
+        snapshot = await graph.aget_state(config)
     values = snapshot.values if snapshot and snapshot.values else {}
     if values and values.get("user_id") not in {None, user_id}:
         raise HTTPException(status_code=409, detail="Checkpoint owner mismatch.")
     if values.get("task_status") in {
         TaskStatus.PENDING.value,
         TaskStatus.RUNNING.value,
-        TaskStatus.PAUSED.value,
         TaskStatus.WAITING_CONFIRMATION.value,
     }:
         raise HTTPException(
@@ -1128,24 +1873,23 @@ async def chat_completion(
     permissions: list = Depends(get_current_user_permissions),
     db: AsyncSession = Depends(get_db),
 ):
-    """Non-streaming chat completion
-
-    Args:
-        request: Chat request
-        user_id: Current user ID from JWT
-
-    Returns:
-        Chat response
-    """
+    """Run one non-streaming task under an authoritative Redis trace lease."""
     _validate_request_mode(request.mode, request.content, permissions)
     if request.session_id:
         await _require_owned_session(request.session_id, user_id, db)
     quota_lease = await acquire_task_quota(user_id, db)
-    assistant_message_id = None
-    session_id = None
-    trace_id = None
+    assistant_message_id: int | None = None
+    session_id: str | None = None
+    trace_id: str | None = None
+    graph = None
+    config: dict | None = None
+    lease: dict | None = None
+    control_token = None
+    runner_context_token = None
+    runner_started = False
+    terminal_persisted = False
     assistant_status = "failed"
-    terminal_reason = None
+    terminal_reason: str | None = None
     try:
         session_id = await _resolve_chat_session(request, user_id, db)
         trace_id = str(uuid.uuid4())
@@ -1156,6 +1900,11 @@ async def chat_completion(
             graph,
             session_id=session_id,
             user_id=user_id,
+        )
+        lease = await _claim_new_trace_control(
+            user_id=user_id,
+            session_id=session_id,
+            trace_id=trace_id,
         )
         _active_stream_traces[session_id] = trace_id
         assistant_message_id = await start_turn(
@@ -1172,12 +1921,62 @@ async def chat_completion(
             content=request.content,
             mode=request.mode,
         )
-
-        # Set user context for workspace isolation
+        history_messages, continuation_receipt = await _claim_new_task_context(
+            db,
+            session_id=session_id,
+            user_id=user_id,
+            trace_id=trace_id,
+            graph=graph,
+        )
         set_current_user_id(user_id)
-
-        # Execute agent graph with thread_id for state persistence
         config = {"configurable": {"thread_id": session_id}}
+        runner_started = await start_active_trace_runner(
+            user_id,
+            session_id,
+            trace_id,
+            lease["lease_token"],
+            lease["runner_token"],
+            ttl_seconds=settings.ACTIVE_TRACE_LEASE_SECONDS,
+        )
+        if not runner_started:
+            cancellation = await get_trace_cancel_request(user_id, session_id, trace_id)
+            if cancellation is None:
+                raise HTTPException(status_code=409, detail="The task runner lease is no longer valid.")
+            await _safe_mark_durable_assistant_cancelled(
+                session_id=session_id,
+                user_id=user_id,
+                trace_id=trace_id,
+                values={"current_user_request": request.content},
+                reason=str(cancellation.get("reason") or "Cancelled by user"),
+            )
+            assistant_status = "cancelled"
+            terminal_persisted = await _durable_cancellation_confirmed(
+                session_id=session_id,
+                user_id=user_id,
+                trace_id=trace_id,
+            )
+            if not terminal_persisted:
+                raise HTTPException(
+                    status_code=503,
+                    detail="Cancellation is still converging; retry or check status.",
+                )
+            return ChatResponse(
+                session_id=session_id,
+                trace_id=trace_id,
+                message_id=assistant_message_id,
+                role="assistant",
+                content=CANCELLATION_TOMBSTONE,
+                created_at=datetime.now(timezone.utc),
+            )
+
+        control_token = set_current_task_control_identity(user_id, session_id, trace_id)
+        runner_context_token = set_current_task_runner_identity(
+            user_id,
+            session_id,
+            trace_id,
+            lease["lease_token"],
+            lease["runner_token"],
+        )
         try:
             result = await asyncio.wait_for(
                 graph.ainvoke(
@@ -1188,10 +1987,12 @@ async def chat_completion(
                         permissions=permissions,
                         content=request.content,
                         mode=request.mode,
+                        history_messages=history_messages,
+                        continuation_receipt=continuation_receipt,
                     ),
                     config=config,
                 ),
-                timeout=settings.AGENT_INVOKE_TIMEOUT_SECONDS
+                timeout=settings.AGENT_INVOKE_TIMEOUT_SECONDS,
             )
             assistant_status, terminal_reason = _task_terminal_outcome(
                 result,
@@ -1212,13 +2013,14 @@ async def chat_completion(
                     expected_trace_id=trace_id,
                 )
         except asyncio.TimeoutError:
-            await _safe_mark_task_terminal(
-                graph,
-                config,
-                TaskStatus.FAILED,
-                "Agent invocation timed out",
-                expected_trace_id=trace_id,
-            )
+            if await owns_current_task_runner():
+                await _safe_mark_task_terminal(
+                    graph,
+                    config,
+                    TaskStatus.FAILED,
+                    "Agent invocation timed out",
+                    expected_trace_id=trace_id,
+                )
             await update_assistant_message(
                 db,
                 message_id=assistant_message_id,
@@ -1226,15 +2028,17 @@ async def chat_completion(
                 content="",
                 status="failed",
             )
+            terminal_persisted = True
             raise HTTPException(status_code=504, detail="Request timed out")
         except Exception:
-            await _safe_mark_task_terminal(
-                graph,
-                config,
-                TaskStatus.FAILED,
-                "Agent invocation failed",
-                expected_trace_id=trace_id,
-            )
+            if await owns_current_task_runner():
+                await _safe_mark_task_terminal(
+                    graph,
+                    config,
+                    TaskStatus.FAILED,
+                    "Agent invocation failed",
+                    expected_trace_id=trace_id,
+                )
             if assistant_message_id is not None:
                 await update_assistant_message(
                     db,
@@ -1243,94 +2047,467 @@ async def chat_completion(
                     content="",
                     status="failed",
                 )
+                terminal_persisted = True
             raise
+        finally:
+            if runner_context_token is not None:
+                reset_current_task_runner_identity(runner_context_token)
+                runner_context_token = None
+            if control_token is not None:
+                reset_current_task_control_identity(control_token)
+                control_token = None
+
+        content = _final_response_content(result)
+        if not content and assistant_status != "cancelled":
+            assistant_status = "failed"
+            terminal_reason = terminal_reason or "Agent returned no response"
+            await _safe_mark_task_terminal(
+                graph,
+                config,
+                TaskStatus.FAILED,
+                terminal_reason,
+                expected_trace_id=trace_id,
+            )
+        if assistant_status == "failed" and terminal_reason:
+            content = f"{content}\n\n❌ **Task failed:** {terminal_reason}".strip()
+        elif assistant_status == "cancelled":
+            await _safe_mark_durable_assistant_cancelled(
+                session_id=session_id,
+                user_id=user_id,
+                trace_id=trace_id,
+                values=result,
+                reason=terminal_reason or "Cancelled by user",
+            )
+            content = f"{content}\n\n{CANCELLATION_TOMBSTONE}".strip()
+            terminal_persisted = await _durable_cancellation_confirmed(
+                session_id=session_id,
+                user_id=user_id,
+                trace_id=trace_id,
+            )
+            if not terminal_persisted:
+                raise RuntimeError("Failed to persist the cancellation receipt.")
+
+        if assistant_status != "cancelled":
+            updated = await update_assistant_message(
+                db,
+                message_id=assistant_message_id,
+                user_id=user_id,
+                content=content,
+                status=assistant_status,
+                append=False,
+            )
+            if not updated:
+                raise RuntimeError("Failed to persist the terminal assistant response.")
+            terminal_persisted = True
+        return ChatResponse(
+            session_id=session_id,
+            trace_id=trace_id,
+            message_id=assistant_message_id,
+            role="assistant",
+            content=content,
+            created_at=datetime.now(timezone.utc),
+        )
     finally:
+        if runner_context_token is not None:
+            reset_current_task_runner_identity(runner_context_token)
+        if control_token is not None:
+            reset_current_task_control_identity(control_token)
         if session_id and _active_stream_traces.get(session_id) == trace_id:
             _active_stream_traces.pop(session_id, None)
-        if session_id and trace_id:
-            try:
-                await clear_task_pause_request(user_id, session_id, trace_id)
-            except Exception:
-                logging.warning("Failed to clear terminal pause request", exc_info=True)
+        if lease and session_id and trace_id:
+            await _mark_runner_stopped_and_release(
+                user_id=user_id,
+                session_id=session_id,
+                trace_id=trace_id,
+                lease_token=lease["lease_token"],
+                runner_token=lease["runner_token"],
+                reason=assistant_status,
+                release=terminal_persisted,
+            )
         await quota_lease.release()
 
-    # Get last message (guard against empty messages)
-    messages = result.get("messages", [])
-    if not messages:
-        await update_assistant_message(
-            db,
-            message_id=assistant_message_id,
-            user_id=user_id,
-            content="",
-            status="failed",
-        )
-        raise HTTPException(status_code=500, detail="Agent returned no response")
-    last_msg = messages[-1]
 
-    # Extract content - handle both string and content block formats
-    if hasattr(last_msg, "content"):
-        raw_content = last_msg.content
+def _stream_graph_response(
+    *,
+    graph,
+    config: dict,
+    graph_input,
+    session_id: str,
+    trace_id: str,
+    user_id: int,
+    assistant_message_id: int,
+    lease: dict,
+    log_context: str,
+    emit_task_started: bool = False,
+    quota_lease=None,
+    resume_lock_token: str | None = None,
+) -> StreamingResponse:
+    """Stream one fenced graph runner and release its lease only after durable terminalization."""
 
-        # Debug logging
-        logging.debug(f"Content type: {type(raw_content)}, content: {raw_content}")
+    async def generate():
+        stream_filter = InternalStreamFilter()
+        timeline = _StreamTimelineRecorder()
+        assistant_parts: list[str] = []
+        assistant_status = "interrupted"
+        assistant_suffix = ""
+        terminal_reason: str | None = None
+        cancellation_values: dict = {}
+        finalized = False
+        runner_started = False
+        control_token = None
+        runner_context_token = None
+        cancel_event = asyncio.Event()
+        _cancel_events[trace_id] = cancel_event
+        _active_stream_traces[session_id] = trace_id
+        fence = lease["fence"]
 
-        # If content is a list of blocks (Anthropic format), extract text
-        if isinstance(raw_content, list):
-            text_parts = []
-            for block in raw_content:
-                if isinstance(block, dict):
-                    if block.get("type") == "text":
-                        text_parts.append(block.get("text", ""))
-                elif hasattr(block, "text"):
-                    text_parts.append(block.text)
-            content = "\n".join(text_parts) if text_parts else "(thinking only — no text response)"
-        elif isinstance(raw_content, str):
-            # Try to parse if it looks like a list representation
-            if raw_content.startswith("[") and raw_content.endswith("]"):
-                try:
-                    import ast
-                    parsed = ast.literal_eval(raw_content)
-                    if isinstance(parsed, list):
-                        text_parts = []
-                        for block in parsed:
-                            if isinstance(block, dict) and block.get("type") == "text":
-                                text_parts.append(block.get("text", ""))
-                        content = "\n".join(text_parts) if text_parts else "(thinking only — no text response)"
-                    else:
-                        content = raw_content
-                except Exception:
-                    content = raw_content
+        async def finalize_runner() -> bool:
+            nonlocal finalized
+            if finalized:
+                return assistant_status in {"completed", "failed", "cancelled"}
+            finalized = True
+            if assistant_suffix:
+                timeline.record_delta(assistant_suffix)
+            persisted = await _persist_stream_segment(
+                message_id=assistant_message_id,
+                user_id=user_id,
+                content="".join(assistant_parts) + assistant_suffix,
+                status=assistant_status,
+                timeline_entries=timeline.entries,
+            )
+            if assistant_status == "cancelled":
+                await _safe_mark_durable_assistant_cancelled(
+                    session_id=session_id,
+                    user_id=user_id,
+                    trace_id=trace_id,
+                    values=cancellation_values,
+                    reason=terminal_reason or "Cancelled by user",
+                )
+                async with async_session_factory() as history_db:
+                    evidence = await get_latest_assistant_task(
+                        history_db,
+                        session_id=session_id,
+                        user_id=user_id,
+                        trace_id=trace_id,
+                    )
+                persisted = bool(
+                    persisted
+                    and evidence
+                    and evidence.get("status") == "cancelled"
+                    and evidence.get("continuation_receipt")
+                )
+
+            terminal = assistant_status in {"completed", "failed", "cancelled"}
+            release_result = await _mark_runner_stopped_and_release(
+                user_id=user_id,
+                session_id=session_id,
+                trace_id=trace_id,
+                lease_token=lease["lease_token"],
+                runner_token=lease["runner_token"],
+                reason=assistant_status,
+                release=terminal and persisted,
+            )
+            if _cancel_events.get(trace_id) is cancel_event:
+                _cancel_events.pop(trace_id, None)
+            if _active_stream_traces.get(session_id) == trace_id:
+                _active_stream_traces.pop(session_id, None)
+            if resume_lock_token is not None:
+                await release_task_resume_lock(
+                    user_id,
+                    session_id,
+                    trace_id,
+                    resume_lock_token,
+                )
+            if quota_lease is not None:
+                await quota_lease.release()
+            return terminal and persisted and release_result in {"released", "missing"}
+
+        try:
+            logging.info("[%s] Resuming session=%s trace=%s", log_context, session_id, trace_id)
+            runner_started = await start_active_trace_runner(
+                user_id,
+                session_id,
+                trace_id,
+                lease["lease_token"],
+                lease["runner_token"],
+                ttl_seconds=settings.ACTIVE_TRACE_LEASE_SECONDS,
+            )
+            if not runner_started:
+                cancellation = await get_trace_cancel_request(user_id, session_id, trace_id)
+                if cancellation is None:
+                    raise RuntimeError("The active trace runner lease was lost before execution.")
+                assistant_status = "cancelled"
+                terminal_reason = str(cancellation.get("reason") or "Cancelled by user")
+                cancellation_values = {
+                    "current_user_request": (
+                        graph_input.get("current_user_request", "")
+                        if isinstance(graph_input, dict)
+                        else ""
+                    )
+                }
+                confirmed = await finalize_runner()
+                if confirmed:
+                    yield _sse_event(_scoped_stream_event(
+                        {
+                            "event": "cancelled",
+                            "status": TaskStatus.CANCELLED.value,
+                            "message": terminal_reason,
+                        },
+                        session_id=session_id,
+                        trace_id=trace_id,
+                        fence=fence,
+                    ))
+                return
+
+            control_token = set_current_task_control_identity(user_id, session_id, trace_id)
+            runner_context_token = set_current_task_runner_identity(
+                user_id,
+                session_id,
+                trace_id,
+                lease["lease_token"],
+                lease["runner_token"],
+            )
+            if emit_task_started:
+                yield _sse_event(_scoped_stream_event(
+                    {"event": "task_started", "status": TaskStatus.PENDING.value},
+                    session_id=session_id,
+                    trace_id=trace_id,
+                    fence=fence,
+                ))
+
+            interrupted_event = None
+            async with aclosing(graph.astream(
+                graph_input,
+                config=config,
+                stream_mode=["messages", "updates"],
+            )) as graph_stream:
+                async for stream_event in graph_stream:
+                    cancellation = await _runner_cancel_request(
+                        user_id=user_id,
+                        session_id=session_id,
+                        trace_id=trace_id,
+                        local_event=cancel_event,
+                    )
+                    if cancellation is not None:
+                        terminal_reason = str(cancellation.get("reason") or "Cancelled by user")
+                        break
+                    if not await renew_active_trace_runner(
+                        user_id,
+                        session_id,
+                        trace_id,
+                        lease["lease_token"],
+                        lease["runner_token"],
+                        ttl_seconds=settings.ACTIVE_TRACE_LEASE_SECONDS,
+                    ):
+                        raise RuntimeError("The active trace runner fence was lost.")
+
+                    mode, data = stream_event
+                    if mode == "messages":
+                        msg_chunk, _ = data
+                        if hasattr(msg_chunk, "content") and msg_chunk.content:
+                            delta = _extract_delta(msg_chunk.content)
+                            if delta and not stream_filter.is_internal_json(delta):
+                                assistant_parts.append(delta)
+                                timeline.record_delta(delta)
+                                yield _sse_event(_scoped_stream_event(
+                                    {"delta": delta},
+                                    session_id=session_id,
+                                    trace_id=trace_id,
+                                    fence=fence,
+                                ))
+                        if hasattr(msg_chunk, "tool_calls") and msg_chunk.tool_calls:
+                            for tool_call in msg_chunk.tool_calls:
+                                if tool_call.get("name"):
+                                    event = {
+                                        "event": "tool_start",
+                                        "id": tool_call.get("id", ""),
+                                        "name": tool_call["name"],
+                                    }
+                                    timeline.record_event(event)
+                                    yield _sse_event(_scoped_stream_event(
+                                        event,
+                                        session_id=session_id,
+                                        trace_id=trace_id,
+                                        fence=fence,
+                                    ))
+                    elif mode == "updates":
+                        if "__interrupt__" in data:
+                            event, assistant_status = _stream_interrupt_event(
+                                interrupt_obj=data["__interrupt__"],
+                                session_id=session_id,
+                                trace_id=trace_id,
+                                user_id=user_id,
+                            )
+                            timeline.record_event(event)
+                            interrupted_event = _scoped_stream_event(
+                                event,
+                                session_id=session_id,
+                                trace_id=trace_id,
+                                fence=fence,
+                            )
+                            break
+                        for node_name, node_output in data.items():
+                            if node_name == "tool_executor":
+                                for event in _tool_sse_events(node_output):
+                                    timeline.record_event(event)
+                                    yield _sse_event(_scoped_stream_event(
+                                        event,
+                                        session_id=session_id,
+                                        trace_id=trace_id,
+                                        fence=fence,
+                                    ))
+
+            cancellation = await _runner_cancel_request(
+                user_id=user_id,
+                session_id=session_id,
+                trace_id=trace_id,
+                local_event=cancel_event,
+            )
+            if cancellation is not None:
+                terminal_reason = str(cancellation.get("reason") or terminal_reason or "Cancelled by user")
+                snapshot = await graph.aget_state(config)
+                cancellation_values = snapshot.values if snapshot and snapshot.values else {}
+                checkpoint_cancelled = await _safe_mark_task_terminal(
+                    graph,
+                    config,
+                    TaskStatus.CANCELLED,
+                    terminal_reason,
+                    expected_trace_id=trace_id,
+                )
+                if not checkpoint_cancelled:
+                    latest = await graph.aget_state(config)
+                    latest_values = latest.values if latest and latest.values else {}
+                    assistant_status, terminal_reason = _task_terminal_outcome(
+                        latest_values,
+                        session_id=session_id,
+                        user_id=user_id,
+                        trace_id=trace_id,
+                    )
+                    if assistant_status not in {"completed", "failed"}:
+                        assistant_status = "interrupted"
+                        await finalize_runner()
+                        return
+                    if assistant_status == "failed":
+                        assistant_suffix = f"\n\n❌ **Task failed:** {terminal_reason}"
+                    confirmed = await finalize_runner()
+                    if confirmed:
+                        terminal_event = _terminal_stream_event(
+                            assistant_status=assistant_status,
+                            reason=terminal_reason,
+                            session_id=session_id,
+                            trace_id=trace_id,
+                        )
+                        if terminal_event is None:
+                            yield "data: [DONE]\n\n"
+                        else:
+                            yield _sse_event(_scoped_stream_event(
+                                terminal_event,
+                                session_id=session_id,
+                                trace_id=trace_id,
+                                fence=fence,
+                            ))
+                    return
+                from enterprise_agent.core.agent.tools.background import clear_background_manager
+
+                clear_background_manager(session_id, trace_id)
+                assistant_status = "cancelled"
+                confirmed = await finalize_runner()
+                if confirmed:
+                    yield _sse_event(_scoped_stream_event(
+                        {
+                            "event": "cancelled",
+                            "status": TaskStatus.CANCELLED.value,
+                            "message": terminal_reason,
+                        },
+                        session_id=session_id,
+                        trace_id=trace_id,
+                        fence=fence,
+                    ))
+                return
+
+            if interrupted_event is not None:
+                await finalize_runner()
+                yield _sse_event(interrupted_event)
+                return
+
+            assistant_status, terminal_reason = await _read_stream_terminal_outcome(
+                graph,
+                config,
+                session_id=session_id,
+                user_id=user_id,
+                trace_id=trace_id,
+            )
+            if assistant_status == "cancelled":
+                snapshot = await graph.aget_state(config)
+                cancellation_values = snapshot.values if snapshot and snapshot.values else {}
+            terminal_event = _terminal_stream_event(
+                assistant_status=assistant_status,
+                reason=terminal_reason,
+                session_id=session_id,
+                trace_id=trace_id,
+            )
+            if assistant_status == "failed":
+                assistant_suffix = f"\n\n❌ **Task failed:** {terminal_reason}"
+            confirmed = await finalize_runner()
+            if not confirmed:
+                yield _sse_event(_scoped_stream_event(
+                    {
+                        "event": "control_error",
+                        "status": "finalizing",
+                        "message": "Task ended but terminal persistence is still converging.",
+                    },
+                    session_id=session_id,
+                    trace_id=trace_id,
+                    fence=fence,
+                ))
+                return
+            if terminal_event is None:
+                yield "data: [DONE]\n\n"
             else:
-                content = raw_content
-        else:
-            content = str(raw_content)
-    else:
-        content = str(last_msg)
+                yield _sse_event(_scoped_stream_event(
+                    terminal_event,
+                    session_id=session_id,
+                    trace_id=trace_id,
+                    fence=fence,
+                ))
+        except GeneratorExit:
+            logging.debug("[%s] Generator closed", log_context)
+            assistant_status = "interrupted"
+            return
+        except Exception as exc:
+            logging.exception("%s failed", log_context)
+            if runner_started and await owns_current_task_runner():
+                await _safe_mark_task_terminal(
+                    graph,
+                    config,
+                    TaskStatus.FAILED,
+                    str(exc)[:500],
+                    expected_trace_id=trace_id,
+                )
+            assistant_status = "failed"
+            assistant_suffix = f"\n\n❌ **Error:** {str(exc)[:500]}"
+            terminal_reason = str(exc)[:500]
+            confirmed = await finalize_runner()
+            if confirmed:
+                yield _sse_event(_scoped_stream_event(
+                    _terminal_stream_event(
+                        assistant_status=assistant_status,
+                        reason=terminal_reason,
+                        session_id=session_id,
+                        trace_id=trace_id,
+                    ),
+                    session_id=session_id,
+                    trace_id=trace_id,
+                    fence=fence,
+                ))
+        finally:
+            if runner_context_token is not None:
+                reset_current_task_runner_identity(runner_context_token)
+            if control_token is not None:
+                reset_current_task_control_identity(control_token)
+            await finalize_runner()
 
-    if assistant_status == "failed" and terminal_reason:
-        failure_suffix = f"\n\n❌ **Task failed:** {terminal_reason}"
-        if failure_suffix not in content:
-            content += failure_suffix
-    elif assistant_status == "cancelled" and CANCELLATION_TOMBSTONE not in content:
-        content += f"\n\n{CANCELLATION_TOMBSTONE}"
-
-    await update_assistant_message(
-        db,
-        message_id=assistant_message_id,
-        user_id=user_id,
-        content=content,
-        status=assistant_status,
-        append=False,
-    )
-
-    return ChatResponse(
-        session_id=session_id,
-        trace_id=trace_id,
-        message_id=assistant_message_id,
-        role="assistant",
-        content=content,
-        created_at=datetime.now(timezone.utc)
-    )
+    return StreamingResponse(generate(), media_type="text/event-stream")
 
 
 @router.post("/stream")
@@ -1340,23 +2517,14 @@ async def chat_stream(
     permissions: list = Depends(get_current_user_permissions),
     db: AsyncSession = Depends(get_db),
 ):
-    """Streaming chat completion (SSE) with interrupt support.
-
-    Uses astream(stream_mode="updates") to detect interrupts from tool_confirm_node.
-
-    Args:
-        request: Chat request
-        user_id: Current user ID from JWT
-
-    Returns:
-        StreamingResponse with SSE events (delta, tool_start, tool_end, interrupt)
-    """
+    """Start a new SSE task trace under a Redis active-trace lease."""
     _validate_request_mode(request.mode, request.content, permissions)
     if request.session_id:
         await _require_owned_session(request.session_id, user_id, db)
     quota_lease = await acquire_task_quota(user_id, db)
-    session_id = None
-    trace_id = None
+    session_id: str | None = None
+    trace_id: str | None = None
+    lease: dict | None = None
     try:
         session_id = await _resolve_chat_session(request, user_id, db)
         trace_id = str(uuid.uuid4())
@@ -1368,6 +2536,11 @@ async def chat_stream(
             session_id=session_id,
             user_id=user_id,
         )
+        lease = await _claim_new_trace_control(
+            user_id=user_id,
+            session_id=session_id,
+            trace_id=trace_id,
+        )
         _active_stream_traces[session_id] = trace_id
         assistant_message_id = await start_turn(
             db,
@@ -1375,6 +2548,13 @@ async def chat_stream(
             user_id=user_id,
             trace_id=trace_id,
             content=request.content,
+        )
+        history_messages, continuation_receipt = await _claim_new_task_context(
+            db,
+            session_id=session_id,
+            user_id=user_id,
+            trace_id=trace_id,
+            graph=graph,
         )
         _start_task_trace(
             session_id=session_id,
@@ -1384,167 +2564,44 @@ async def chat_stream(
             mode=request.mode,
         )
         set_current_user_id(user_id)
-
-        config = {"configurable": {"thread_id": session_id}}
+        graph_input = _task_input(
+            session_id=session_id,
+            trace_id=trace_id,
+            user_id=user_id,
+            permissions=permissions,
+            content=request.content,
+            mode=request.mode,
+            history_messages=history_messages,
+            continuation_receipt=continuation_receipt,
+        )
+        return _stream_graph_response(
+            graph=graph,
+            config={"configurable": {"thread_id": session_id}},
+            graph_input=graph_input,
+            session_id=session_id,
+            trace_id=trace_id,
+            user_id=user_id,
+            assistant_message_id=assistant_message_id,
+            lease=lease,
+            log_context="stream/new-trace",
+            emit_task_started=True,
+            quota_lease=quota_lease,
+        )
     except Exception:
         if session_id and _active_stream_traces.get(session_id) == trace_id:
             _active_stream_traces.pop(session_id, None)
+        if lease and session_id and trace_id:
+            await _mark_runner_stopped_and_release(
+                user_id=user_id,
+                session_id=session_id,
+                trace_id=trace_id,
+                lease_token=lease["lease_token"],
+                runner_token=lease["runner_token"],
+                reason="setup_failed",
+                release=True,
+            )
         await quota_lease.release()
         raise
-
-    async def generate():
-        stream_filter = InternalStreamFilter()
-        assistant_parts: list[str] = []
-        assistant_status = "interrupted"
-        assistant_suffix = ""
-
-        # Register cancellation by trace so an old stream cannot stop a newer task.
-        cancel_event = asyncio.Event()
-        _cancel_events[trace_id] = cancel_event
-
-        try:
-            yield _sse_event({
-                "event": "task_started",
-                "session_id": session_id,
-                "trace_id": trace_id,
-                "status": TaskStatus.PENDING.value,
-            })
-            # Dual stream modes:
-            #   "messages" → token-level deltas from LLM (true streaming)
-            #   "updates" → node-level state updates (interrupts, tool results)
-            async for stream_event in graph.astream(
-                _task_input(
-                    session_id=session_id,
-                    trace_id=trace_id,
-                    user_id=user_id,
-                    permissions=permissions,
-                    content=request.content,
-                    mode=request.mode,
-                ),
-                config=config,
-                stream_mode=["messages", "updates"]
-            ):
-                # Check for user-requested cancellation
-                if cancel_event.is_set():
-                    logging.info(f"[stream] Session {session_id} cancelled by user")
-                    yield _sse_event({"event": "cancelled", "message": "Generation stopped by user"})
-                    return
-
-                # With dual modes, LangGraph yields (mode, data) tuples
-                mode, data = stream_event
-
-                # ── Token-level streaming from LLM ──
-                if mode == "messages":
-                    # data is (AIMessageChunk, metadata) tuple
-                    msg_chunk, _ = data
-                    if hasattr(msg_chunk, "content") and msg_chunk.content:
-                        delta = _extract_delta(msg_chunk.content)
-                        # Filter out internal evaluation JSON (importance, patterns)
-                        # that leak from memory evaluator LLM calls inside the graph
-                        if delta and not stream_filter.is_internal_json(delta):
-                            assistant_parts.append(delta)
-                            yield f"data: {json.dumps({'delta': delta}, ensure_ascii=False)}\n\n"
-                    # Check for tool calls in the chunk
-                    if hasattr(msg_chunk, "tool_calls") and msg_chunk.tool_calls:
-                        for tc in msg_chunk.tool_calls:
-                            if tc.get("name"):
-                                yield _sse_event({
-                                    "event": "tool_start",
-                                    "id": tc.get("id", ""),
-                                    "name": tc["name"],
-                                })
-
-                # ── Node-level updates for interrupts & tool results ──
-                elif mode == "updates":
-                    # Typed interrupts keep HITL confirmation and user pause separate.
-                    if "__interrupt__" in data:
-                        interrupt_obj = data["__interrupt__"]
-                        logging.info(f"[stream] Interrupt detected: {type(interrupt_obj)}")
-                        event, assistant_status = _stream_interrupt_event(
-                            interrupt_obj=interrupt_obj,
-                            session_id=session_id,
-                            trace_id=trace_id,
-                            user_id=user_id,
-                        )
-                        yield _sse_event(event)
-                        return
-
-                    # Process node outputs
-                    for node_name, node_output in data.items():
-                        if node_name == "__interrupt__":
-                            continue
-
-                        # Tool executor output
-                        if node_name == "tool_executor":
-                            for event in _tool_sse_events(node_output):
-                                yield _sse_event(event)
-
-            assistant_status, terminal_reason = await _read_stream_terminal_outcome(
-                graph,
-                config,
-                session_id=session_id,
-                user_id=user_id,
-                trace_id=trace_id,
-            )
-            terminal_event = _terminal_stream_event(
-                assistant_status=assistant_status,
-                reason=terminal_reason,
-                session_id=session_id,
-                trace_id=trace_id,
-            )
-            if terminal_event is None:
-                yield "data: [DONE]\n\n"
-            else:
-                if assistant_status == "failed":
-                    assistant_suffix = f"\n\n❌ **Task failed:** {terminal_reason}"
-                yield _sse_event(terminal_event)
-        except GeneratorExit:
-            logging.debug("[stream] Generator closed (normal for interrupt/client disconnect)")
-            assistant_status = "interrupted"
-            return
-        except Exception as e:
-            logging.exception("Stream error: %s", e)
-            await _safe_mark_task_terminal(
-                graph,
-                config,
-                TaskStatus.FAILED,
-                str(e)[:500],
-                expected_trace_id=trace_id,
-            )
-            assistant_status = "failed"
-            assistant_suffix = f"\n\n❌ **Error:** {str(e)[:500]}"
-            yield _sse_event(_terminal_stream_event(
-                assistant_status=assistant_status,
-                reason=str(e)[:500],
-                session_id=session_id,
-                trace_id=trace_id,
-            ))
-        finally:
-            if cancel_event.is_set():
-                assistant_status = await _converge_stream_cancellation(
-                    graph,
-                    config,
-                    trace_id,
-                    assistant_status,
-                )
-            await _persist_stream_segment(
-                message_id=assistant_message_id,
-                user_id=user_id,
-                content="".join(assistant_parts) + assistant_suffix,
-                status=assistant_status,
-            )
-            # Clean up request-local cancellation state.
-            _cancel_events.pop(trace_id, None)
-            if _active_stream_traces.get(session_id) == trace_id:
-                _active_stream_traces.pop(session_id, None)
-            if assistant_status in {"completed", "failed", "cancelled"}:
-                try:
-                    await clear_task_pause_request(user_id, session_id, trace_id)
-                except Exception:
-                    logging.warning("Failed to clear terminal pause request", exc_info=True)
-            await quota_lease.release()
-
-    return StreamingResponse(generate(), media_type="text/event-stream")
 
 
 def _stream_resumed_command(
@@ -1556,133 +2613,23 @@ def _stream_resumed_command(
     trace_id: str,
     user_id: int,
     assistant_message_id: int,
+    lease: dict,
     log_context: str,
-    release_resume_guard: bool = False,
+    resume_lock_token: str,
 ) -> StreamingResponse:
-    """Stream one exact checkpoint resume for HITL or user pause."""
-
-    async def generate():
-        stream_filter = InternalStreamFilter()
-        assistant_parts: list[str] = []
-        assistant_status = "interrupted"
-        assistant_suffix = ""
-        cancel_event = asyncio.Event()
-        _cancel_events[trace_id] = cancel_event
-        _active_stream_traces[session_id] = trace_id
-
-        try:
-            logging.info("[%s] Resuming session=%s trace=%s", log_context, session_id, trace_id)
-            async for stream_event in graph.astream(
-                command,
-                config=config,
-                stream_mode=["messages", "updates"],
-            ):
-                if cancel_event.is_set():
-                    yield _sse_event({
-                        "event": "cancelled",
-                        "session_id": session_id,
-                        "trace_id": trace_id,
-                        "message": "Generation stopped by user",
-                    })
-                    return
-
-                mode, data = stream_event
-                if mode == "messages":
-                    msg_chunk, _ = data
-                    if hasattr(msg_chunk, "content") and msg_chunk.content:
-                        delta = _extract_delta(msg_chunk.content)
-                        if delta and not stream_filter.is_internal_json(delta):
-                            assistant_parts.append(delta)
-                            yield _sse_event({"delta": delta})
-                    if hasattr(msg_chunk, "tool_calls") and msg_chunk.tool_calls:
-                        for tool_call in msg_chunk.tool_calls:
-                            if tool_call.get("name"):
-                                yield _sse_event({
-                                    "event": "tool_start",
-                                    "id": tool_call.get("id", ""),
-                                    "name": tool_call["name"],
-                                })
-                elif mode == "updates":
-                    if "__interrupt__" in data:
-                        event, assistant_status = _stream_interrupt_event(
-                            interrupt_obj=data["__interrupt__"],
-                            session_id=session_id,
-                            trace_id=trace_id,
-                            user_id=user_id,
-                        )
-                        yield _sse_event(event)
-                        return
-                    for node_name, node_output in data.items():
-                        if node_name == "tool_executor":
-                            for event in _tool_sse_events(node_output):
-                                yield _sse_event(event)
-
-            assistant_status, terminal_reason = await _read_stream_terminal_outcome(
-                graph,
-                config,
-                session_id=session_id,
-                user_id=user_id,
-                trace_id=trace_id,
-            )
-            terminal_event = _terminal_stream_event(
-                assistant_status=assistant_status,
-                reason=terminal_reason,
-                session_id=session_id,
-                trace_id=trace_id,
-            )
-            if terminal_event is None:
-                yield "data: [DONE]\n\n"
-            else:
-                if assistant_status == "failed":
-                    assistant_suffix = f"\n\n❌ **Task failed:** {terminal_reason}"
-                yield _sse_event(terminal_event)
-        except GeneratorExit:
-            logging.debug("[%s] Generator closed", log_context)
-            assistant_status = "interrupted"
-            return
-        except Exception as exc:
-            logging.exception("%s failed", log_context)
-            await _safe_mark_task_terminal(
-                graph,
-                config,
-                TaskStatus.FAILED,
-                str(exc)[:500],
-                expected_trace_id=trace_id,
-            )
-            assistant_status = "failed"
-            assistant_suffix = f"\n\n❌ **Error:** {str(exc)[:500]}"
-            yield _sse_event(_terminal_stream_event(
-                assistant_status=assistant_status,
-                reason=str(exc)[:500],
-                session_id=session_id,
-                trace_id=trace_id,
-            ))
-        finally:
-            if cancel_event.is_set():
-                assistant_status = await _converge_stream_cancellation(
-                    graph,
-                    config,
-                    trace_id,
-                    assistant_status,
-                )
-            await _persist_stream_segment(
-                message_id=assistant_message_id,
-                user_id=user_id,
-                content="".join(assistant_parts) + assistant_suffix,
-                status=assistant_status,
-            )
-            _cancel_events.pop(trace_id, None)
-            if _active_stream_traces.get(session_id) == trace_id:
-                _active_stream_traces.pop(session_id, None)
-            if assistant_status in {"completed", "failed", "cancelled"}:
-                try:
-                    await clear_task_pause_request(user_id, session_id, trace_id)
-                except Exception:
-                    logging.warning("Failed to clear terminal pause request", exc_info=True)
-            if release_resume_guard:
-                await release_task_resume_lock(user_id, session_id, trace_id)
-
-    return StreamingResponse(generate(), media_type="text/event-stream")
+    """Stream one exact tool-confirmation Command(resume) runner."""
+    return _stream_graph_response(
+        graph=graph,
+        config=config,
+        graph_input=command,
+        session_id=session_id,
+        trace_id=trace_id,
+        user_id=user_id,
+        assistant_message_id=assistant_message_id,
+        lease=lease,
+        log_context=log_context,
+        resume_lock_token=resume_lock_token,
+    )
 
 
 @router.post("/stream/resume")
@@ -1708,10 +2655,11 @@ async def chat_stream_resume(
         StreamingResponse with continued SSE events
     """
     await _require_owned_session(session_id, user_id, db)
-    _cancel_confirmation_timeout(session_id)
+    if body is None:
+        raise HTTPException(status_code=422, detail="The interrupted trace_id is required.")
     set_current_user_id(user_id)
 
-    approved_ids = body.approved_ids if body else []
+    approved_ids = body.approved_ids
 
     config = {"configurable": {"thread_id": session_id}}
     graph = get_agent_graph()
@@ -1723,6 +2671,8 @@ async def chat_stream_resume(
             status_code=409,
             detail="The interrupted task checkpoint has expired and cannot be resumed.",
         )
+    if body.trace_id != trace_id:
+        raise HTTPException(status_code=409, detail="The requested trace is no longer active.")
     _require_checkpoint_identity(
         values,
         session_id=session_id,
@@ -1759,99 +2709,74 @@ async def chat_stream_resume(
     if confirmation_expired:
         resume_payload["reason"] = "confirmation_timeout"
 
-    if not await acquire_task_resume_lock(user_id, session_id, trace_id):
+    resume_lock_token = await acquire_task_resume_lock(user_id, session_id, trace_id)
+    if not resume_lock_token:
         raise HTTPException(status_code=409, detail="This confirmation is already being resumed.")
-
-    return _stream_resumed_command(
-        graph=graph,
-        config=config,
-        command=Command(resume=resume_payload),
-        session_id=session_id,
-        trace_id=trace_id,
-        user_id=user_id,
-        assistant_message_id=assistant_message_id,
-        log_context="stream/resume-confirmation",
-        release_resume_guard=True,
-    )
-
-
-@router.post("/stream/pause")
-async def request_task_pause_endpoint(
-    session_id: str,
-    trace_id: str,
-    reason: str | None = None,
-    user_id: int = Depends(get_current_user),
-    db: AsyncSession = Depends(get_db),
-):
-    """Request cooperative pause at the next LangGraph safety boundary."""
-    await _require_owned_session(session_id, user_id, db)
-    graph = get_agent_graph()
-    config = {"configurable": {"thread_id": session_id}}
-    snapshot = await graph.aget_state(config)
-    values = snapshot.values if snapshot and snapshot.values else {}
-
-    # The task_started SSE event is emitted just before the first graph
-    # checkpoint. During that very small window, the trace store and exact
-    # in-process stream mapping still establish ownership safely.
-    checkpoint_matches = values.get("trace_id") == trace_id
-    if checkpoint_matches:
-        _require_checkpoint_identity(
-            values,
-            session_id=session_id,
-            user_id=user_id,
-            trace_id=trace_id,
-        )
-        status = values.get("task_status")
-    else:
-        try:
-            trace = get_trace_store().get_trace(user_id, trace_id)
-        except FileNotFoundError as exc:
-            raise HTTPException(status_code=409, detail="The task trace is not active.") from exc
-        if trace.get("session_id") != session_id or trace.get("user_id") != user_id:
-            raise HTTPException(status_code=409, detail="Task trace does not match this session.")
-        if _active_stream_traces.get(session_id) != trace_id:
-            raise HTTPException(status_code=409, detail="The task trace is no longer active.")
-        status = trace.get("status")
-
-    if status == TaskStatus.PAUSED.value:
-        return {"status": "paused", "session_id": session_id, "trace_id": trace_id}
-    if status not in {TaskStatus.PENDING.value, TaskStatus.RUNNING.value, "pause_requested"}:
-        raise HTTPException(
-            status_code=409,
-            detail=f"A task in status {status!r} cannot be paused.",
-        )
-
-    pause_request = await request_task_pause(
-        user_id,
-        session_id,
-        trace_id,
-        reason=reason or "Paused by user",
-    )
+    # A stale/wrong-trace request must not disable the authoritative timeout.
+    # Once this exact trace owns the resume lock, the timeout worker can no
+    # longer race this Command(resume) and may be cancelled safely.
+    _cancel_confirmation_timeout(session_id)
+    lease = None
     try:
-        get_trace_store().record_event(
+        if await get_trace_cancel_request(user_id, session_id, trace_id):
+            raise HTTPException(status_code=409, detail="This task is being cancelled.")
+        active = await get_active_trace_lease(user_id, session_id)
+        if active is None:
+            lease = await claim_active_trace_lease(
+                user_id,
+                session_id,
+                trace_id,
+                ttl_seconds=settings.ACTIVE_TRACE_LEASE_SECONDS,
+            )
+        else:
+            if active.get("trace_id") != trace_id:
+                raise HTTPException(status_code=409, detail="Another trace owns this session.")
+            lease = await reserve_active_trace_runner(
+                user_id,
+                session_id,
+                trace_id,
+                active["lease_token"],
+                ttl_seconds=settings.ACTIVE_TRACE_LEASE_SECONDS,
+            )
+        if lease is None:
+            raise HTTPException(status_code=409, detail="This confirmation is already being resumed.")
+        await update_assistant_message(
+            db,
+            message_id=assistant_message_id,
             user_id=user_id,
+            content="",
+            status="streaming",
+        )
+        return _stream_resumed_command(
+            graph=graph,
+            config=config,
+            command=Command(resume=resume_payload),
+            session_id=session_id,
             trace_id=trace_id,
-            event_type="control",
-            name="pause_requested",
-            status="requested",
-            data={
-                "session_id": session_id,
-                "task_status": status,
-                "requested_at": (
-                    pause_request.get("requested_at")
-                    if isinstance(pause_request, dict)
-                    else None
-                ),
-                "reason": reason or "Paused by user",
-            },
+            user_id=user_id,
+            assistant_message_id=assistant_message_id,
+            lease=lease,
+            log_context="stream/resume-confirmation",
+            resume_lock_token=resume_lock_token,
         )
     except Exception:
-        logging.warning("Failed to record pause request trace", exc_info=True)
-    return {
-        "status": "pause_requested",
-        "session_id": session_id,
-        "trace_id": trace_id,
-    }
+        if lease is not None:
+            await mark_active_trace_runner_stopped(
+                user_id,
+                session_id,
+                trace_id,
+                lease["lease_token"],
+                lease["runner_token"],
+                reason="resume_setup_failed",
+                ttl_seconds=settings.ACTIVE_TRACE_LEASE_SECONDS,
+            )
+        await release_task_resume_lock(
+            user_id,
+            session_id,
+            trace_id,
+            resume_lock_token,
+        )
+        raise
 
 
 @router.get("/stream/status")
@@ -1860,16 +2785,83 @@ async def get_stream_status(
     user_id: int = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ):
-    """Return the authoritative checkpoint lifecycle and typed interrupt."""
+    """Return the Redis lease lifecycle, falling back to durable terminal evidence."""
     await _require_owned_session(session_id, user_id, db)
     graph = get_agent_graph()
-    snapshot = await graph.aget_state({"configurable": {"thread_id": session_id}})
+    config = {"configurable": {"thread_id": session_id}}
+    snapshot = await graph.aget_state(config)
     values = snapshot.values if snapshot and snapshot.values else {}
+    active = await get_active_trace_lease(user_id, session_id)
+
+    if not active and await _retire_legacy_pause_checkpoint(
+        graph,
+        config,
+        snapshot,
+        session_id=session_id,
+        user_id=user_id,
+    ):
+        snapshot = await graph.aget_state(config)
+        values = snapshot.values if snapshot and snapshot.values else {}
+
+    if active:
+        trace_id = str(active.get("trace_id") or "")
+        if values.get("trace_id") == trace_id:
+            _require_checkpoint_identity(
+                values,
+                session_id=session_id,
+                user_id=user_id,
+                trace_id=trace_id,
+            )
+        cancellation = await get_trace_cancel_request(user_id, session_id, trace_id)
+        interrupt_payload = (
+            _snapshot_interrupt_payload(snapshot)
+            if values.get("trace_id") == trace_id
+            else None
+        )
+        return {
+            "status": (
+                "cancelling"
+                if cancellation is not None or active.get("cancel_requested")
+                else values.get("task_status", TaskStatus.PENDING.value)
+                if values.get("trace_id") == trace_id
+                else TaskStatus.PENDING.value
+            ),
+            "session_id": session_id,
+            "trace_id": trace_id,
+            "execution_phase": values.get("execution_phase"),
+            "runner_state": active.get("runner_state"),
+            "stream_fence": active.get("fence"),
+            "cancel_requested": bool(cancellation or active.get("cancel_requested")),
+            "interrupt_type": interrupt_payload.get("type") if interrupt_payload else None,
+            "interrupt": interrupt_payload,
+        }
+
+    durable = await get_latest_assistant_task(
+        db,
+        session_id=session_id,
+        user_id=user_id,
+    )
+    if durable and durable.get("trace_id") != values.get("trace_id"):
+        return {
+            "status": durable.get("status", "idle"),
+            "session_id": session_id,
+            "trace_id": durable.get("trace_id"),
+            "execution_phase": None,
+            "runner_state": None,
+            "stream_fence": None,
+            "cancel_requested": False,
+            "interrupt_type": None,
+            "interrupt": None,
+        }
     if not values:
         return {
-            "status": "idle",
+            "status": durable.get("status", "idle") if durable else "idle",
             "session_id": session_id,
-            "trace_id": None,
+            "trace_id": durable.get("trace_id") if durable else None,
+            "execution_phase": None,
+            "runner_state": None,
+            "stream_fence": None,
+            "cancel_requested": False,
             "interrupt_type": None,
             "interrupt": None,
         }
@@ -1881,86 +2873,12 @@ async def get_stream_status(
         "session_id": session_id,
         "trace_id": values.get("trace_id"),
         "execution_phase": values.get("execution_phase"),
+        "runner_state": None,
+        "stream_fence": None,
+        "cancel_requested": False,
         "interrupt_type": interrupt_payload.get("type") if interrupt_payload else None,
         "interrupt": interrupt_payload,
     }
-
-
-@router.post("/stream/continue")
-async def continue_paused_stream(
-    session_id: str,
-    trace_id: str,
-    user_id: int = Depends(get_current_user),
-    db: AsyncSession = Depends(get_db),
-):
-    """Continue one exact user-paused checkpoint as a new SSE stream."""
-    await _require_owned_session(session_id, user_id, db)
-    set_current_user_id(user_id)
-    graph = get_agent_graph()
-    config = {"configurable": {"thread_id": session_id}}
-    snapshot = await graph.aget_state(config)
-    values = snapshot.values if snapshot and snapshot.values else {}
-    _require_checkpoint_identity(
-        values,
-        session_id=session_id,
-        user_id=user_id,
-        trace_id=trace_id,
-    )
-    if values.get("task_status") != TaskStatus.PAUSED.value:
-        raise HTTPException(
-            status_code=409,
-            detail=f"Only a paused task can continue; current status is {values.get('task_status')!r}.",
-        )
-    _require_interrupt_type(snapshot, "user_pause")
-    if not await acquire_task_resume_lock(user_id, session_id, trace_id):
-        raise HTTPException(status_code=409, detail="This paused task is already being resumed.")
-
-    try:
-        assistant_message_id = await find_assistant_message_id(
-            db,
-            session_id=session_id,
-            user_id=user_id,
-            trace_id=trace_id,
-        )
-        if assistant_message_id is None:
-            assistant_message_id = await create_assistant_message(
-                db,
-                session_id=session_id,
-                user_id=user_id,
-                trace_id=trace_id,
-                status="paused",
-            )
-        else:
-            await update_assistant_message(
-                db,
-                message_id=assistant_message_id,
-                user_id=user_id,
-                content="",
-                status="streaming",
-            )
-        get_trace_store().record_event(
-            user_id=user_id,
-            trace_id=trace_id,
-            event_type="control",
-            name="resume_requested",
-            status="requested",
-            data={"session_id": session_id},
-        )
-    except Exception:
-        await release_task_resume_lock(user_id, session_id, trace_id)
-        raise
-
-    return _stream_resumed_command(
-        graph=graph,
-        config=config,
-        command=Command(resume={"action": "continue", "trace_id": trace_id}),
-        session_id=session_id,
-        trace_id=trace_id,
-        user_id=user_id,
-        assistant_message_id=assistant_message_id,
-        log_context="stream/continue-pause",
-        release_resume_guard=True,
-    )
 
 
 async def request_task_cancellation(
@@ -1969,16 +2887,24 @@ async def request_task_cancellation(
     reason: str = "Cancelled by user",
     trace_id: str | None = None,
 ):
-    """Cancel an exact task, with distinct cleanup for HITL and user pause."""
+    """Request exact-trace Stop and report cancelled only after owner quiescence."""
     _cancel_confirmation_timeout(session_id)
     set_current_user_id(user_id)
     config = {"configurable": {"thread_id": session_id}}
     graph = get_agent_graph()
     state = await graph.aget_state(config)
     values = state.values if state and state.values else {}
-    checkpoint_trace = values.get("trace_id")
-    active_trace = _active_stream_traces.get(session_id)
-    expected_trace = trace_id or active_trace or checkpoint_trace
+    checkpoint_trace = str(values.get("trace_id") or "")
+    active = await get_active_trace_lease(user_id, session_id)
+    async with async_session_factory() as history_db:
+        durable = await get_latest_assistant_task(
+            history_db,
+            session_id=session_id,
+            user_id=user_id,
+        )
+    active_trace = str(active.get("trace_id") or "") if active else ""
+    durable_trace = str(durable.get("trace_id") or "") if durable else ""
+    expected_trace = str(trace_id or active_trace or checkpoint_trace or durable_trace)
     if not expected_trace:
         return {
             "status": "idle",
@@ -1986,13 +2912,36 @@ async def request_task_cancellation(
             "trace_id": None,
             "message": "No active task to cancel",
         }
-    if (
-        trace_id
-        and checkpoint_trace
-        and checkpoint_trace != trace_id
-        and active_trace != trace_id
-    ):
+    if trace_id and active_trace and active_trace != trace_id:
         raise HTTPException(status_code=409, detail="The requested trace is no longer active.")
+    if trace_id and not active_trace and trace_id not in {checkpoint_trace, durable_trace}:
+        raise HTTPException(status_code=409, detail="The requested trace is no longer active.")
+    if not active and checkpoint_trace != expected_trace and durable_trace == expected_trace:
+        durable_status = durable.get("status")
+        if durable_status == "cancelled":
+            if await _durable_cancellation_confirmed(
+                session_id=session_id,
+                user_id=user_id,
+                trace_id=expected_trace,
+            ):
+                return {
+                    "status": "cancelled",
+                    "session_id": session_id,
+                    "trace_id": expected_trace,
+                    "message": "Task is cancelled",
+                }
+        if durable_status in {"completed", "failed"}:
+            if trace_id:
+                raise HTTPException(
+                    status_code=409,
+                    detail=f"Task is already {durable_status}; it cannot be cancelled.",
+                )
+            return {
+                "status": "idle",
+                "session_id": session_id,
+                "trace_id": expected_trace,
+                "message": "No active task to cancel",
+            }
     if checkpoint_trace == expected_trace:
         _require_checkpoint_identity(
             values,
@@ -2007,92 +2956,154 @@ async def request_task_cancellation(
                 detail=f"Task is already {current_status}; it cannot be cancelled.",
             )
 
+    cancellation = await request_trace_cancellation(
+        user_id,
+        session_id,
+        expected_trace,
+        reason=reason,
+        ttl_seconds=settings.ACTIVE_TRACE_LEASE_SECONDS,
+    )
+    if cancellation.get("status") == "stale":
+        raise HTTPException(status_code=409, detail="The requested trace is no longer active.")
+    # The runner can atomically move starting -> running between the initial
+    # lookup and request_trace_cancellation().  Re-read after that Lua race so
+    # only the actual owner ever acknowledges a running runner as quiescent.
+    active = await get_active_trace_lease(user_id, session_id)
+    if active and active.get("trace_id") != expected_trace:
+        raise HTTPException(status_code=409, detail="The requested trace is no longer active.")
     cancel_event = _cancel_events.get(expected_trace)
     if cancel_event:
         cancel_event.set()
 
     from enterprise_agent.core.agent.tools.background import clear_background_manager
 
-    clear_background_manager(session_id)
-    await clear_task_pause_request(user_id, session_id, expected_trace)
+    clear_background_manager(session_id, expected_trace)
 
-    interrupt_payload = _snapshot_interrupt_payload(state)
-    if checkpoint_trace == expected_trace and interrupt_payload:
-        interrupt_type = interrupt_payload.get("type")
-        if interrupt_type == "tool_confirmation":
-            resume_payload = {
-                "approved": False,
-                "approved_ids": [],
-                "reason": "task_cancelled",
-            }
-        elif interrupt_type == "user_pause":
-            resume_payload = {
-                "action": "cancel",
+    # A running owner must close its graph iterator and persist cancellation
+    # itself.  The API waits briefly, but never guesses success while it runs.
+    if active and active.get("runner_state") == "running":
+        released = await _wait_for_cancelled_lease_release(
+            user_id=user_id,
+            session_id=session_id,
+            trace_id=expected_trace,
+            timeout=settings.CANCEL_CONVERGENCE_WAIT_SECONDS,
+        )
+        if released and await _durable_cancellation_confirmed(
+            session_id=session_id,
+            user_id=user_id,
+            trace_id=expected_trace,
+        ):
+            return {
+                "status": "cancelled",
+                "session_id": session_id,
                 "trace_id": expected_trace,
-                "reason": "task_cancelled",
+                "message": "Task is cancelled",
             }
-        else:
+        latest = await graph.aget_state(config)
+        latest_values = latest.values if latest and latest.values else {}
+        if latest_values.get("trace_id") == expected_trace and latest_values.get(
+            "task_status"
+        ) in {TaskStatus.SUCCEEDED.value, TaskStatus.FAILED.value}:
             raise HTTPException(
                 status_code=409,
-                detail=f"Cannot safely cancel unknown interrupt type {interrupt_type!r}.",
+                detail=(
+                    f"Task became {latest_values.get('task_status')} before Stop converged."
+                ),
             )
+        return {
+            "status": "cancelling",
+            "session_id": session_id,
+            "trace_id": expected_trace,
+            "message": "Cancellation is still converging; retry or check status.",
+        }
 
+    # No runner is active (pre-start, waiting confirmation, disconnected, or
+    # legacy checkpoint), so it is safe to terminalize without Command(resume).
+    latest = await graph.aget_state(config)
+    latest_values = latest.values if latest and latest.values else {}
+    latest_trace = str(latest_values.get("trace_id") or "")
+    if latest_trace == expected_trace and latest_values.get("task_status") in {
+        TaskStatus.SUCCEEDED.value,
+        TaskStatus.FAILED.value,
+    }:
+        raise HTTPException(
+            status_code=409,
+            detail=(
+                f"Task became {latest_values.get('task_status')} before Stop converged."
+            ),
+        )
+
+    checkpoint_cancelled = latest_trace != expected_trace
+    cancellation_values = latest_values if latest_trace == expected_trace else {}
+    if latest_trace == expected_trace:
+        checkpoint_cancelled = await _safe_mark_task_terminal(
+            graph,
+            config,
+            TaskStatus.CANCELLED,
+            reason,
+            expected_trace_id=expected_trace,
+        )
+        if not checkpoint_cancelled:
+            raced = await graph.aget_state(config)
+            raced_values = raced.values if raced and raced.values else {}
+            if raced_values.get("trace_id") == expected_trace and raced_values.get(
+                "task_status"
+            ) in {TaskStatus.SUCCEEDED.value, TaskStatus.FAILED.value}:
+                raise HTTPException(
+                    status_code=409,
+                    detail=(
+                        f"Task became {raced_values.get('task_status')} before Stop converged."
+                    ),
+                )
+
+    durable_cancelled = False
+    if checkpoint_cancelled:
+        await _safe_mark_durable_assistant_cancelled(
+            session_id=session_id,
+            user_id=user_id,
+            trace_id=expected_trace,
+            values=cancellation_values,
+            reason=reason,
+        )
+        durable_cancelled = await _durable_cancellation_confirmed(
+            session_id=session_id,
+            user_id=user_id,
+            trace_id=expected_trace,
+        )
+    release_result = "missing"
+    if active and checkpoint_cancelled and durable_cancelled:
+        release_result = await _mark_runner_stopped_and_release(
+            user_id=user_id,
+            session_id=session_id,
+            trace_id=expected_trace,
+            lease_token=active["lease_token"],
+            runner_token=active["runner_token"],
+            reason="cancelled",
+            release=True,
+        )
+    if checkpoint_cancelled and durable_cancelled and release_result in {"released", "missing"}:
+        if _active_stream_traces.get(session_id) == expected_trace:
+            _active_stream_traces.pop(session_id, None)
         try:
-            await graph.ainvoke(Command(resume=resume_payload), config)
-        except asyncio.CancelledError:
-            raise
-        except Exception:
-            # Preserve the existing best-effort API contract, but converge the
-            # checkpoint below even if the typed interrupt resume failed.
-            logging.warning("Cancellation resume failed", exc_info=True)
-
-    if checkpoint_trace == expected_trace:
-        current_status = values.get("task_status")
-        if current_status not in {TaskStatus.SUCCEEDED.value, TaskStatus.FAILED.value}:
-            await _safe_mark_task_terminal(
-                graph,
-                config,
-                TaskStatus.CANCELLED,
-                reason,
-                expected_trace_id=expected_trace,
+            get_trace_store().finish_trace(
+                user_id=user_id,
+                trace_id=expected_trace,
+                status=TaskStatus.CANCELLED.value,
+                error=reason,
             )
-
-        latest_state = await graph.aget_state(config)
-        latest_values = latest_state.values if latest_state and latest_state.values else {}
-        latest_trace = latest_values.get("trace_id")
-        latest_status = latest_values.get("task_status")
-        if latest_trace != expected_trace:
-            raise HTTPException(
-                status_code=409,
-                detail="The task checkpoint changed while cancellation was converging.",
-            )
-        if latest_status in {TaskStatus.SUCCEEDED.value, TaskStatus.FAILED.value}:
-            raise HTTPException(
-                status_code=409,
-                detail=f"Task is already {latest_status}; it cannot be cancelled.",
-            )
-        if latest_status != TaskStatus.CANCELLED.value:
-            raise HTTPException(
-                status_code=409,
-                detail="Task cancellation did not reach a terminal checkpoint.",
-            )
-
-    await _safe_mark_durable_assistant_cancelled(
-        session_id=session_id,
-        user_id=user_id,
-        trace_id=expected_trace,
-    )
-
-    # A live stream owns this guard until its finally block has converged.  If
-    # there is no request-local stream (paused task, other worker, or an already
-    # disconnected browser), cancellation can release the stale guard here.
-    if cancel_event is None and _active_stream_traces.get(session_id) == expected_trace:
-        _active_stream_traces.pop(session_id, None)
+        except (FileNotFoundError, ValueError):
+            pass
+        return {
+            "status": "cancelled",
+            "session_id": session_id,
+            "trace_id": expected_trace,
+            "message": "Task is cancelled",
+        }
     return {
-        "status": "cancelled",
+        "status": "cancelling",
         "session_id": session_id,
         "trace_id": expected_trace,
-        "message": "Task cancellation requested",
+        "message": "Cancellation is not terminal yet; retry or check status.",
     }
 
 
@@ -2257,7 +3268,7 @@ async def get_session_messages(
     messages = [
         serialize_message(message)
         for message in durable_records
-        if message.content
+        if message.content or getattr(message, "timeline", None)
     ]
     checkpoint_count = 0
     if not durable_records:
@@ -2284,6 +3295,7 @@ async def get_session_messages(
 async def confirm_tool(
     session_id: str,
     approved: bool,
+    trace_id: str,
     approved_ids: list[str] = None,
     user_id: int = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
@@ -2301,7 +3313,6 @@ async def confirm_tool(
         Status indicating execution resumed
     """
     await _require_owned_session(session_id, user_id, db)
-    _cancel_confirmation_timeout(session_id)
     set_current_user_id(user_id)
 
     config = {"configurable": {"thread_id": session_id}}
@@ -2309,9 +3320,12 @@ async def confirm_tool(
 
     snapshot = await graph.aget_state(config)
     values = snapshot.values if snapshot and snapshot.values else {}
-    trace_id = values.get("trace_id")
-    if not trace_id:
+    checkpoint_trace_id = values.get("trace_id")
+    if not checkpoint_trace_id:
         raise HTTPException(status_code=409, detail="The confirmation checkpoint has expired.")
+    if trace_id != checkpoint_trace_id:
+        raise HTTPException(status_code=409, detail="The requested trace is no longer active.")
+    trace_id = str(checkpoint_trace_id)
     _require_checkpoint_identity(
         values,
         session_id=session_id,
@@ -2334,18 +3348,122 @@ async def confirm_tool(
     if expired:
         resume_payload["reason"] = "confirmation_timeout"
 
-    # Resume execution with user's decision
-    # The interrupt() in tool_confirm_node will receive this as user_response
-    await graph.ainvoke(
-        Command(resume=resume_payload),
-        config
-    )
+    resume_lock_token = await acquire_task_resume_lock(user_id, session_id, trace_id)
+    if not resume_lock_token:
+        raise HTTPException(status_code=409, detail="This confirmation is already being resumed.")
+    _cancel_confirmation_timeout(session_id)
+    lease = None
+    control_token = None
+    runner_context_token = None
+    terminal_persisted = False
+    assistant_status = "failed"
+    try:
+        lease = await _reserve_existing_trace_runner(
+            user_id=user_id,
+            session_id=session_id,
+            trace_id=trace_id,
+        )
+        if not await start_active_trace_runner(
+            user_id,
+            session_id,
+            trace_id,
+            lease["lease_token"],
+            lease["runner_token"],
+            ttl_seconds=settings.ACTIVE_TRACE_LEASE_SECONDS,
+        ):
+            raise HTTPException(status_code=409, detail="This task is being cancelled.")
+        control_token = set_current_task_control_identity(user_id, session_id, trace_id)
+        runner_context_token = set_current_task_runner_identity(
+            user_id,
+            session_id,
+            trace_id,
+            lease["lease_token"],
+            lease["runner_token"],
+        )
+        result = await graph.ainvoke(Command(resume=resume_payload), config)
+        assistant_status, terminal_reason = _task_terminal_outcome(
+            result,
+            session_id=session_id,
+            user_id=user_id,
+            trace_id=trace_id,
+        )
+        if assistant_status == "failed" and result.get("task_status") not in {
+            TaskStatus.FAILED.value,
+            TaskStatus.SUCCEEDED.value,
+            TaskStatus.CANCELLED.value,
+        }:
+            await _safe_mark_task_terminal(
+                graph,
+                config,
+                TaskStatus.FAILED,
+                terminal_reason,
+                expected_trace_id=trace_id,
+            )
+        if assistant_status == "cancelled":
+            await _safe_mark_durable_assistant_cancelled(
+                session_id=session_id,
+                user_id=user_id,
+                trace_id=trace_id,
+                values=result,
+                reason=terminal_reason or "Cancelled by user",
+            )
+            terminal_persisted = await _durable_cancellation_confirmed(
+                session_id=session_id,
+                user_id=user_id,
+                trace_id=trace_id,
+            )
+        else:
+            message_id = await find_assistant_message_id(
+                db,
+                session_id=session_id,
+                user_id=user_id,
+                trace_id=trace_id,
+            )
+            if message_id is None:
+                message_id = await create_assistant_message(
+                    db,
+                    session_id=session_id,
+                    user_id=user_id,
+                    trace_id=trace_id,
+                    status="interrupted",
+                )
+            terminal_persisted = await update_assistant_message(
+                db,
+                message_id=message_id,
+                user_id=user_id,
+                content=_final_response_content(result),
+                status=assistant_status,
+                append=True,
+            )
+    finally:
+        if runner_context_token is not None:
+            reset_current_task_runner_identity(runner_context_token)
+        if control_token is not None:
+            reset_current_task_control_identity(control_token)
+        if lease is not None:
+            await _mark_runner_stopped_and_release(
+                user_id=user_id,
+                session_id=session_id,
+                trace_id=trace_id,
+                lease_token=lease["lease_token"],
+                runner_token=lease["runner_token"],
+                reason=assistant_status,
+                release=terminal_persisted
+                and assistant_status in {"completed", "failed", "cancelled"},
+            )
+        await release_task_resume_lock(
+            user_id,
+            session_id,
+            trace_id,
+            resume_lock_token,
+        )
 
     logging.info(f"[confirm] Session {session_id}: approved={approved}, approved_ids={approved_ids}")
 
     return {
         "status": "expired" if expired else "resumed",
         "session_id": session_id,
+        "trace_id": trace_id,
         "approved": approved and not expired,
     }
 

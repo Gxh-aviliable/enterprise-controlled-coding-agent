@@ -6,10 +6,10 @@ and checking their status later.
 
 import logging
 import os
-import signal
 import subprocess
 import tempfile
 import threading
+import time
 import uuid
 from pathlib import Path
 from queue import Queue
@@ -23,6 +23,7 @@ from enterprise_agent.core.agent.tools.shell import (
     _read_captured_stream,
     _safe_subprocess_environment,
     _shell_execution_kwargs,
+    _terminate_process_group,
     validate_command,
 )
 from enterprise_agent.core.agent.tools.workspace import get_user_workspace
@@ -60,12 +61,23 @@ class BackgroundManager:
         if error:
             return error
 
+        try:
+            from enterprise_agent.core.execution.interrupt_control import (
+                get_current_task_control_identity,
+            )
+
+            control_identity = get_current_task_control_identity()
+        except ImportError:
+            control_identity = None
+        trace_id = control_identity[2] if control_identity else None
+
         task_id = str(uuid.uuid4())[:8]
         self.tasks[task_id] = {
             "status": "running",
             "command": command,
             "result": None,
-            "timeout": timeout
+            "timeout": timeout,
+            "trace_id": trace_id,
         }
 
         # Freeze the user/workspace context before spawning. ContextVars are
@@ -79,7 +91,7 @@ class BackgroundManager:
         # Start execution thread with explicit user_id
         thread = threading.Thread(
             target=self._execute,
-            args=(task_id, command, timeout, workdir),
+            args=(task_id, command, timeout, workdir, trace_id),
             daemon=True
         )
         with self._lock:
@@ -88,7 +100,14 @@ class BackgroundManager:
 
         return f"Background task {task_id} started: {command[:80]}..."
 
-    def _execute(self, task_id: str, command: str, timeout: int, workdir: Path) -> None:
+    def _execute(
+        self,
+        task_id: str,
+        command: str,
+        timeout: int,
+        workdir: Path,
+        trace_id: str | None = None,
+    ) -> None:
         """Execute command in thread.
 
         Args:
@@ -96,8 +115,20 @@ class BackgroundManager:
             command: Shell command to execute
             timeout: Maximum execution time
             workdir: Resolved workspace captured in the request thread
+            trace_id: Exact Agent trace that owns the process, when available
         """
+        control_token = None
         try:
+            if trace_id is not None and self.user_id is not None:
+                from enterprise_agent.core.execution.interrupt_control import (
+                    set_current_task_control_identity,
+                )
+
+                control_token = set_current_task_control_identity(
+                    self.user_id,
+                    self.session_id,
+                    trace_id,
+                )
             if self.tasks[task_id].get("status") == "cancelled":
                 return
             process_group_args = (
@@ -122,7 +153,23 @@ class BackgroundManager:
                 if self.tasks[task_id].get("status") == "cancelled":
                     self._terminate_process(task_id)
                     return
-                process.communicate(timeout=timeout)
+                deadline = time.monotonic() + timeout
+                while process.poll() is None:
+                    from enterprise_agent.core.execution.interrupt_control import (
+                        is_current_task_cancel_requested_sync,
+                    )
+
+                    if is_current_task_cancel_requested_sync():
+                        self.cancel(task_id)
+                        break
+                    if time.monotonic() >= deadline:
+                        raise subprocess.TimeoutExpired(command, timeout)
+                    try:
+                        process.wait(timeout=0.1)
+                    except subprocess.TimeoutExpired:
+                        continue
+                if self.tasks[task_id].get("status") == "cancelled":
+                    return
                 stdout, stdout_truncated, _ = _read_captured_stream(stdout_file)
                 stderr, stderr_truncated, _ = _read_captured_stream(stderr_file)
             output = "\n".join(part for part in (stdout, stderr) if part).strip() or "(no output)"
@@ -135,7 +182,7 @@ class BackgroundManager:
                     try:
                         receipt = ToolArtifactStore(workdir=workdir).save(
                             output,
-                            trace_id=f"background-{self.session_id}",
+                            trace_id=trace_id or f"background-{self.session_id}",
                             tool_call_id=task_id,
                             source_already_truncated=source_truncated,
                         )
@@ -190,6 +237,12 @@ class BackgroundManager:
             })
 
         finally:
+            if control_token is not None:
+                from enterprise_agent.core.execution.interrupt_control import (
+                    reset_current_task_control_identity,
+                )
+
+                reset_current_task_control_identity(control_token)
             with self._lock:
                 self._processes.pop(task_id, None)
                 self._threads.pop(task_id, None)
@@ -203,31 +256,33 @@ class BackgroundManager:
                 "artifact_error": self.tasks[task_id].get("artifact_error"),
             })
 
-    def _terminate_process(self, task_id: str) -> None:
+    def _terminate_process(self, task_id: str) -> str:
         with self._lock:
             process = self._processes.get(task_id)
         if not process or process.poll() is not None:
-            return
-        if os.name == "nt":
-            process.terminate()
-        else:
-            os.killpg(process.pid, signal.SIGTERM)
-        try:
-            process.wait(timeout=1)
-        except subprocess.TimeoutExpired:
-            if os.name == "nt":
-                process.kill()
-            else:
-                os.killpg(process.pid, signal.SIGKILL)
-            process.wait(timeout=1)
+            return "already_exited"
+        return _terminate_process_group(process)
 
     def cancel(self, task_id: str) -> bool:
         """Cancel a running child process and retain a truthful terminal result."""
         task = self.tasks.get(task_id)
         if not task or task.get("status") != "running":
             return False
-        task.update({"status": "cancelled", "result": "Cancelled by user"})
-        self._terminate_process(task_id)
+        task["status"] = "cancelled"
+        termination_mode = self._terminate_process(task_id)
+        cancellation_mode = (
+            "best_effort"
+            if termination_mode.startswith("best_effort")
+            else "terminated"
+        )
+        task.update({
+            "result": (
+                "Cancelled by user "
+                f"({cancellation_mode}; termination_mode={termination_mode})"
+            ),
+            "cancellation": cancellation_mode,
+            "termination_mode": termination_mode,
+        })
         return True
 
     def shutdown(self, wait_seconds: float = 2.0) -> None:
@@ -239,6 +294,22 @@ class BackgroundManager:
         for thread in threads:
             if thread is not threading.current_thread():
                 thread.join(timeout=wait_seconds)
+
+    def cancel_trace(self, trace_id: str, wait_seconds: float = 2.0) -> int:
+        """Cancel only processes launched by one exact Agent trace."""
+        task_ids = [
+            task_id
+            for task_id, task in self.tasks.items()
+            if task.get("trace_id") == trace_id and task.get("status") == "running"
+        ]
+        for task_id in task_ids:
+            self.cancel(task_id)
+        with self._lock:
+            threads = [self._threads.get(task_id) for task_id in task_ids]
+        for thread in threads:
+            if thread and thread is not threading.current_thread():
+                thread.join(timeout=wait_seconds)
+        return len(task_ids)
 
     def check(self, task_id: Optional[str] = None) -> str:
         """Check background task status.
@@ -312,7 +383,7 @@ def get_background_manager(session_id: str = None) -> BackgroundManager:
     return _bg_managers[key]
 
 
-def clear_background_manager(session_id: str | None) -> None:
+def clear_background_manager(session_id: str | None, trace_id: str | None = None) -> None:
     """Clear BackgroundManager for a session.
 
     Called when starting a new session or when background tasks should be reset.
@@ -322,6 +393,9 @@ def clear_background_manager(session_id: str | None) -> None:
     key = (get_current_user_id(), session_id or "__default__")
     if key in _bg_managers:
         bg_mgr = _bg_managers[key]
+        if trace_id:
+            bg_mgr.cancel_trace(trace_id)
+            return
         bg_mgr.shutdown()
         # Remove from cache
         del _bg_managers[key]

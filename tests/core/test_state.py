@@ -43,6 +43,7 @@ class TestAgentStateDefinition:
             "changed_files",
             "validation_results",
             "confirmation_deadline",
+            "continuation_receipt",
         }
         assert required.issubset(AgentState.__annotations__)
 

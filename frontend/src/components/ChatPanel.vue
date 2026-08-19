@@ -9,28 +9,25 @@
           </svg>
           {{ activeId ? activeId.slice(0, 8) : 'New conversation' }}
         </span>
-        <span
-          v-if="taskStatus === 'running' || taskStatus === 'resuming'"
-          :class="['status-badge', taskStatus === 'resuming' ? 'resuming' : 'streaming']"
-          role="status"
-          aria-live="polite"
-        >
+        <span v-if="taskStatus === 'running'" class="status-badge streaming" role="status" aria-live="polite">
           <span class="pulse-dot"></span>
-          {{ taskStatus === 'resuming' ? 'Resuming' : 'Generating' }}
+          Generating
         </span>
-        <span v-else-if="taskStatus === 'pause_requested'" class="status-badge pausing" role="status" aria-live="polite">
+        <span v-else-if="taskStatus === 'cancelling'" class="status-badge cancelling" role="status" aria-live="polite">
           <span class="pulse-dot"></span>
-          Pausing at next safe boundary
+          Cancelling
         </span>
-        <span v-else-if="taskStatus === 'paused'" class="status-badge paused" role="status" aria-live="polite">
-          <svg width="12" height="12" viewBox="0 0 24 24" fill="currentColor"><rect x="6" y="5" width="4" height="14" rx="1"/><rect x="14" y="5" width="4" height="14" rx="1"/></svg>
-          Paused
+        <span v-else-if="taskStatus === 'cancel_failed'" class="status-badge control-failed" role="status" aria-live="polite">
+          Cancellation needs attention
+        </span>
+        <span v-else-if="['status_checking', 'status_unknown'].includes(taskStatus)" class="status-badge checking" role="status" aria-live="polite">
+          {{ taskStatus === 'status_checking' ? 'Checking task status' : 'Task status unknown' }}
         </span>
         <span v-if="currentTool && !streaming" class="status-badge tool">
           <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 00.33 1.82l.06.06a2 2 0 010 2.83 2 2 0 01-2.83 0l-.06-.06a1.65 1.65 0 00-1.82-.33 1.65 1.65 0 00-1 1.51V21a2 2 0 01-4 0v-.09A1.65 1.65 0 009 19.4a1.65 1.65 0 00-1.82.33l-.06.06a2 2 0 01-2.83-2.83l.06-.06A1.65 1.65 0 004.68 15a1.65 1.65 0 00-1.51-1H3a2 2 0 010-4h.09A1.65 1.65 0 004.6 9a1.65 1.65 0 00-.33-1.82l-.06-.06a2 2 0 012.83-2.83l.06.06A1.65 1.65 0 009 4.68a1.65 1.65 0 001-1.51V3a2 2 0 014 0v.09a1.65 1.65 0 001 1.51 1.65 1.65 0 001.82-.33l.06-.06a2 2 0 012.83 2.83l-.06.06A1.65 1.65 0 0019.4 9a1.65 1.65 0 001.51 1H21a2 2 0 010 4h-.09a1.65 1.65 0 00-1.51 1z"/></svg>
           {{ currentTool }}
         </span>
-        <span v-if="pendingConfirm" class="status-badge awaiting">
+        <span v-if="pendingConfirm && taskStatus === 'waiting_confirmation'" class="status-badge awaiting">
           <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><circle cx="12" cy="12" r="10"/><path d="M12 6v6l4 2"/></svg>
           Awaiting confirmation
         </span>
@@ -79,7 +76,13 @@
 
       <div
         v-for="(msg, i) in messages"
-        :key="i"
+        :key="msg.timelineId || i"
+        :class="[
+          'timeline-entry',
+          `timeline-entry-${msg.role}`,
+          msg.role === 'tool_call' ? `timeline-entry-${msg.toolStatus}` : ''
+        ]"
+        :data-entry-role="msg.role"
       >
         <ToolCallCard
           v-if="msg.role === 'tool_call'"
@@ -119,7 +122,7 @@
       </div>
       </div>
 
-      <div v-if="streaming && messages.length === 0" class="message-wrapper assistant">
+      <div v-if="showStreamPlaceholder" class="message-wrapper assistant stream-placeholder" role="status" aria-live="polite">
         <div class="message-avatar">
           <div class="avatar agent-avatar">
             <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polygon points="12 2 15.09 8.26 22 9.27 17 14.14 18.18 21.02 12 17.77 5.82 21.02 7 14.14 2 9.27 8.91 8.26 12 2"/></svg>
@@ -178,6 +181,7 @@
           <p class="modal-message">{{ pendingConfirm.message }}</p>
           <p class="modal-scope-note">
             Safe shell commands run automatically. Approval applies only to this current batch.
+            Stopping does not roll back completed file changes or external side effects.
           </p>
           <ul class="modal-tools">
             <li v-for="(tool, idx) in pendingConfirm.tools" :key="tool.id || idx" class="modal-tool-item">
@@ -195,10 +199,31 @@
               </label>
             </li>
           </ul>
+          <p v-if="taskStatus !== 'waiting_confirmation'" class="modal-scope-note" role="status">
+            This task is being terminated. Completed file changes or external side effects are not rolled back.
+          </p>
           <div class="modal-actions">
-            <button @click="rejectTools" class="btn-modal btn-reject">Reject All</button>
-            <button @click="approveAll" class="btn-modal btn-approve-all">Approve Current Batch</button>
-            <button @click="approveTools" class="btn-modal btn-approve">Approve Selected</button>
+            <button
+              v-if="['cancel_failed', 'status_unknown'].includes(taskStatus)"
+              type="button"
+              class="btn-modal btn-approve-all"
+              data-testid="check-stream-status"
+              @click="recheckStreamStatus"
+            >
+              Check status
+            </button>
+            <button
+              type="button"
+              class="btn-modal btn-terminate"
+              data-testid="terminate-task"
+              :disabled="['cancelling', 'status_checking'].includes(taskStatus)"
+              @click="stopGeneration"
+            >
+              {{ taskStatus === 'cancel_failed' ? 'Retry termination' : 'Terminate task' }}
+            </button>
+            <button @click="rejectTools" class="btn-modal btn-reject" :disabled="!confirmationActionsEnabled">Reject All</button>
+            <button @click="approveAll" class="btn-modal btn-approve-all" :disabled="!confirmationActionsEnabled">Approve Current Batch</button>
+            <button @click="approveTools" class="btn-modal btn-approve" :disabled="!confirmationActionsEnabled">Approve Selected</button>
           </div>
         </div>
       </div>
@@ -238,28 +263,15 @@
             </button>
           </div>
           <button
-            v-if="['running', 'resuming', 'pause_requested'].includes(taskStatus) && !pendingConfirm"
+            v-if="['cancel_failed', 'status_unknown'].includes(taskStatus) && !pendingConfirm"
             type="button"
-            class="task-secondary task-secondary-pause"
-            data-testid="pause-task"
-            :disabled="taskStatus === 'pause_requested' || !activeTraceId"
-            :aria-label="taskStatus === 'pause_requested' ? 'Pause requested' : 'Pause task at the next safe boundary'"
-            :title="taskStatus === 'pause_requested' ? 'Pause requested' : 'Pause at the next safe boundary'"
-            @click="pauseGeneration"
+            class="task-secondary"
+            data-testid="check-stream-status"
+            aria-label="Check authoritative task status"
+            title="Check authoritative task status"
+            @click="recheckStreamStatus"
           >
-            <svg width="14" height="14" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><rect x="6" y="5" width="4" height="14" rx="1"/><rect x="14" y="5" width="4" height="14" rx="1"/></svg>
-            {{ taskStatus === 'pause_requested' ? 'Pausing…' : 'Pause' }}
-          </button>
-          <button
-            v-else-if="taskStatus === 'paused' && !pendingConfirm"
-            type="button"
-            class="task-secondary task-secondary-cancel"
-            data-testid="cancel-paused-task"
-            aria-label="Cancel paused task permanently"
-            title="Cancel this task; it cannot be continued afterwards"
-            @click="stopGeneration"
-          >
-            Cancel task
+            Check status
           </button>
         </div>
       </div>
@@ -277,27 +289,16 @@
           @input="autoResize"
         ></textarea>
         <button
-          v-if="['running', 'pause_requested', 'resuming', 'cancelling'].includes(taskStatus) && !pendingConfirm"
+          v-if="['running', 'cancelling', 'cancel_failed'].includes(taskStatus) && !pendingConfirm"
           type="button"
           class="btn-send btn-stop"
           data-testid="stop-task"
           :disabled="taskStatus === 'cancelling'"
-          :aria-label="taskStatus === 'cancelling' ? 'Cancelling task' : 'Stop current task'"
-          :title="taskStatus === 'cancelling' ? 'Cancelling task' : 'Stop current task permanently'"
+          :aria-label="taskStatus === 'cancelling' ? 'Cancelling task' : taskStatus === 'cancel_failed' ? 'Retry stopping current task' : 'Stop current task'"
+          :title="taskStatus === 'cancelling' ? 'Cancelling task' : taskStatus === 'cancel_failed' ? 'Retry terminal cancellation' : 'Stop current task permanently'"
           @click="stopGeneration"
         >
           <svg width="18" height="18" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><rect x="6" y="6" width="12" height="12" rx="1.5"/></svg>
-        </button>
-        <button
-          v-else-if="taskStatus === 'paused' && !pendingConfirm"
-          type="button"
-          class="btn-send btn-continue"
-          data-testid="continue-task"
-          aria-label="Continue paused task"
-          title="Continue paused task"
-          @click="continueGeneration"
-        >
-          <svg width="18" height="18" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><path d="M8 5v14l11-7z"/></svg>
         </button>
         <button
           v-else-if="taskStatus === 'waiting_confirmation' && !pendingConfirm"
@@ -401,7 +402,26 @@ const taskStatus = ref('idle')
 const controlError = ref('')
 const executionMode = ref('single_agent')
 const agentCapabilities = ref(null)
+let timelineEntrySequence = 0
+let streamEpoch = 0
+let controlEpoch = 0
+let cancellationContext = null
 const taskInputLocked = computed(() => taskStatus.value !== 'idle')
+const confirmationActionsEnabled = computed(() => taskStatus.value === 'waiting_confirmation')
+const showStreamPlaceholder = computed(() => {
+  const lastEntry = messages.value.at(-1)
+  const unresolvedToolAtTail = (
+    lastEntry?.role === 'tool_call' &&
+    ['running', 'waiting'].includes(lastEntry.toolStatus)
+  )
+  return (
+    streaming.value &&
+    !streamMsgRef.value &&
+    !currentTool.value &&
+    !unresolvedToolAtTail &&
+    taskStatus.value === 'running'
+  )
+})
 const multiAgentAvailable = computed(() =>
   agentCapabilities.value?.available_modes?.includes('multi_agent') === true
 )
@@ -431,121 +451,254 @@ function getAbortSignal() {
     abortController.value.abort()
   }
   abortController.value = new AbortController()
+  streamEpoch += 1
   return abortController.value.signal
+}
+
+function appendTimelineEntry(entry) {
+  const timelineEntry = {
+    ...entry,
+    timelineId: entry.timelineId || `${entry.role || 'entry'}-${++timelineEntrySequence}`
+  }
+  messages.value.push(timelineEntry)
+  return timelineEntry
+}
+
+function historyTimelineId(sessionId, messageIndex, blockIndex, role) {
+  return `history-${sessionId}-${messageIndex}-${blockIndex}-${role || 'entry'}`
+}
+
+function historyText(value) {
+  if (value === undefined || value === null) return ''
+  return typeof value === 'string' ? value : JSON.stringify(value, null, 2)
+}
+
+function normalizeHistoryTimeline(message, sessionId, messageIndex) {
+  if (message?.role !== 'assistant' || !Array.isArray(message.timeline)) return []
+
+  return message.timeline.flatMap((block, blockIndex) => {
+    if (!block || typeof block !== 'object') return []
+
+    if (block.role === 'assistant') {
+      const content = historyText(block.content)
+      if (!content.trim()) return []
+      return [{
+        role: 'assistant',
+        content,
+        streaming: false,
+        timelineId: historyTimelineId(sessionId, messageIndex, blockIndex, block.role)
+      }]
+    }
+
+    if (block.role === 'tool_call') {
+      return [{
+        role: 'tool_call',
+        toolCallId: String(block.toolCallId || ''),
+        toolName: String(block.toolName || 'tool'),
+        toolStatus: String(block.toolStatus || 'done'),
+        toolResult: historyText(block.toolResult),
+        toolError: historyText(block.toolError),
+        toolDuration: block.toolDuration ?? null,
+        streaming: false,
+        timelineId: historyTimelineId(sessionId, messageIndex, blockIndex, block.role)
+      }]
+    }
+
+    return []
+  })
+}
+
+function normalizeHistoryMessages(rawMessages, sessionId) {
+  return rawMessages.flatMap((message, messageIndex) => {
+    const timeline = normalizeHistoryTimeline(message, sessionId, messageIndex)
+    if (timeline.length) return timeline
+
+    const content = historyText(message?.content)
+    if (message?.role === 'assistant' && !content.trim()) return []
+    return [{
+      role: message?.role,
+      content,
+      streaming: false,
+      timelineId: historyTimelineId(sessionId, messageIndex, 0, message?.role)
+    }]
+  })
+}
+
+function closeAssistantStreamSegment({ preserveRef = false } = {}) {
+  if (!streamMsgRef.value) return
+  streamMsgRef.value.streaming = false
+  if (!preserveRef) streamMsgRef.value = null
+}
+
+function appendAssistantStatus(content, { appendToOpen = false, noticeType = '' } = {}) {
+  const lastEntry = messages.value.at(-1)
+  if (noticeType && lastEntry?.noticeType === noticeType) return lastEntry
+
+  if (appendToOpen && streamMsgRef.value && lastEntry === streamMsgRef.value) {
+    streamMsgRef.value.content = streamMsgRef.value.content
+      ? `${streamMsgRef.value.content}\n\n${content}`
+      : content
+    streamMsgRef.value.noticeType = noticeType
+    const updated = streamMsgRef.value
+    closeAssistantStreamSegment()
+    return updated
+  }
+
+  closeAssistantStreamSegment()
+  return appendTimelineEntry({
+    role: 'assistant',
+    content,
+    streaming: false,
+    noticeType
+  })
+}
+
+function currentToolScope() {
+  return activeTraceId.value || `stream-${streamEpoch}`
 }
 
 function statusValue(data) {
   return String(data?.task_status || data?.status || '').toLowerCase()
 }
 
-function markTaskPaused(data = {}) {
-  if (data.trace_id) activeTraceId.value = data.trace_id
-  taskStatus.value = 'paused'
-  streaming.value = false
-  currentTool.value = ''
-  controlError.value = ''
-  if (streamMsgRef.value) streamMsgRef.value.streaming = false
+function traceValue(data) {
+  return String(data?.trace_id || data?.active_trace_id || '')
 }
 
-async function pauseGeneration() {
-  const sessionId = activeId.value
-  const traceId = activeTraceId.value
-  if (!sessionId || !traceId || !['running', 'resuming'].includes(taskStatus.value)) return
-
-  taskStatus.value = 'pause_requested'
-  controlError.value = ''
-  try {
-    const result = await api.pauseStream({ session_id: sessionId, trace_id: traceId })
-    const requestIsCurrent = (
-      activeId.value === sessionId &&
-      activeTraceId.value === traceId &&
-      taskStatus.value === 'pause_requested'
-    )
-    if (requestIsCurrent && statusValue(result) === 'paused') markTaskPaused(result)
-  } catch (error) {
-    const requestIsCurrent = (
-      activeId.value === sessionId &&
-      activeTraceId.value === traceId &&
-      taskStatus.value === 'pause_requested'
-    )
-    if (requestIsCurrent) {
-      taskStatus.value = 'running'
-      controlError.value = error.message
-      messages.value.push({ role: 'assistant', content: `❌ **Pause failed:** ${error.message}` })
-      scrollBottom()
-    }
-  }
+function cancellationIsCurrent(sessionId, operationEpoch) {
+  return activeId.value === sessionId && controlEpoch === operationEpoch
 }
 
-async function continueGeneration() {
-  const sessionId = activeId.value
-  const traceId = activeTraceId.value
-  if (!sessionId || !traceId || taskStatus.value !== 'paused') return
-
-  controlError.value = ''
-  taskStatus.value = 'resuming'
-  streaming.value = true
-  ensureAssistantStreamMessage()
-  const signal = getAbortSignal()
-  api.continuePausedStream({
-    session_id: sessionId,
-    trace_id: traceId,
-    signal,
-    ...createStreamHandlers(sessionId, false)
-  })
+function cancelStatusMessage() {
+  const lastUserIndex = messages.value.findLastIndex(message => message.role === 'user')
+  const receivedAssistantContent = messages.value
+    .slice(lastUserIndex + 1)
+    .some(message => message.role === 'assistant' && String(message.content || '').trim())
+  return receivedAssistantContent
+    ? '*[Generation stopped by user]*'
+    : '*[Generation stopped before any response was received]*'
 }
 
-async function stopGeneration() {
-  const sid = activeId.value
-  if (!sid) return
-  const traceId = activeTraceId.value
-  const previousStatus = taskStatus.value
-  taskStatus.value = 'cancelling'
-  controlError.value = ''
+function finalizeCancelledTask({ sessionId, traceId, toolScope, message = 'Stopped by user' }) {
+  if (activeId.value !== sessionId) return false
 
-  // 1. Abort the SSE fetch immediately (stops receiving tokens)
   if (abortController.value) {
     abortController.value.abort()
     abortController.value = null
   }
 
-  // 2. Preserve partial content in the streaming message
-  if (streamMsgRef.value) {
-    streamMsgRef.value.streaming = false
-    if (streamMsgRef.value.content) {
-      streamMsgRef.value.content += '\n\n*[Generation stopped by user]*'
-    } else {
-      streamMsgRef.value.content = '*[Generation stopped before any response was received]*'
-    }
-  }
-
-  // 3. Reset streaming state
   streaming.value = false
   currentTool.value = ''
+  failUnresolvedTools(message, toolScope)
+  appendAssistantStatus(
+    cancelStatusMessage(),
+    { appendToOpen: true, noticeType: 'cancelled' }
+  )
+  activeTraceId.value = ''
+  pendingConfirm.value = null
+  taskStatus.value = 'idle'
+  controlError.value = ''
+  cancellationContext = null
   streamMsgRef.value = null
-
-  // 4. Mark any unresolved tool cards as cancelled
-  for (const m of messages.value) {
-    if (m.role === 'tool_call' && ['running', 'waiting'].includes(m.toolStatus)) {
-      m.toolStatus = 'error'
-      m.toolError = 'Stopped by user'
-    }
-  }
-
-  // 5. Send cancel request to backend (fire-and-forget)
-  try {
-    await api.cancelStream(sid, traceId)
-    activeTraceId.value = ''
-    taskStatus.value = 'idle'
-    pendingConfirm.value = null
-  } catch (e) {
-    console.warn('[stop] Backend cancel request failed:', e)
-    controlError.value = e.message
-    taskStatus.value = previousStatus === 'paused' ? 'paused' : 'idle'
-    messages.value.push({ role: 'assistant', content: `❌ **Cancel failed:** ${e.message}` })
-  }
-
   scrollBottom()
+  return Boolean(traceId)
+}
+
+async function confirmCancellationCheckpoint({
+  sessionId,
+  expectedTraceId,
+  toolScope,
+  operationEpoch,
+  message = 'Stopped by user'
+}) {
+  try {
+    const status = await api.getStreamStatus(sessionId)
+    if (!cancellationIsCurrent(sessionId, operationEpoch)) return false
+
+    const statusTraceId = traceValue(status)
+    if (statusValue(status) !== 'cancelled') {
+      throw new Error(`Authoritative task status is ${statusValue(status) || 'unknown'}, not cancelled.`)
+    }
+    if (!statusTraceId) {
+      throw new Error('Authoritative task status did not include a trace id.')
+    }
+    if (expectedTraceId && statusTraceId !== expectedTraceId) {
+      throw new Error('Authoritative task status refers to a different trace.')
+    }
+
+    if (cancellationContext?.sessionId === sessionId) {
+      cancellationContext.traceId = statusTraceId
+    }
+    return finalizeCancelledTask({
+      sessionId,
+      traceId: statusTraceId,
+      toolScope,
+      message
+    })
+  } catch (error) {
+    if (!cancellationIsCurrent(sessionId, operationEpoch)) return false
+    console.warn('[stop] Authoritative cancellation check failed:', error)
+    controlError.value = `Cancel failed: ${error.message}`
+    taskStatus.value = 'cancel_failed'
+    return false
+  }
+}
+
+async function stopGeneration() {
+  const sessionId = activeId.value
+  if (!sessionId || ['idle', 'status_checking'].includes(taskStatus.value)) return
+
+  const existingContext = cancellationContext?.sessionId === sessionId
+    ? cancellationContext
+    : null
+  const requestedTraceId = existingContext?.traceId || activeTraceId.value
+  const toolScope = existingContext?.toolScope || currentToolScope()
+  cancellationContext = {
+    sessionId,
+    traceId: requestedTraceId,
+    toolScope
+  }
+
+  const operationEpoch = ++controlEpoch
+  // Detach all existing handlers immediately. The SSE request itself remains
+  // open until the cancellation endpoint confirms the terminal checkpoint.
+  streamEpoch += 1
+  taskStatus.value = 'cancelling'
+  controlError.value = ''
+  streaming.value = false
+  currentTool.value = ''
+  closeAssistantStreamSegment({ preserveRef: true })
+
+  try {
+    const result = await api.cancelStream(sessionId, requestedTraceId)
+    if (!cancellationIsCurrent(sessionId, operationEpoch)) return
+
+    const resultStatus = statusValue(result)
+    const resultTraceId = traceValue(result)
+    if (resultStatus !== 'cancelled') {
+      throw new Error(`Cancellation is not terminal yet (server status: ${resultStatus || 'unknown'}).`)
+    }
+    if (!resultTraceId) {
+      throw new Error('Cancellation response did not identify the cancelled trace.')
+    }
+    if (requestedTraceId && resultTraceId !== requestedTraceId) {
+      throw new Error('Cancellation response refers to a different trace.')
+    }
+
+    cancellationContext.traceId = resultTraceId
+    await confirmCancellationCheckpoint({
+      sessionId,
+      expectedTraceId: resultTraceId,
+      toolScope,
+      operationEpoch,
+      message: 'Stopped by user'
+    })
+  } catch (error) {
+    if (!cancellationIsCurrent(sessionId, operationEpoch)) return
+    console.warn('[stop] Backend cancellation was not confirmed:', error)
+    controlError.value = `Cancel failed: ${error.message}`
+    taskStatus.value = 'cancel_failed'
+  }
 }
 
 const AUTO_FOLLOW_THRESHOLD_PX = 80
@@ -620,7 +773,7 @@ async function send() {
     if (multiAgentAvailable.value) {
       pendingModeRequest.value = content
     } else {
-      messages.value.push({
+      appendTimelineEntry({
         role: 'assistant',
         content: `❌ **Multi-Agent unavailable:** ${multiAgentReason.value}`
       })
@@ -680,6 +833,8 @@ async function confirmModeSwitch() {
 }
 
 async function submitContent(content) {
+  controlEpoch += 1
+  cancellationContext = null
   input.value = ''
   nextTick(() => {
     if (inputEl.value) {
@@ -687,7 +842,8 @@ async function submitContent(content) {
     }
   })
 
-  messages.value.push({ role: 'user', content })
+  closeAssistantStreamSegment()
+  appendTimelineEntry({ role: 'user', content, streaming: false })
   emptyHistory.value = false
   if (historyStatus.value !== 'partial') historyStatus.value = 'durable'
   scrollBottom(true)
@@ -701,14 +857,18 @@ async function submitContent(content) {
       sid = session.id
       activeId.value = sid
     } catch (e) {
-      messages.value.push({ role: 'assistant', content: 'Failed to create session: ' + e.message })
+      appendTimelineEntry({
+        role: 'assistant',
+        content: 'Failed to create session: ' + e.message,
+        streaming: false
+      })
       return
     }
   }
 
-  const streamMsg = { role: 'assistant', content: '', streaming: true }
-  messages.value.push(streamMsg)
-  streamMsgRef.value = streamMsg
+  // Assistant text is created lazily on the first delta. This avoids an empty
+  // bubble when the first visible event is a tool call and preserves SSE order.
+  streamMsgRef.value = null
   streaming.value = true
   taskStatus.value = 'running'
   activeTraceId.value = ''
@@ -716,45 +876,51 @@ async function submitContent(content) {
   scrollBottom(true)
 
   const signal = getAbortSignal()
-  startStream(sid, content, isNewSession, signal)
+  startStream(sid, content, isNewSession, signal, streamEpoch)
 }
 
-function findToolMessage(id, name, statuses = ['running', 'waiting']) {
+function findToolMessage(id, name, statuses = null) {
+  const hasAllowedStatus = message => !statuses || statuses.includes(message.toolStatus)
+  const scope = currentToolScope()
   if (id) {
     const exact = messages.value.findLast(
-      m => m.role === 'tool_call' && m.toolCallId === id && statuses.includes(m.toolStatus)
+      m => m.role === 'tool_call' && m.toolScope === scope && m.toolCallId === id && hasAllowedStatus(m)
     )
-    if (exact) return exact
+    return exact || null
   }
   return messages.value.findLast(
-    m => m.role === 'tool_call' && (!name || m.toolName === name) && statuses.includes(m.toolStatus)
-  )
+    m => m.role === 'tool_call' && m.toolScope === scope && (!name || m.toolName === name) && hasAllowedStatus(m)
+  ) || null
 }
 
-function startToolCard(name, id) {
-  if (id) {
-    const existing = messages.value.findLast(
-      m => m.role === 'tool_call' && m.toolCallId === id && ['running', 'waiting'].includes(m.toolStatus)
-    )
-    if (existing) return existing
-  }
-  const toolMsg = {
+function startToolCard(name, id, initialStatus = 'running') {
+  const existing = id
+    ? findToolMessage(id, name)
+    : findToolMessage('', name, ['running', 'waiting'])
+  if (existing) return existing
+
+  // A tool is a hard timeline boundary. Later deltas must create a new text
+  // segment after this card instead of mutating text rendered above it.
+  closeAssistantStreamSegment()
+  return appendTimelineEntry({
     role: 'tool_call',
+    toolScope: currentToolScope(),
     toolCallId: id || '',
-    toolName: name,
-    toolStatus: 'running',
+    toolName: name || 'tool',
+    toolStatus: initialStatus,
     toolResult: '',
     toolError: '',
     toolDuration: null,
     _startTime: Date.now()
-  }
-  messages.value.push(toolMsg)
-  return toolMsg
+  })
+}
+
+function ensureToolCard(name, id, initialStatus = 'running') {
+  return findToolMessage(id, name) || startToolCard(name, id, initialStatus)
 }
 
 function finishToolCard(name, metadata = {}) {
-  const toolMsg = findToolMessage(metadata.id, name)
-  if (!toolMsg) return
+  const toolMsg = ensureToolCard(name || metadata.name, metadata.id)
   toolMsg.toolDuration = metadata.duration_ms ?? (Date.now() - toolMsg._startTime)
   if (metadata.ok === true || metadata.status === 'success') {
     toolMsg.toolStatus = 'done'
@@ -768,16 +934,19 @@ function finishToolCard(name, metadata = {}) {
 }
 
 function applyToolResult(id, result, metadata = {}) {
-  const toolMsg = findToolMessage(id, metadata.name)
-  if (!toolMsg) return
+  const toolMsg = ensureToolCard(metadata.name, id)
   if (result !== undefined && result !== null) {
     toolMsg.toolResult = typeof result === 'string' ? result : JSON.stringify(result, null, 2)
   }
 }
 
-function failUnresolvedTools(reason) {
+function failUnresolvedTools(reason, scope = currentToolScope()) {
   for (const message of messages.value) {
-    if (message.role === 'tool_call' && ['running', 'waiting'].includes(message.toolStatus)) {
+    if (
+      message.role === 'tool_call' &&
+      message.toolScope === scope &&
+      ['running', 'waiting'].includes(message.toolStatus)
+    ) {
       message.toolStatus = 'error'
       message.toolError = reason
       message.toolDuration ??= Date.now() - message._startTime
@@ -787,64 +956,86 @@ function failUnresolvedTools(reason) {
 
 function markConfirmationWaiting(data) {
   for (const tool of data.tools || []) {
-    const toolMsg = findToolMessage(tool.id, tool.name, ['running'])
-    if (toolMsg) toolMsg.toolStatus = 'waiting'
+    const toolMsg = ensureToolCard(tool.name, tool.id, 'waiting')
+    toolMsg.toolStatus = 'waiting'
   }
 }
 
 function ensureAssistantStreamMessage() {
   if (!streamMsgRef.value) {
-    streamMsgRef.value = messages.value.findLast(message => message.role === 'assistant') || null
-  }
-  if (!streamMsgRef.value) {
-    const streamMessage = { role: 'assistant', content: '', streaming: true }
-    messages.value.push(streamMessage)
-    streamMsgRef.value = streamMessage
+    streamMsgRef.value = appendTimelineEntry({
+      role: 'assistant',
+      content: '',
+      streaming: true
+    })
   }
   streamMsgRef.value.streaming = true
   return streamMsgRef.value
 }
 
-function createStreamHandlers(sessionId, isNewSession) {
-  const isCurrentSession = () => activeId.value === sessionId
+function createStreamHandlers(sessionId, isNewSession, epoch) {
+  let handlerTraceId = activeTraceId.value
+  const isCurrentStream = (eventData = null) => {
+    if (activeId.value !== sessionId || streamEpoch !== epoch) return false
+    const eventTraceId = traceValue(eventData)
+    if (eventTraceId && handlerTraceId && eventTraceId !== handlerTraceId) return false
+    if (eventTraceId && activeTraceId.value && eventTraceId !== activeTraceId.value) return false
+    return true
+  }
   return {
     onTaskStarted: (data) => {
-      if (!isCurrentSession() || (data.session_id && data.session_id !== sessionId)) return
-      if (data.trace_id) activeTraceId.value = data.trace_id
+      if (!isCurrentStream(data) || (data.session_id && data.session_id !== sessionId)) return
+      const startedTraceId = traceValue(data)
+      if (!startedTraceId) {
+        taskStatus.value = 'status_unknown'
+        controlError.value = 'The server started a task without an authoritative trace id.'
+        streaming.value = false
+        return
+      }
+      handlerTraceId = startedTraceId
+      activeTraceId.value = startedTraceId
       taskStatus.value = 'running'
       streaming.value = true
+      controlError.value = ''
     },
-    onDelta: (delta) => {
-      if (!isCurrentSession()) return
-      if (taskStatus.value === 'resuming') taskStatus.value = 'running'
-      if (streamMsgRef.value) {
-        streamMsgRef.value.content += delta
-        scheduleHighlight()
-        scrollBottom()
-      }
+    onDelta: (delta, metadata) => {
+      if (!isCurrentStream(metadata)) return
+      const streamMessage = ensureAssistantStreamMessage()
+      streamMessage.content += delta
+      scheduleHighlight()
+      scrollBottom()
     },
-    onToolStart: (name, id) => {
-      if (!isCurrentSession()) return
-      if (taskStatus.value === 'resuming') taskStatus.value = 'running'
+    onToolStart: (name, id, metadata) => {
+      if (!isCurrentStream(metadata)) return
       currentTool.value = name
       startToolCard(name, id)
       scrollBottom()
     },
     onToolEnd: (name, metadata) => {
-      if (!isCurrentSession()) return
+      if (!isCurrentStream(metadata)) return
       currentTool.value = ''
       finishToolCard(name, metadata)
     },
     onToolResult: (id, result, metadata) => {
-      if (!isCurrentSession()) return
+      if (!isCurrentStream(metadata)) return
       applyToolResult(id, result, metadata)
     },
     onInterrupt: (data) => {
-      if (!isCurrentSession()) return
+      if (!isCurrentStream(data)) return
+      if (data?.type && data.type !== 'tool_confirmation') {
+        streaming.value = false
+        currentTool.value = ''
+        taskStatus.value = 'status_unknown'
+        controlError.value = `Unsupported interrupt type: ${data.type}`
+        closeAssistantStreamSegment()
+        return
+      }
+      closeAssistantStreamSegment()
       markConfirmationWaiting(data)
       const tools = (data.tools || []).map(t => ({ ...t, approved: true }))
       pendingConfirm.value = {
         session_id: sessionId,
+        trace_id: handlerTraceId || activeTraceId.value,
         message: data.message || 'Confirm tool execution?',
         tools,
         isNewSession
@@ -852,88 +1043,110 @@ function createStreamHandlers(sessionId, isNewSession) {
       taskStatus.value = 'waiting_confirmation'
       streaming.value = false
       currentTool.value = ''
-      if (streamMsgRef.value) {
-        streamMsgRef.value.streaming = false
-      }
-    },
-    onPaused: (data) => {
-      if (!isCurrentSession()) return
-      markTaskPaused(data)
-      scrollBottom()
     },
     onCancelled: (data) => {
-      if (!isCurrentSession()) return
+      if (!isCurrentStream(data)) return
+      const cancelledTraceId = traceValue(data) || handlerTraceId || activeTraceId.value
+      if (!cancelledTraceId) return
+      const toolScope = handlerTraceId || currentToolScope()
+      cancellationContext = {
+        sessionId,
+        traceId: cancelledTraceId,
+        toolScope
+      }
+      const operationEpoch = ++controlEpoch
+      streamEpoch += 1
+      taskStatus.value = 'cancelling'
       streaming.value = false
       currentTool.value = ''
-      taskStatus.value = 'idle'
-      activeTraceId.value = ''
-      failUnresolvedTools(data.message || 'Task cancelled')
-      if (streamMsgRef.value) streamMsgRef.value.streaming = false
+      closeAssistantStreamSegment({ preserveRef: true })
+      void confirmCancellationCheckpoint({
+        sessionId,
+        expectedTraceId: cancelledTraceId,
+        toolScope,
+        operationEpoch,
+        message: data.message || 'Task cancelled'
+      })
     },
     onError: (err) => {
-      if (!isCurrentSession()) return
-      if (streamMsgRef.value) {
-        streamMsgRef.value.content += `\n\n❌ **Error:** ${err}`
-      }
+      if (!isCurrentStream()) return
       streaming.value = false
       currentTool.value = ''
-      taskStatus.value = 'idle'
-      activeTraceId.value = ''
-      failUnresolvedTools(`Stream failed: ${err}`)
-      if (streamMsgRef.value) streamMsgRef.value.streaming = false
+      taskStatus.value = 'status_unknown'
+      controlError.value = `Stream status is unknown: ${err}`
+      closeAssistantStreamSegment()
+      controlEpoch += 1
     },
     onDone: () => {
-      if (!isCurrentSession()) return
+      if (!isCurrentStream()) return
       streaming.value = false
       currentTool.value = ''
       taskStatus.value = 'idle'
-      activeTraceId.value = ''
       failUnresolvedTools('Stream ended before an authoritative tool result was received')
-      if (streamMsgRef.value) streamMsgRef.value.streaming = false
+      closeAssistantStreamSegment()
+      activeTraceId.value = ''
+      pendingConfirm.value = null
+      cancellationContext = null
+      controlError.value = ''
+      abortController.value = null
       if (isNewSession && !pendingConfirm.value) {
         emit('session-created', sessionId)
       }
       scrollBottom()
+      controlEpoch += 1
+      streamEpoch += 1
     }
   }
 }
 
-function startStream(sessionId, content, isNewSession, signal) {
+function startStream(sessionId, content, isNewSession, signal, epoch) {
   api.streamMessage({
     session_id: sessionId,
     signal,
     content,
     mode: executionMode.value,
-    ...createStreamHandlers(sessionId, isNewSession)
+    ...createStreamHandlers(sessionId, isNewSession, epoch)
   })
 }
 
 function approveTools() {
-  if (!pendingConfirm.value) return
+  if (!pendingConfirm.value || !confirmationActionsEnabled.value) return
   const approvedIds = pendingConfirm.value.tools.filter(t => t.approved).map(t => t.id)
   resumeAfterConfirm(approvedIds, true)
 }
 
 function approveAll() {
-  if (!pendingConfirm.value) return
+  if (!pendingConfirm.value || !confirmationActionsEnabled.value) return
   const allIds = pendingConfirm.value.tools.map(t => t.id)
   resumeAfterConfirm(allIds, true)
 }
 
 function rejectTools() {
-  if (!pendingConfirm.value) return
+  if (!pendingConfirm.value || !confirmationActionsEnabled.value) return
   resumeAfterConfirm([], false)
 }
 
 function resumeAfterConfirm(approvedIds, approved) {
-  if (!pendingConfirm.value) return
+  if (!pendingConfirm.value || !confirmationActionsEnabled.value) return
   const confirmation = pendingConfirm.value
   const sessionId = confirmation.session_id
+  if (activeId.value !== sessionId) return
+  if (confirmation.trace_id && activeTraceId.value !== confirmation.trace_id) {
+    taskStatus.value = 'status_unknown'
+    controlError.value = 'The confirmation belongs to a different task trace.'
+    return
+  }
+  controlEpoch += 1
+  cancellationContext = null
   const isNewSession = confirmation.isNewSession
   const sensitiveIds = new Set(confirmation.tools.map(tool => tool.id))
   const approvedSet = new Set(approvedIds)
   for (const message of messages.value) {
-    if (message.role !== 'tool_call' || !['running', 'waiting'].includes(message.toolStatus)) continue
+    if (
+      message.role !== 'tool_call' ||
+      message.toolScope !== currentToolScope() ||
+      !['running', 'waiting'].includes(message.toolStatus)
+    ) continue
     if (!approved || (sensitiveIds.has(message.toolCallId) && !approvedSet.has(message.toolCallId))) {
       message.toolStatus = 'error'
       message.toolError = 'Tool execution was not approved'
@@ -945,19 +1158,23 @@ function resumeAfterConfirm(approvedIds, approved) {
   streaming.value = true
   taskStatus.value = 'running'
   currentTool.value = ''
-  ensureAssistantStreamMessage()
+  closeAssistantStreamSegment()
 
   const signal = getAbortSignal()
   api.resumeStream({
     session_id: sessionId,
+    trace_id: confirmation.trace_id || activeTraceId.value,
     approved,
     approved_ids: approvedIds,
     signal,
-    ...createStreamHandlers(sessionId, isNewSession)
+    ...createStreamHandlers(sessionId, isNewSession, streamEpoch)
   })
 }
 
 function resetTaskControlState() {
+  streamEpoch += 1
+  controlEpoch += 1
+  cancellationContext = null
   streaming.value = false
   currentTool.value = ''
   pendingConfirm.value = null
@@ -967,52 +1184,157 @@ function resetTaskControlState() {
   controlError.value = ''
 }
 
-async function restoreStreamStatus(sessionId, requestId) {
-  try {
-    const data = await api.getStreamStatus(sessionId)
-    if (requestId !== historyLoadRequestId || activeId.value !== sessionId) return
+const ACTIVE_STREAM_STATUSES = new Set(['active', 'running', 'pending'])
+const LEGACY_PAUSE_STATUSES = new Set(['paused', 'pause_requested', 'resuming'])
+const WAITING_STREAM_STATUSES = new Set(['waiting', 'waiting_confirmation'])
+const TERMINAL_STREAM_STATUSES = new Set(['idle', 'terminal', 'succeeded', 'failed', 'cancelled'])
 
-    const rawStatus = statusValue(data)
-    const checkpointStatus = String(data.task_status || '').toLowerCase()
-    const status = rawStatus === 'active' ? (checkpointStatus || 'running') : rawStatus
-    const traceId = data.trace_id || data.active_trace_id || ''
+function restoreConfirmationFromStatus(data, sessionId, traceId) {
+  const interrupt = data.interrupt || data.interrupt_data || data.data
+  if (!interrupt || !Array.isArray(interrupt.tools)) return
 
-    if (['paused', 'pause_requested', 'running', 'pending', 'resuming'].includes(status) && traceId) {
+  const tools = interrupt.tools.map(tool => ({ ...tool, approved: true }))
+  for (const tool of tools) {
+    startToolCard(tool.name, tool.id, 'waiting').toolStatus = 'waiting'
+  }
+  pendingConfirm.value = {
+    session_id: sessionId,
+    trace_id: traceId,
+    message: interrupt.message || 'Confirm tool execution?',
+    tools,
+    isNewSession: false
+  }
+}
+
+function applyAuthoritativeStreamStatus(data, {
+  sessionId,
+  cancellationRecovery = false,
+  expectedTraceId = '',
+  toolScope = ''
+}) {
+  let status = statusValue(data)
+  if (status === 'active') {
+    status = String(data.task_status || 'running').toLowerCase()
+  }
+  const traceId = traceValue(data)
+
+  if (cancellationRecovery) {
+    if (status === 'cancelled') {
+      if (!traceId) {
+        taskStatus.value = 'cancel_failed'
+        controlError.value = 'Cancel failed: authoritative status omitted the trace id.'
+        return false
+      }
+      if (expectedTraceId && traceId !== expectedTraceId) {
+        taskStatus.value = 'cancel_failed'
+        controlError.value = 'Cancel failed: authoritative status refers to a different trace.'
+        return false
+      }
+      return finalizeCancelledTask({
+        sessionId,
+        traceId,
+        toolScope,
+        message: 'Stopped by user'
+      })
+    }
+
+    if (traceId && (!expectedTraceId || traceId === expectedTraceId)) {
       activeTraceId.value = traceId
-      if (status === 'paused') {
-        markTaskPaused(data)
+      if (cancellationContext?.sessionId === sessionId) cancellationContext.traceId = traceId
+      if (WAITING_STREAM_STATUSES.has(status)) {
+        restoreConfirmationFromStatus(data, sessionId, traceId)
       } else {
-        taskStatus.value = status === 'pending' ? 'running' : status
-        // A restored task has no browser SSE attached yet. The lifecycle is
-        // active, but `streaming` remains false until Continue opens a stream.
-        streaming.value = false
+        pendingConfirm.value = null
       }
-      return
     }
+    taskStatus.value = 'cancel_failed'
+    controlError.value = expectedTraceId && traceId && traceId !== expectedTraceId
+      ? 'Cancel failed: the session now reports a different active trace.'
+      : `Cancel has not reached a cancelled terminal state (server status: ${status || 'unknown'}).`
+    streaming.value = false
+    currentTool.value = ''
+    return false
+  }
 
-    if (['waiting', 'waiting_confirmation'].includes(status) && traceId) {
-      activeTraceId.value = traceId
-      taskStatus.value = 'waiting_confirmation'
-      streaming.value = false
-      const interrupt = data.interrupt || data.interrupt_data || data.data
-      if (interrupt && Array.isArray(interrupt.tools)) {
-        const tools = interrupt.tools.map(tool => ({ ...tool, approved: true }))
-        pendingConfirm.value = {
-          session_id: sessionId,
-          message: interrupt.message || 'Confirm tool execution?',
-          tools,
-          isNewSession: false
-        }
-      }
-      return
-    }
+  pendingConfirm.value = null
+  cancellationContext = null
+  streaming.value = false
+  currentTool.value = ''
 
+  if ((ACTIVE_STREAM_STATUSES.has(status) || LEGACY_PAUSE_STATUSES.has(status)) && traceId) {
+    activeTraceId.value = traceId
+    taskStatus.value = 'running'
+    controlError.value = LEGACY_PAUSE_STATUSES.has(status)
+      ? 'This legacy paused task can no longer be continued. Stop it to start a new trace.'
+      : ''
+    return true
+  }
+
+  if (WAITING_STREAM_STATUSES.has(status) && traceId) {
+    activeTraceId.value = traceId
+    taskStatus.value = 'waiting_confirmation'
+    controlError.value = ''
+    restoreConfirmationFromStatus(data, sessionId, traceId)
+    return true
+  }
+
+  if (TERMINAL_STREAM_STATUSES.has(status)) {
     activeTraceId.value = ''
     taskStatus.value = 'idle'
+    controlError.value = ''
+    return true
+  }
+
+  activeTraceId.value = traceId
+  taskStatus.value = 'status_unknown'
+  controlError.value = `Unknown authoritative task status: ${status || 'missing'}.`
+  return false
+}
+
+async function recheckStreamStatus() {
+  const sessionId = activeId.value
+  if (!sessionId || taskStatus.value === 'status_checking') return
+
+  const context = cancellationContext?.sessionId === sessionId
+    ? { ...cancellationContext }
+    : null
+  const operationEpoch = ++controlEpoch
+  taskStatus.value = 'status_checking'
+  controlError.value = ''
+
+  try {
+    const data = await api.getStreamStatus(sessionId)
+    if (!cancellationIsCurrent(sessionId, operationEpoch)) return
+    applyAuthoritativeStreamStatus(data, {
+      sessionId,
+      cancellationRecovery: Boolean(context),
+      expectedTraceId: context?.traceId || '',
+      toolScope: context?.toolScope || currentToolScope()
+    })
   } catch (error) {
-    if (requestId !== historyLoadRequestId || activeId.value !== sessionId) return
-    // History remains usable even if the optional control-state lookup fails.
+    if (!cancellationIsCurrent(sessionId, operationEpoch)) return
+    console.warn('[stream-status] Failed to query authoritative task state:', error)
+    taskStatus.value = context ? 'cancel_failed' : 'status_unknown'
+    controlError.value = `Task status check failed: ${error.message}`
+  }
+}
+
+async function restoreStreamStatus(sessionId, requestId, operationEpoch) {
+  try {
+    const data = await api.getStreamStatus(sessionId)
+    if (
+      requestId !== historyLoadRequestId ||
+      !cancellationIsCurrent(sessionId, operationEpoch)
+    ) return
+    applyAuthoritativeStreamStatus(data, { sessionId })
+  } catch (error) {
+    if (
+      requestId !== historyLoadRequestId ||
+      !cancellationIsCurrent(sessionId, operationEpoch)
+    ) return
     console.warn('[stream-status] Failed to restore task control state:', error)
+    taskStatus.value = 'status_unknown'
+    controlError.value = `Task status check failed: ${error.message}`
   }
 }
 
@@ -1029,21 +1351,20 @@ async function loadSessionMessages(sessionId) {
     return
   }
 
+  const operationEpoch = ++controlEpoch
+  taskStatus.value = 'status_checking'
+  controlError.value = ''
+
   try {
     const data = await api.getSessionMessages(sessionId)
     // Ignore a response that arrived after a session switch or component teardown.
     if (requestId !== historyLoadRequestId || activeId.value !== sessionId) return
 
-    messages.value = (data.messages || []).map(m => ({
-      role: m.role,
-      content: m.content,
-      streaming: false
-    }))
+    messages.value = normalizeHistoryMessages(data.messages || [], sessionId)
     historyStatus.value = data.history_status || (messages.value.length ? 'checkpoint' : 'empty')
     emptyHistory.value = messages.value.length === 0 && data.message_count === 0
     scheduleHighlight()
     scrollBottom(true)
-    await restoreStreamStatus(sessionId, requestId)
   } catch (e) {
     if (requestId !== historyLoadRequestId || activeId.value !== sessionId) return
 
@@ -1051,6 +1372,13 @@ async function loadSessionMessages(sessionId) {
     messages.value = []
     emptyHistory.value = true
     historyStatus.value = 'empty'
+  }
+
+  if (
+    requestId === historyLoadRequestId &&
+    cancellationIsCurrent(sessionId, operationEpoch)
+  ) {
+    await restoreStreamStatus(sessionId, requestId, operationEpoch)
   }
 }
 
@@ -1097,6 +1425,9 @@ onMounted(() => {
 onUnmounted(() => {
   // Invalidate any history response that may still be in flight.
   historyLoadRequestId += 1
+  controlEpoch += 1
+  streamEpoch += 1
+  cancellationContext = null
   if (compositionEndTimer) window.clearTimeout(compositionEndTimer)
   if (abortController.value) abortController.value.abort()
 })
@@ -1198,26 +1529,17 @@ onUnmounted(() => {
   border: 1px solid #fde68a;
 }
 
-.status-badge.resuming {
-  color: #0369a1;
-  background: #f0f9ff;
-  border: 1px solid #bae6fd;
-}
-
-.status-badge.resuming .pulse-dot {
-  background: #0284c7;
-}
-
-.status-badge.pausing {
+.status-badge.cancelling,
+.status-badge.checking {
   color: #b45309;
   background: #fffbeb;
   border: 1px solid #fcd34d;
 }
 
-.status-badge.paused {
-  color: #4338ca;
-  background: #eef2ff;
-  border: 1px solid #c7d2fe;
+.status-badge.control-failed {
+  color: #b91c1c;
+  background: #fef2f2;
+  border: 1px solid #fecaca;
 }
 
 .pulse-dot {
@@ -1301,28 +1623,6 @@ onUnmounted(() => {
   transition: background var(--transition), border-color var(--transition), color var(--transition);
 }
 
-.task-secondary-pause {
-  border-color: #fcd34d;
-  color: #b45309;
-}
-
-.task-secondary-pause:hover:not(:disabled) {
-  border-color: #f59e0b;
-  background: color-mix(in srgb, #f59e0b 10%, var(--bg-primary));
-  color: #92400e;
-}
-
-.task-secondary-cancel {
-  border-color: #fecaca;
-  color: #dc2626;
-}
-
-.task-secondary-cancel:hover:not(:disabled) {
-  border-color: #f87171;
-  background: color-mix(in srgb, #ef4444 10%, var(--bg-primary));
-  color: #b91c1c;
-}
-
 .task-secondary:focus-visible {
   outline: 2px solid var(--accent);
   outline-offset: 2px;
@@ -1331,15 +1631,6 @@ onUnmounted(() => {
 .task-secondary:disabled {
   opacity: 0.55;
   cursor: not-allowed;
-}
-
-.btn-send.btn-continue {
-  background: #10b981;
-  color: white;
-}
-
-.btn-send.btn-continue:hover:not(:disabled) {
-  background: #059669;
 }
 
 /* Messages */
@@ -1441,6 +1732,50 @@ onUnmounted(() => {
   font-size: 13px;
   line-height: 1.5;
 }
+
+/* Ordered SSE timeline */
+.timeline-entry {
+  flex: 0 0 auto;
+  width: 100%;
+  min-width: 0;
+}
+
+.timeline-entry-tool_call {
+  --timeline-status: #64748b;
+  position: relative;
+  width: 100%;
+  max-width: 860px;
+  margin: 0 auto;
+  padding: 4px 28px 4px 76px;
+}
+
+.timeline-entry-tool_call::before {
+  content: '';
+  position: absolute;
+  top: -5px;
+  bottom: -5px;
+  left: 45px;
+  width: 1px;
+  background: #dfe3ec;
+}
+
+.timeline-entry-tool_call::after {
+  content: '';
+  position: absolute;
+  top: 24px;
+  left: 40px;
+  width: 11px;
+  height: 11px;
+  border: 3px solid var(--bg-primary);
+  border-radius: 50%;
+  background: var(--timeline-status);
+  box-shadow: 0 0 0 1px color-mix(in srgb, var(--timeline-status) 35%, transparent);
+}
+
+.timeline-entry-running { --timeline-status: #d97706; }
+.timeline-entry-waiting { --timeline-status: #4f46e5; }
+.timeline-entry-done { --timeline-status: #10b981; }
+.timeline-entry-error { --timeline-status: #dc2626; }
 
 /* Message row */
 .message-wrapper {
@@ -1639,7 +1974,7 @@ onUnmounted(() => {
   font-weight: 600;
 }
 
-.message-text.streaming::after {
+.message-content.streaming .message-text::after {
   content: '';
   display: inline-block;
   width: 8px;
@@ -1819,6 +2154,11 @@ onUnmounted(() => {
   transition: all var(--transition);
 }
 
+.btn-modal:disabled {
+  cursor: not-allowed;
+  opacity: 0.5;
+}
+
 .btn-reject {
   background: var(--bg-tertiary);
   color: var(--text-secondary);
@@ -1845,6 +2185,15 @@ onUnmounted(() => {
 
 .btn-approve:hover {
   background: var(--accent-hover);
+}
+
+.btn-terminate {
+  background: #dc2626;
+  color: white;
+}
+
+.btn-terminate:hover:not(:disabled) {
+  background: #b91c1c;
 }
 
 /* Input */
@@ -1972,6 +2321,24 @@ onUnmounted(() => {
 }
 
 @media (max-width: 760px) {
+  .message-wrapper {
+    gap: 10px;
+    padding: 14px 16px;
+  }
+
+  .timeline-entry-tool_call {
+    padding-right: 16px;
+    padding-left: 62px;
+  }
+
+  .timeline-entry-tool_call::before {
+    left: 33px;
+  }
+
+  .timeline-entry-tool_call::after {
+    left: 28px;
+  }
+
   .execution-mode-copy span {
     display: none;
   }
@@ -1987,6 +2354,13 @@ onUnmounted(() => {
 
   .execution-mode-actions {
     gap: 6px;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .message-content.streaming .message-text::after,
+  .dots::after {
+    animation: none;
   }
 }
 </style>

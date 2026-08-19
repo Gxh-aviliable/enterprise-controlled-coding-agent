@@ -150,6 +150,8 @@ def test_existing_session_retrieves_memory_for_current_task(monkeypatch):
             {"role": "user", "content": "初始化一个新的 Python 项目"},
         ],
         "todos": [],
+        "memory_accumulator": {"user_request": "stale cancelled task"},
+        "continuation_receipt": {"original_task": "stale cancelled task"},
     }
 
     result = asyncio.run(init_context_node(state))
@@ -159,9 +161,52 @@ def test_existing_session_retrieves_memory_for_current_task(monkeypatch):
     assert calls["updated_pattern"] == "pattern-uv"
     assert "memory_id=pattern-uv" in result["retrieved_memory_context"]
     assert "messages" not in result
+    assert result["memory_accumulator"] == {}
+    assert "continuation_receipt" not in result
     event = next(item for item in trace_events if item["event_type"] == "memory")
     assert event["data"]["injected_ids"] == ["pattern-uv"]
     assert event["data"]["application_status"] == "not_attributed"
+
+
+def test_new_trace_clears_prior_todos_in_existing_session(monkeypatch):
+    """A cancelled trace's plan must not become the next trace's active plan."""
+    from enterprise_agent.core.agent.tools.task import (
+        clear_todo_manager,
+        get_todo_manager,
+    )
+
+    session_id = "existing-session-replan-todos"
+    old_todos = [{
+        "content": "unfinished work from cancelled trace",
+        "status": "in_progress",
+        "activeForm": "Continuing the cancelled trace",
+    }]
+    old_manager = get_todo_manager(session_id)
+    old_manager.update(old_todos)
+    monkeypatch.setattr(settings, "ENABLE_LONG_TERM_MEMORY", False)
+
+    try:
+        # init_context is entered only for a brand-new trace. Tool confirmation
+        # Command(resume) continues from its interrupted node and bypasses init.
+        result = asyncio.run(init_context_node({
+            "session_id": session_id,
+            "user_id": 1,
+            "trace_id": "trace-new-after-stop",
+            "current_user_request": "replan from current workspace",
+            "messages": [
+                {"role": "user", "content": "old task"},
+                {"role": "assistant", "content": "old partial work"},
+                {"role": "user", "content": "replan from current workspace"},
+            ],
+            "todos": old_todos,
+        }))
+
+        assert result["todos"] == []
+        assert result["has_open_todos"] is False
+        assert old_manager.items == []
+        assert get_todo_manager(session_id).items == []
+    finally:
+        clear_todo_manager(session_id)
 
 
 def test_recent_conversation_references_skip_automatic_memory(monkeypatch):
@@ -260,6 +305,116 @@ def test_recalled_memory_is_part_of_the_sole_system_message(monkeypatch):
     assert "not a user message" in system_messages[0].content
     assert [message.content for message in human_messages] == ["current request"]
     assert memory_context in _build_runtime_system_prompt(state)
+
+
+def test_llm_retry_stops_when_cancel_arrives_after_transient_failure(monkeypatch):
+    """A Redis tombstone raised between attempts must fence the retry call."""
+    cancelled = False
+    invocation_count = 0
+
+    class TransientlyFailingModel:
+        async def ainvoke(self, _messages):
+            nonlocal cancelled, invocation_count
+            invocation_count += 1
+            if invocation_count > 1:
+                raise AssertionError("LLM retried after task cancellation")
+            cancelled = True
+            raise RuntimeError("temporary connection timeout")
+
+    async def fake_cancel_request(_state):
+        if cancelled:
+            return {"reason": "Stop requested during LLM retry"}
+        return None
+
+    async def no_retry_delay(_seconds):
+        return None
+
+    monkeypatch.setattr(
+        "enterprise_agent.core.agent.nodes.get_llm_with_tools",
+        lambda *_args, **_kwargs: TransientlyFailingModel(),
+    )
+    monkeypatch.setattr(
+        "enterprise_agent.core.agent.nodes._tool_cancel_request",
+        fake_cancel_request,
+    )
+    monkeypatch.setattr("enterprise_agent.core.agent.nodes.asyncio.sleep", no_retry_delay)
+    monkeypatch.setattr(
+        "enterprise_agent.core.agent.nodes._build_available_skills",
+        lambda _state: "(none)",
+    )
+
+    result = asyncio.run(llm_call_node({
+        "session_id": "llm-retry-stop",
+        "trace_id": "trace-llm-retry-stop",
+        "user_id": 301,
+        "task_status": "running",
+        "messages": [{"role": "user", "content": "do the work"}],
+        "permissions": [],
+        "execution_mode": "single_agent",
+        "task_token_count": 0,
+        "session_token_count": 0,
+        "round_count": 0,
+    }))
+
+    assert invocation_count == 1
+    assert result["task_status"] == "cancelled"
+    assert result["pending_tool_calls"] == []
+    assert result["should_end_after_save"] is True
+    assert result["failure_reason"] == "Stop requested during LLM retry"
+    assert "messages" not in result
+
+
+def test_llm_response_is_discarded_when_cancel_arrives_during_call(monkeypatch):
+    """A late model response must not enter history after its trace was stopped."""
+    from langchain_core.messages import AIMessage
+
+    cancelled = False
+    invocation_count = 0
+
+    class LateSuccessModel:
+        async def ainvoke(self, _messages):
+            nonlocal cancelled, invocation_count
+            invocation_count += 1
+            cancelled = True
+            return AIMessage(content="stale response that must be discarded")
+
+    async def fake_cancel_request(_state):
+        if cancelled:
+            return {"reason": "Stop requested during LLM call"}
+        return None
+
+    monkeypatch.setattr(
+        "enterprise_agent.core.agent.nodes.get_llm_with_tools",
+        lambda *_args, **_kwargs: LateSuccessModel(),
+    )
+    monkeypatch.setattr(
+        "enterprise_agent.core.agent.nodes._tool_cancel_request",
+        fake_cancel_request,
+    )
+    monkeypatch.setattr(
+        "enterprise_agent.core.agent.nodes._build_available_skills",
+        lambda _state: "(none)",
+    )
+
+    result = asyncio.run(llm_call_node({
+        "session_id": "llm-late-success-stop",
+        "trace_id": "trace-llm-late-success-stop",
+        "user_id": 302,
+        "task_status": "running",
+        "messages": [{"role": "user", "content": "do the work"}],
+        "permissions": [],
+        "execution_mode": "single_agent",
+        "task_token_count": 0,
+        "session_token_count": 0,
+        "round_count": 0,
+    }))
+
+    assert invocation_count == 1
+    assert result["task_status"] == "cancelled"
+    assert result["pending_tool_calls"] == []
+    assert result["should_end_after_save"] is True
+    assert result["failure_reason"] == "Stop requested during LLM call"
+    assert "messages" not in result
 
 
 class TestExtractText:

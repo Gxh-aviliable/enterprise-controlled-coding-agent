@@ -23,6 +23,7 @@
 | 理解任务状态与工具治理 | [系统架构](../ARCHITECTURE.md) |
 | 查看真实测试和评测结果 | [能力矩阵](capability-matrix.md)、[Benchmark](../benchmarks/README.md) |
 | 部署到 Linux 服务器 | [远程服务器部署](remote-server-deployment.md) |
+| 滚动下线 Pause/Continue | [Cancel-and-Replan 两阶段迁移](cancel-and-replan-rolling-migration.md) |
 | 理解长期记忆准入与召回 | [长期记忆治理](memory-governance.md) |
 | 理解管理员权限与安全边界 | [管理员控制台](admin-console.md) |
 | 准备 3～5 分钟面试演示 | [演示脚本](demo-script.md) |
@@ -37,7 +38,7 @@
 
 | 证据 | 结果 | 解释边界 |
 |---|---:|---|
-| 后端 pytest | 561 passed | 单元、API、七态状态机、Pause/Continue、Stop 闭环、工具、Workspace 安全写入、上下文、记忆和 Trace 回归 |
+| 后端 pytest | 561 passed | 单元、API、任务状态机、Stop 闭环、工具、Workspace 安全写入、上下文、记忆和 Trace 回归 |
 | 前端 Vitest | 77 passed | 八个测试文件中的关键交互、SSE 控制流、Preview/Edit、冲突和未保存导航防护回归 |
 | Ruff | 0 findings | 当前配置覆盖的 Python 静态检查 |
 | Platform benchmark | 10/10 | 确定性工具、状态、策略和评测器，不是模型智能分 |

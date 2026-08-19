@@ -144,11 +144,6 @@ export async function sendMessage({ session_id, content, mode = 'single_agent' }
   return data
 }
 
-function isUserPauseInterrupt(data) {
-  if (!data || typeof data !== 'object') return false
-  return [data.type, data.interrupt_type, data.reason].includes('user_pause')
-}
-
 async function consumeEventStream(res, handlers = {}, label = 'stream') {
   const {
     onDelta,
@@ -156,7 +151,6 @@ async function consumeEventStream(res, handlers = {}, label = 'stream') {
     onToolEnd,
     onToolResult,
     onTaskStarted,
-    onPaused,
     onCancelled,
     onInterrupt,
     onError,
@@ -181,27 +175,23 @@ async function consumeEventStream(res, handlers = {}, label = 'stream') {
     }
 
     if (data.delta !== undefined) {
-      onDelta?.(data.delta)
+      onDelta?.(data.delta, data)
     } else if (data.event === 'task_started') {
       onTaskStarted?.(data)
     } else if (data.event === 'tool_start') {
-      onToolStart?.(data.name, data.id)
+      onToolStart?.(data.name, data.id, data)
     } else if (data.event === 'tool_end') {
       onToolEnd?.(data.name, data)
     } else if (data.event === 'tool_result') {
       onToolResult?.(data.id, data.result, data)
-    } else if (data.event === 'paused') {
-      onPaused?.(data)
-      return true
     } else if (data.event === 'cancelled') {
       onCancelled?.(data)
       return true
     } else if (data.event === 'interrupt') {
-      if (isUserPauseInterrupt(data.data)) {
-        onPaused?.({ event: 'paused', ...data.data })
-      } else {
-        onInterrupt?.(data.data)
-      }
+      const interruptData = { ...(data.data || {}) }
+      if (data.session_id && !interruptData.session_id) interruptData.session_id = data.session_id
+      if (data.trace_id && !interruptData.trace_id) interruptData.trace_id = data.trace_id
+      onInterrupt?.(interruptData)
       return true
     } else if (data.error) {
       onError?.(data.error)
@@ -226,7 +216,7 @@ async function consumeEventStream(res, handlers = {}, label = 'stream') {
   if (trailing.startsWith('data: ')) {
     if (handlePayload(trailing.slice(6))) return
   }
-  onDone?.()
+  onError?.('Stream transport closed before a terminal event was received.')
 }
 
 async function openEventStream(path, options, handlers, fallbackError, label) {
@@ -272,6 +262,7 @@ export function streamMessage({
 // Resume stream after an existing tool-confirmation interrupt.
 export function resumeStream({
   session_id,
+  trace_id,
   approved,
   approved_ids,
   signal,
@@ -286,30 +277,11 @@ export function resumeStream({
     {
       method: 'POST',
       signal,
-      body: JSON.stringify({ approved_ids: approved_ids || [] })
+      body: JSON.stringify({ approved_ids: approved_ids || [], trace_id: trace_id || null })
     },
     handlers,
     'Resume failed',
     'resume-confirmation'
-  )
-}
-
-export async function pauseStream({ session_id, trace_id }) {
-  const params = new URLSearchParams({ session_id, trace_id })
-  const res = await request(`/chat/stream/pause?${params}`, { method: 'POST' })
-  const data = await res.json()
-  if (!res.ok) throw new Error(errorMessage(data.detail, 'Pause failed'))
-  return data
-}
-
-export function continuePausedStream({ session_id, trace_id, signal, ...handlers }) {
-  const params = new URLSearchParams({ session_id, trace_id })
-  return openEventStream(
-    `/chat/stream/continue?${params}`,
-    { method: 'POST', signal },
-    handlers,
-    'Continue failed',
-    'continue-paused'
   )
 }
 
@@ -385,7 +357,7 @@ export async function cancelStream(sessionId, traceId = '') {
     { method: 'POST' }
   )
   const data = await res.json()
-  if (!res.ok) throw new Error(data.detail || 'Cancel failed')
+  if (!res.ok) throw new Error(errorMessage(data.detail, 'Cancel failed'))
   return data
 }
 

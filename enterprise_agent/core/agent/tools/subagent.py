@@ -195,6 +195,12 @@ async def _run_subagent_async(prompt: str, agent_type: str) -> str:
 
     # Run subagent loop
     for _ in range(settings.SUBAGENT_MAX_ROUNDS):
+        from enterprise_agent.core.execution.interrupt_control import (
+            is_current_task_cancel_requested,
+        )
+
+        if await is_current_task_cancel_requested():
+            return "Subagent cancelled by the parent task Stop request."
         try:
             response = await llm_with_tools.ainvoke(messages)
         except Exception as e:
@@ -209,6 +215,8 @@ async def _run_subagent_async(prompt: str, agent_type: str) -> str:
         # Execute tool calls
         tool_results = []
         for tool_call in response.tool_calls:
+            if await is_current_task_cancel_requested():
+                return "Subagent cancelled before the next tool invocation."
             tool_name = tool_call.get("name")
             tool_args = tool_call.get("args", {})
             tool_id = tool_call.get("id", "")

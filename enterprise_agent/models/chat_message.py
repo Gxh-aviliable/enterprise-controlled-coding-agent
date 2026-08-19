@@ -8,6 +8,7 @@ TTL expiry or service restart cannot make a MySQL session disappear.
 from datetime import datetime, timezone
 
 from sqlalchemy import (
+    JSON,
     TIMESTAMP,
     BigInteger,
     Column,
@@ -49,6 +50,14 @@ class ChatMessage(Base):
     content = Column(Text().with_variant(LONGTEXT(), "mysql"), nullable=False, default="")
     status = Column(String(24), nullable=False, default="completed")
     source = Column(String(24), nullable=False, default="mysql")
+    # Compact user-facing execution timeline.  This is intentionally a list of
+    # rendered assistant/tool blocks rather than the raw per-token SSE event
+    # stream, which keeps durable history bounded and frontend-oriented.
+    timeline = Column(JSON, nullable=True, default=None)
+    # Structured hand-off written when a trace is terminally cancelled.  It is
+    # kept on the cancelled assistant row so the next trace can replan from
+    # durable evidence even after the Redis checkpoint expires.
+    continuation_receipt = Column(JSON, nullable=True, default=None)
     created_at = Column(TIMESTAMP, default=lambda: datetime.now(timezone.utc), nullable=False)
     updated_at = Column(
         TIMESTAMP,
