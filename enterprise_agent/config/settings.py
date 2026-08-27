@@ -78,6 +78,9 @@ class Settings(BaseSettings):
     LLM_API_KEY: str = ""  # Universal API key
     LLM_BASE_URL: Optional[str] = "https://api.deepseek.com/anthropic"  # Anthropic-compatible endpoint
     MODEL_ID: str = "deepseek-v4-flash"  # Model identifier
+    # Keep enough room for thinking models to reach a tool call or a complete
+    # answer. Completion integrity still fails closed when this limit is hit.
+    MODEL_MAX_OUTPUT_TOKENS: int = 16_384
 
     # Legacy Anthropic config (for backward compatibility)
     ANTHROPIC_API_KEY: str = ""
@@ -86,10 +89,12 @@ class Settings(BaseSettings):
     SHORT_TERM_TTL_HOURS: int = 24
     CHECKPOINT_TTL_HOURS: int = 24  # RedisSaver checkpoint 过期时间（对话历史自动清理）
     MAX_MESSAGES_PER_SESSION: int = 100
-    TOKEN_THRESHOLD: int = 500000
-    # Conservative cross-provider default. Deployments must set this to the
-    # selected model's documented context window; it is distinct from spend budgets.
-    MODEL_CONTEXT_WINDOW_TOKENS: int = 128_000
+    # Legacy fallback for tests/offline callers that omit a model window. Normal
+    # runtime compaction is derived directly from MODEL_CONTEXT_WINDOW_TOKENS.
+    TOKEN_THRESHOLD: int = 500_000
+    # The default model, deepseek-v4-flash, documents a 1M context window. This
+    # hard model boundary is distinct from cumulative task/session spend budgets.
+    MODEL_CONTEXT_WINDOW_TOKENS: int = 1_000_000
     CONTEXT_COMPRESSION_RATIO: float = 0.8
 
     # Tool output limits
@@ -100,9 +105,8 @@ class Settings(BaseSettings):
     # Private artifact captures are larger than model previews but still bounded
     # to prevent one hostile command from exhausting workspace storage.
     TOOL_ARTIFACT_MAX_CHARS: int = 2_000_000
-    # Auto-compact: how much recent text (chars) the summarizer LLM sees.
-    # With TOKEN_THRESHOLD=500K (~2M chars), 200K chars (~50K tokens) gives the
-    # summarizer enough context to produce a useful summary (~10% of full context).
+    # Auto-compact: how much recent text (chars) the summarizer LLM sees. This is
+    # an input cap for the summarizer, not the main-context compression threshold.
     CONTEXT_SUMMARY_TRIGGER_CHARS: int = 200000
     CONTEXT_SUMMARY_MAX_TOKENS: int = 50_000
     CONTEXT_SUMMARY_OUTPUT_RESERVE_TOKENS: int = 4_096
@@ -119,8 +123,11 @@ class Settings(BaseSettings):
     CANCEL_CONVERGENCE_WAIT_SECONDS: float = 5.0
     MAX_AGENT_ROUNDS: int = 20  # Fail fast instead of allowing long no-progress loops
     MAX_TOOL_CALLS_PER_TASK: int = 25  # Framework-enforced tool-call budget
-    TASK_TOKEN_BUDGET: int = 1_000_000  # Per user task; separate from context compaction threshold
-    SESSION_TOKEN_BUDGET: int = 1_000_000  # Cumulative model usage across one chat session
+    # Cumulative usage guards; 0 disables that guard while usage remains tracked.
+    # Keep a per-task fuse even when sessions are unlimited: at an 800K working
+    # threshold, 4M permits roughly five full-window-equivalent model turns.
+    TASK_TOKEN_BUDGET: int = 4_000_000
+    SESSION_TOKEN_BUDGET: int = 0
     # MySQL history is injected only when the Redis checkpoint is unavailable.
     # Bound both rows and characters before it reaches the model.
     DURABLE_HISTORY_MAX_CHARS: int = 120_000
@@ -202,6 +209,11 @@ class Settings(BaseSettings):
         if not 0.1 <= self.CONTEXT_COMPRESSION_RATIO <= 0.95:
             raise RuntimeError(
                 "CONTEXT_COMPRESSION_RATIO must be between 0.1 and 0.95."
+            )
+        if self.TASK_TOKEN_BUDGET < 0 or self.SESSION_TOKEN_BUDGET < 0:
+            raise RuntimeError(
+                "TASK_TOKEN_BUDGET and SESSION_TOKEN_BUDGET must be non-negative; "
+                "use zero to disable a cumulative token guard."
             )
         if self.ACTIVE_TRACE_LEASE_SECONDS <= max(
             self.AGENT_INVOKE_TIMEOUT_SECONDS,

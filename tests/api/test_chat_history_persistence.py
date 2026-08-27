@@ -232,6 +232,31 @@ def test_terminal_tool_status_cannot_be_downgraded_by_duplicate_start():
     assert timeline[0]["toolResult"] == "complete"
 
 
+def test_timeline_preserves_rejected_as_an_authoritative_terminal_status():
+    timeline = chat_history.merge_timeline(
+        [{
+            "role": "tool_call",
+            "toolCallId": "call-rejected",
+            "toolName": "write_file",
+            "toolStatus": "waiting",
+        }],
+        [{
+            "role": "tool_call",
+            "toolCallId": "call-rejected",
+            "toolName": "write_file",
+            "toolStatus": "rejected",
+            "toolError": "Not approved — this tool was not run.",
+        }],
+    )
+
+    assert timeline[0]["toolStatus"] == "rejected"
+    assert timeline[0]["toolError"] == "Not approved — this tool was not run."
+
+    terminalized = chat_history.terminalize_timeline(timeline, "completed")
+    assert terminalized[0]["toolStatus"] == "rejected"
+    assert terminalized[0]["toolError"] == "Not approved — this tool was not run."
+
+
 @pytest.mark.asyncio
 async def test_update_assistant_message_builds_and_resumes_compact_timeline():
     assistant = SimpleNamespace(

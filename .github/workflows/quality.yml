@@ -1,0 +1,91 @@
+name: Quality
+
+on:
+  push:
+    branches:
+      - develop
+      - master
+      - "codex/**"
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: quality-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  backend:
+    name: Backend, policy, and deterministic benchmark
+    runs-on: ubuntu-latest
+    timeout-minutes: 35
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install uv and Python
+        uses: astral-sh/setup-uv@v6
+        with:
+          version: "0.11.31"
+          python-version: "3.12"
+          enable-cache: true
+
+      - name: Sync locked dependencies
+        run: uv sync --frozen --extra dev
+
+      - name: Ruff
+        run: uv run --frozen ruff check .
+
+      - name: Backend tests
+        run: uv run --frozen pytest -q
+
+      - name: Dependency-light smoke
+        run: uv run --frozen python scripts/smoke_test.py
+
+      - name: Platform v2 benchmark
+        run: >-
+          uv run --frozen python -m benchmarks.run
+          --suite v2 --backend platform --mode single --no-artifacts
+
+      - name: Release evidence integrity
+        run: uv run --frozen python scripts/check_release_evidence.py
+
+  frontend:
+    name: Frontend tests and production build
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    defaults:
+      run:
+        working-directory: frontend
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+
+      - name: Install locked dependencies
+        run: npm ci
+
+      - name: Frontend tests
+        run: npm test
+
+      - name: Production build
+        run: npm run build
+
+  compose-config:
+    name: Docker Compose configuration
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Prepare non-secret example configuration
+        run: cp .env.example .env
+
+      - name: Validate Compose configuration
+        run: docker compose -f docker/docker-compose.yml config --quiet

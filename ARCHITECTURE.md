@@ -1,6 +1,6 @@
 # Mini Claude Code Architecture
 
-> Current implementation baseline: 2026-08-19
+> Current implementation baseline: 2026-08-28; evaluated source commit `1d637c5753e93c72989c3fdae2ab5edf50e078eb`
 > Scope: architecture in the current implementation baseline; planned components are explicitly labelled.
 
 ## 1. System context
@@ -332,24 +332,23 @@ The platform backend answers whether tools, isolation, recovery, safety policy, 
 
 ## 10. Baseline verification
 
-Current automated verification recorded on 2026-08-19; the latest retained official
-model benchmark was generated on 2026-08-19:
+Current automated verification and retained benchmark artifacts were refreshed for
+the 2026-08-28 portfolio release. Runtime evaluation is bound to source commit
+`1d637c5753e93c72989c3fdae2ab5edf50e078eb`; the later evidence-only commit adds
+reports and documentation without changing the evaluated runtime source:
 
 | Check | Result |
 |---|---|
-| `uv run pytest -q` | 619 passed |
-| `uv run python scripts/smoke_test.py` | 9/9 local checks passed; no external service or model call |
-| `npm test --prefix frontend -- --run` | 93 passed |
+| `uv run pytest -q` | 731 passed |
+| `uv run python scripts/smoke_test.py` | Passed; no external service or model call |
+| `npm test --prefix frontend` | 97 passed |
 | `npm run build --prefix frontend` | Passed; largest JS chunk 76.99 kB, no size warning |
-| `npm audit --json` | 0 known production/development vulnerabilities |
-| `docker compose -f docker/docker-compose.yml config -q` | Passed for the current Preview/Edit change |
-| Docker runtime health | Current API/frontend images rebuilt; API, frontend, MySQL and Redis healthy; direct and proxied health returned MySQL/Redis `ok` |
-| `./scripts/docker_smoke_test.sh` | Previous isolated four-service baseline passed; not rerun because the current existing-stack health path was used |
-| API image self-check | UID 10001, `torch 2.13.0+cpu`, CUDA false, app import passed |
-| Browser Preview/Edit smoke | Passed for Markdown Preview, Edit, dirty draft, draft Preview and Discard; no test draft was saved to the user's file |
+| `docker compose -f docker/docker-compose.yml config --quiet` | Passed |
 | `ruff check enterprise_agent migrations tests benchmarks scripts` | Passed, 0 findings |
 
-Long-term-memory tests exercise real in-process Chroma collections with a deterministic offline embedding, including v2 admission, Legacy quarantine, pattern upsert, filtered semantic search, and local-first model initialization. The final locked-environment platform benchmark passed 10/10 task assertions with 84.8 ms average task duration. The official `mini-claude-code-v2` real-model run used `deepseek-v4-flash` in single-Agent mode and passed 25/30 tasks: easy 9/10, medium 10/10, hard 6/10, with 87.5% tool success, 11.524 s average duration, 32,342.23 average tokens, 73.3% human intervention, 15 safety interceptions, and zero infrastructure or system errors. Its source artifact is `benchmarks/results/20260819T160324Z-agent-single.{md,json}`. Because v2 expands and rebalances the suite and strengthens evaluation relative to the old v1 8/10 run, the two scores are not a strict like-for-like improvement comparison. The 6-case single/multi comparison remains unmeasured.
+Long-term-memory tests exercise real in-process Chroma collections with a deterministic offline embedding, including v2 admission, Legacy quarantine, pattern upsert, filtered semantic search, and local-first model initialization. The current Memory recall run passed 6/6. The current offline Platform v2 run passed 30/30 with 89.39% tool success; this proves deterministic fixture, scripted-tool, policy, state and evaluator paths, not model intelligence. Its artifact is `benchmarks/results/20260827T182126Z-platform-single.{md,json}`.
+
+The current valid `mini-claude-code-v2` official run used `deepseek-v4-flash` in single-Agent mode and passed 23/30 tasks: easy 7/10, medium 10/10, hard 6/10, with 77.53% tool success and zero infrastructure or system errors. Its artifact is `benchmarks/results/20260827T181517Z-agent-single.{md,json}`. The former commit `7562a95` result of 25/30 and Platform v1 result of 10/10 remain historical evidence only. See `docs/release-evidence/portfolio-v1.0.md` for the complete current evidence mapping. The 6-case single/multi comparison remains unmeasured.
 
 ## 11. Evolution constraints
 

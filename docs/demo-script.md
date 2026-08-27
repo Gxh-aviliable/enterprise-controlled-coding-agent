@@ -6,7 +6,7 @@
 2. 在用户 Workspace 放入一个只有一处小 Bug、带失败测试的仓库。
 3. 预先确认模型 endpoint 可用，并保留一次成功录屏。
 4. 打开 Chat 和 Trace 页面。
-5. 准备 Platform 10/10 与 [v2 DeepSeek V4 Flash 25/30 正式报告](../benchmarks/results/20260819T160324Z-agent-single.md)（[JSON](../benchmarks/results/20260819T160324Z-agent-single.json)）作为网络故障时的证据。
+5. 准备 [Platform 30/30](../benchmarks/results/20260827T182126Z-platform-single.md)、[Memory 6/6](../benchmarks/results/20260827T182146Z-memory-recall.md) 与 [v2 DeepSeek V4 Flash 23/30 正式报告](../benchmarks/results/20260827T181517Z-agent-single.md)（[JSON](../benchmarks/results/20260827T181517Z-agent-single.json)）作为网络故障时的证据；候选 commit 与验证命令见[求职展示版 v1.0 证据清单](release-evidence/portfolio-v1.0.md)。
 
 ## 0:00–0:40：项目定位
 
@@ -51,7 +51,7 @@ parse → plan → execute → checkpoint → validate → summarize
 uv run python -m benchmarks.run --backend platform --mode single --no-artifacts
 ```
 
-明确说明离线 10/10 证明平台路径，不证明模型推理。
+明确说明当前离线 30/30 只证明确定性平台路径，不证明模型推理。
 
 ## 2:30–3:25：安全与确认
 
@@ -90,14 +90,14 @@ uv run python -m benchmarks.run --backend platform --mode single --no-artifacts
 
 展示以下真实结果：
 
-- 后端 619 passed，前端 93 passed，Ruff 通过；
-- Platform 10/10；
+- 后端 731 passed，前端 97 passed，Ruff、前端 build、Compose config 与 smoke 通过；
+- Platform 30/30，工具成功率 89.39%，但这是确定性 platform backend；
 - Memory 6/6；
-- v2 DeepSeek V4 Flash single-Agent 25/30（83.3%）：easy 9/10、medium 10/10、hard 6/10，基础设施错误 0、系统错误 0；
+- v2 DeepSeek V4 Flash single-Agent 23/30（76.7%）：easy 7/10、medium 10/10、hard 6/10，工具成功率 77.53%，基础设施错误 0、系统错误 0；
 - 前端最大 chunk 76.99 kB；
 - Docker API 非 root、CPU-only PyTorch。
 
-口径说明：25/30 来自 `mini-claude-code-v2` 的 30 题 suite 与当前 evaluator，和旧 v1 的 8/10 在用例、断言及评测器上均有变化，不能当作严格同口径的纵向提升。v2 中的 `hard.cancel_replan.partial_workspace` 只评估模型面对部分 Workspace 时的重新规划能力；真实 Stop/Cancel 的 lease、tombstone、runner fencing 与前端锁定不计入模型成功率，由后端、控制层和前端确定性测试证明。
+口径说明：当前 23/30 来自候选源码 commit 上完整、正式、干净工作树的 `mini-claude-code-v2` 30 题运行，7 项失败全部保留。之后两次 5 题诊断复跑为 dirty worktree 且 `official.valid=false`，只能分析失败稳定性，不能替代正式分数。旧 25/30、旧 Platform 10/10 与旧 v1 8/10 均只作为历史证据。v2 中的 `hard.cancel_replan.partial_workspace` 只评估模型面对部分 Workspace 时的重新规划能力；真实 Stop/Cancel 的 lease、tombstone、runner fencing 与前端锁定不计入模型成功率，由后端、控制层和前端确定性测试证明。
 
 最后用一句话收尾：
 

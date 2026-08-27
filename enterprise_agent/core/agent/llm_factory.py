@@ -17,6 +17,7 @@ def _get_anthropic_llm() -> BaseChatModel:
     return ChatAnthropic(
         model=settings.get_effective_model_id(),
         api_key=settings.get_effective_api_key(),
+        max_tokens=settings.MODEL_MAX_OUTPUT_TOKENS,
     )
 
 
@@ -28,6 +29,7 @@ def _get_mimo_llm() -> BaseChatModel:
         model=settings.get_effective_model_id(),
         api_key=settings.get_effective_api_key(),
         base_url=settings.get_effective_base_url(),
+        max_tokens=settings.MODEL_MAX_OUTPUT_TOKENS,
     )
 
 
@@ -50,6 +52,7 @@ def _get_deepseek_llm() -> BaseChatModel:
             model=settings.get_effective_model_id(),
             api_key=settings.get_effective_api_key(),
             base_url=base_url,
+            max_tokens=settings.MODEL_MAX_OUTPUT_TOKENS,
             timeout=300,  # DeepSeek thinking models need longer timeout
             max_retries=0,  # Disable SDK retries, let langchain handle it
         )
@@ -60,6 +63,7 @@ def _get_deepseek_llm() -> BaseChatModel:
         model=settings.get_effective_model_id(),
         api_key=settings.get_effective_api_key(),
         base_url=base_url,
+        max_tokens=settings.MODEL_MAX_OUTPUT_TOKENS,
         request_timeout=300,  # OpenAI SDK timeout
         max_retries=0,
     )
@@ -73,6 +77,7 @@ def _get_openai_compatible_llm(provider: str) -> BaseChatModel:
         model=settings.get_effective_model_id(),
         api_key=settings.get_effective_api_key(),
         base_url=settings.get_effective_base_url(),
+        max_tokens=settings.MODEL_MAX_OUTPUT_TOKENS,
     )
 
 
@@ -129,6 +134,7 @@ def get_llm_for_subagent() -> dict:
         "api_key": api_key,
         "base_url": base_url,
         "model": model,
+        "max_tokens": settings.MODEL_MAX_OUTPUT_TOKENS,
     }
 
 

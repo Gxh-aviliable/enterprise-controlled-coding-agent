@@ -172,11 +172,15 @@
 
     <!-- Tool Confirmation Modal -->
     <Teleport to="body">
-      <div v-if="pendingConfirm" class="modal-overlay" @click.self="rejectTools">
-        <div class="modal-card">
+      <div
+        v-if="pendingConfirm"
+        class="modal-overlay"
+        data-testid="tool-confirm-overlay"
+      >
+        <div class="modal-card" role="dialog" aria-modal="true" aria-labelledby="tool-confirm-title">
           <div class="modal-header">
             <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="var(--accent)" stroke-width="2"><circle cx="12" cy="12" r="10"/><path d="M12 6v6l4 2"/></svg>
-            <h3>Confirm Tool Execution</h3>
+            <h3 id="tool-confirm-title">Confirm Tool Execution</h3>
           </div>
           <p class="modal-message">{{ pendingConfirm.message }}</p>
           <p class="modal-scope-note">
@@ -203,15 +207,6 @@
             This task is being terminated. Completed file changes or external side effects are not rolled back.
           </p>
           <div class="modal-actions">
-            <button
-              v-if="['cancel_failed', 'status_unknown'].includes(taskStatus)"
-              type="button"
-              class="btn-modal btn-approve-all"
-              data-testid="check-stream-status"
-              @click="recheckStreamStatus"
-            >
-              Check status
-            </button>
             <button
               type="button"
               class="btn-modal btn-terminate"
@@ -262,17 +257,6 @@
               Multi <span class="experimental-label">EXP</span>
             </button>
           </div>
-          <button
-            v-if="['cancel_failed', 'status_unknown'].includes(taskStatus) && !pendingConfirm"
-            type="button"
-            class="task-secondary"
-            data-testid="check-stream-status"
-            aria-label="Check authoritative task status"
-            title="Check authoritative task status"
-            @click="recheckStreamStatus"
-          >
-            Check status
-          </button>
         </div>
       </div>
       <p v-if="controlError" class="control-error" role="alert">{{ controlError }}</p>
@@ -289,13 +273,13 @@
           @input="autoResize"
         ></textarea>
         <button
-          v-if="['running', 'cancelling', 'cancel_failed'].includes(taskStatus) && !pendingConfirm"
+          v-if="['running', 'cancelling', 'cancel_failed', 'status_unknown'].includes(taskStatus) && !pendingConfirm"
           type="button"
           class="btn-send btn-stop"
           data-testid="stop-task"
           :disabled="taskStatus === 'cancelling'"
-          :aria-label="taskStatus === 'cancelling' ? 'Cancelling task' : taskStatus === 'cancel_failed' ? 'Retry stopping current task' : 'Stop current task'"
-          :title="taskStatus === 'cancelling' ? 'Cancelling task' : taskStatus === 'cancel_failed' ? 'Retry terminal cancellation' : 'Stop current task permanently'"
+          :aria-label="taskStatus === 'cancelling' ? 'Cancelling task' : taskStatus === 'cancel_failed' ? 'Retry stopping current task' : taskStatus === 'status_unknown' ? 'Stop task with unknown status' : 'Stop current task'"
+          :title="taskStatus === 'cancelling' ? 'Cancelling task' : taskStatus === 'cancel_failed' ? 'Retry terminal cancellation' : taskStatus === 'status_unknown' ? 'Resolve the unknown state by terminating this session task' : 'Stop current task permanently'"
           @click="stopGeneration"
         >
           <svg width="18" height="18" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><rect x="6" y="6" width="12" height="12" rx="1.5"/></svg>
@@ -925,12 +909,22 @@ function finishToolCard(name, metadata = {}) {
   if (metadata.ok === true || metadata.status === 'success') {
     toolMsg.toolStatus = 'done'
     toolMsg.toolError = ''
+  } else if (isRejectedToolOutcome(metadata)) {
+    toolMsg.toolStatus = 'rejected'
+    toolMsg.toolError = 'Not approved — this tool was not run.'
   } else {
     toolMsg.toolStatus = 'error'
     toolMsg.toolError = metadata.error_code
       ? `Tool failed: ${metadata.error_code}`
       : 'Tool execution failed'
   }
+}
+
+function isRejectedToolOutcome(metadata = {}) {
+  const status = String(metadata.status || '').toLowerCase()
+  const errorCode = String(metadata.error_code || '').toLowerCase()
+  return ['rejected', 'not_approved', 'approval_rejected'].includes(status)
+    || ['user_rejected', 'tool_not_approved', 'confirmation_rejected'].includes(errorCode)
 }
 
 function applyToolResult(id, result, metadata = {}) {
@@ -1068,14 +1062,39 @@ function createStreamHandlers(sessionId, isNewSession, epoch) {
         message: data.message || 'Task cancelled'
       })
     },
-    onError: (err) => {
+    onError: (err, metadata = {}) => {
       if (!isCurrentStream()) return
       streaming.value = false
       currentTool.value = ''
-      taskStatus.value = 'status_unknown'
-      controlError.value = `Stream status is unknown: ${err}`
       closeAssistantStreamSegment()
-      controlEpoch += 1
+      const errorMessage = String(err || 'Stream failed')
+      const traceId = handlerTraceId || activeTraceId.value
+      const rejectedBeforeTaskStart = (
+        metadata?.phase === 'request' &&
+        Number.isFinite(Number(metadata.httpStatus)) &&
+        !traceId
+      )
+
+      if (rejectedBeforeTaskStart) {
+        taskStatus.value = 'idle'
+        activeTraceId.value = ''
+        cancellationContext = null
+        abortController.value = null
+        controlError.value = errorMessage
+        controlEpoch += 1
+        streamEpoch += 1
+        return
+      }
+
+      taskStatus.value = 'status_checking'
+      controlError.value = `Stream interrupted: ${errorMessage}. Checking authoritative task status.`
+      const operationEpoch = ++controlEpoch
+      streamEpoch += 1
+      void reconcileStreamStatusAfterError({
+        sessionId,
+        operationEpoch,
+        streamError: errorMessage
+      })
     },
     onDone: () => {
       if (!isCurrentStream()) return
@@ -1148,8 +1167,8 @@ function resumeAfterConfirm(approvedIds, approved) {
       !['running', 'waiting'].includes(message.toolStatus)
     ) continue
     if (!approved || (sensitiveIds.has(message.toolCallId) && !approvedSet.has(message.toolCallId))) {
-      message.toolStatus = 'error'
-      message.toolError = 'Tool execution was not approved'
+      message.toolStatus = 'rejected'
+      message.toolError = 'Not approved — this tool was not run.'
     } else if (approvedSet.has(message.toolCallId)) {
       message.toolStatus = 'running'
     }
@@ -1291,31 +1310,19 @@ function applyAuthoritativeStreamStatus(data, {
   return false
 }
 
-async function recheckStreamStatus() {
-  const sessionId = activeId.value
-  if (!sessionId || taskStatus.value === 'status_checking') return
-
-  const context = cancellationContext?.sessionId === sessionId
-    ? { ...cancellationContext }
-    : null
-  const operationEpoch = ++controlEpoch
-  taskStatus.value = 'status_checking'
-  controlError.value = ''
-
+async function reconcileStreamStatusAfterError({ sessionId, operationEpoch, streamError }) {
   try {
     const data = await api.getStreamStatus(sessionId)
     if (!cancellationIsCurrent(sessionId, operationEpoch)) return
-    applyAuthoritativeStreamStatus(data, {
-      sessionId,
-      cancellationRecovery: Boolean(context),
-      expectedTraceId: context?.traceId || '',
-      toolScope: context?.toolScope || currentToolScope()
-    })
+    applyAuthoritativeStreamStatus(data, { sessionId })
+    if (taskStatus.value === 'running' && !streaming.value) {
+      controlError.value = `Task is still running, but live output was disconnected: ${streamError}. You can wait, reload this conversation, or stop the task.`
+    }
   } catch (error) {
     if (!cancellationIsCurrent(sessionId, operationEpoch)) return
-    console.warn('[stream-status] Failed to query authoritative task state:', error)
-    taskStatus.value = context ? 'cancel_failed' : 'status_unknown'
-    controlError.value = `Task status check failed: ${error.message}`
+    console.warn('[stream-status] Failed to reconcile interrupted stream:', error)
+    taskStatus.value = 'status_unknown'
+    controlError.value = `Stream interrupted: ${streamError}. Task status check failed: ${error.message}`
   }
 }
 
@@ -1605,34 +1612,6 @@ onUnmounted(() => {
   flex-shrink: 0;
 }
 
-.task-secondary {
-  min-height: 32px;
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  gap: 5px;
-  padding: 0 10px;
-  border: 1px solid var(--border);
-  border-radius: 8px;
-  background: var(--bg-primary);
-  font-family: var(--font-ui);
-  font-size: var(--text-xs);
-  font-weight: 650;
-  white-space: nowrap;
-  cursor: pointer;
-  transition: background var(--transition), border-color var(--transition), color var(--transition);
-}
-
-.task-secondary:focus-visible {
-  outline: 2px solid var(--accent);
-  outline-offset: 2px;
-}
-
-.task-secondary:disabled {
-  opacity: 0.55;
-  cursor: not-allowed;
-}
-
 /* Messages */
 .messages-region {
   flex: 1;
@@ -1775,6 +1754,7 @@ onUnmounted(() => {
 .timeline-entry-running { --timeline-status: #d97706; }
 .timeline-entry-waiting { --timeline-status: #4f46e5; }
 .timeline-entry-done { --timeline-status: #10b981; }
+.timeline-entry-rejected { --timeline-status: #b45309; }
 .timeline-entry-error { --timeline-status: #dc2626; }
 
 /* Message row */

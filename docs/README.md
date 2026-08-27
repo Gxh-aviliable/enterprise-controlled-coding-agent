@@ -11,8 +11,9 @@
 3. [系统架构](../ARCHITECTURE.md)：组件边界、状态机、数据流、安全和部署设计。
 4. [能力矩阵](capability-matrix.md)：哪些能力已验证、部分完成或仍待测。
 5. [Benchmark 说明](../benchmarks/README.md)：评测数据、复现方法和解释边界。
+6. [求职展示版 v1.0 证据清单](release-evidence/portfolio-v1.0.md)：候选源码 commit、验证命令、正式评测产物与发布边界。
 
-这五份文档构成当前项目事实的主要入口。如果它们与历史开发日志冲突，以代码、自动化测试和最新 benchmark 原始产物为准。
+这六份文档构成当前项目事实的主要入口。如果它们与历史开发日志冲突，以代码、自动化测试和最新 benchmark 原始产物为准。
 
 ## 按目标阅读
 
@@ -22,6 +23,7 @@
 | 从零精读后端 Agent 主链路 | [后端 Agent 从零精读指南](PROJECT-WALKTHROUGH.md) |
 | 理解任务状态与工具治理 | [系统架构](../ARCHITECTURE.md) |
 | 查看真实测试和评测结果 | [能力矩阵](capability-matrix.md)、[Benchmark](../benchmarks/README.md) |
+| 核对候选 commit 与发布证据 | [求职展示版 v1.0 证据清单](release-evidence/portfolio-v1.0.md) |
 | 部署到 Linux 服务器 | [远程服务器部署](remote-server-deployment.md) |
 | 滚动下线 Pause/Continue | [Cancel-and-Replan 两阶段迁移](cancel-and-replan-rolling-migration.md) |
 | 理解长期记忆准入与召回 | [长期记忆治理](memory-governance.md) |
@@ -34,28 +36,29 @@
 
 ## 当前可复现证据
 
-当前自动化验证更新于 2026-08-19；最新真实模型正式评测产物生成于 2026-08-19（UTC）：
+当前自动化验证更新于 2026-08-28；下列评测产物于 2026-08-27（UTC）在候选源码 commit `1d637c5753e93c72989c3fdae2ab5edf50e078eb` 上生成：
 
 | 证据 | 结果 | 解释边界 |
 |---|---:|---|
-| 后端 pytest | 619 passed | 单元、API、任务状态机、Stop 闭环、工具、Workspace 安全写入、上下文、记忆和 Trace 回归 |
-| 前端 Vitest | 93 passed | 关键交互、SSE 控制流、Stop/HITL、Preview/Edit、冲突和未保存导航防护回归 |
+| 后端 pytest | 731 passed | 单元、API、任务状态机、Stop 闭环、工具、Workspace 安全写入、上下文、记忆和 Trace 回归 |
+| 前端 Vitest | 97 passed | 关键交互、SSE 控制流、Stop/HITL、Preview/Edit、冲突和未保存导航防护回归 |
 | Ruff | 0 findings | 当前配置覆盖的 Python 静态检查 |
-| Platform benchmark | 10/10 | 确定性工具、状态、策略和评测器，不是模型智能分 |
+| Platform benchmark | 30/30 | 工具成功率 89.39%；确定性工具、状态、策略和评测器，不是模型智能分 |
 | Memory benchmark | 6/6 | 小型合成集的检索与过滤，不证明模型正确采用记忆 |
-| DeepSeek single-Agent v2 | 25/30 | `deepseek-v4-flash`：easy 9/10、medium 10/10、hard 6/10；工具成功率 87.5%，平均 11.524 s / 32,342.23 token，HITL 73.3%，安全拦截 15，基础设施/系统错误均为 0 |
+| DeepSeek single-Agent v2 | 23/30 | `deepseek-v4-flash`：easy 7/10、medium 10/10、hard 6/10；工具成功率 77.53%，平均 16.840 s / 53,128.93 token，HITL 80.0%，安全拦截 41，基础设施/系统错误均为 0 |
 | Multi-Agent 对照 | 待测 | 不宣称多 Agent 优于单 Agent |
 
 对应原始产物：
 
-- [Platform Markdown](../benchmarks/results/20260715T125211Z-platform-single.md) /
-  [Platform JSON](../benchmarks/results/20260715T125211Z-platform-single.json)
-- [Memory Markdown](../benchmarks/results/20260720T093639Z-memory-recall.md) /
-  [Memory JSON](../benchmarks/results/20260720T093639Z-memory-recall.json)
-- [Agent v2 Markdown](../benchmarks/results/20260819T160324Z-agent-single.md) /
-  [Agent v2 JSON](../benchmarks/results/20260819T160324Z-agent-single.json)
+- [Platform Markdown](../benchmarks/results/20260827T182126Z-platform-single.md) /
+  [Platform JSON](../benchmarks/results/20260827T182126Z-platform-single.json)
+- [Memory Markdown](../benchmarks/results/20260827T182146Z-memory-recall.md) /
+  [Memory JSON](../benchmarks/results/20260827T182146Z-memory-recall.json)
+- [Agent v2 Markdown](../benchmarks/results/20260827T181517Z-agent-single.md) /
+  [Agent v2 JSON](../benchmarks/results/20260827T181517Z-agent-single.json)
+- [求职展示版 v1.0 证据清单](release-evidence/portfolio-v1.0.md)
 
-Agent v2 将题集扩展并重新平衡为 30 条，同时强化了评测器，因此 25/30 与旧 v1 的 8/10 **不严格同口径**，不能直接解释为同一题集上的净提升。Stop/Cancel 协议本身由确定性 API、状态机、Redis 与进程终止回归证明；v2 中的 cancel-and-replan 用例只补充模型行为证据，不替代协议测试。
+当前正式 Agent 分数是完整 30 题、干净工作树上的 23/30，共保留 7 项失败。随后针对部分失败执行的两次 5 题诊断复跑使用 dirty worktree，且 `official.valid=false`，只能分析随机性和失败形态，不能替代或重算正式分数。旧 25/30、旧 Platform 10/10 和 v1 8/10 仅作为历史记录，不再代表当前候选版本；其中 v1 与 v2 的题集和 evaluator 也不严格同口径。Stop/Cancel 协议本身由确定性 API、状态机、Redis 与进程终止回归证明；v2 中的 cancel-and-replan 用例只补充模型行为证据，不替代协议测试。
 
 ## 历史记录的使用方式
 

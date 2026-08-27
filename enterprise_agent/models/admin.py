@@ -24,7 +24,7 @@ def utcnow():
 
 
 class UserQuota(Base):
-    """Per-user product limits; framework safety ceilings remain global."""
+    """Per-user metered limits plus an always-on concurrency boundary."""
 
     __tablename__ = "user_quotas"
 

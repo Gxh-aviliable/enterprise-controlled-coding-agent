@@ -23,6 +23,8 @@ status: implemented-mvp
 
 前端入口是 `frontend/src/components/admin/AdminConsole.vue`，仅对实时数据库角色为管理员的用户显示。后端入口统一位于 `/admin/*`。
 
+`Metered usage quota` 开关按用户控制日任务和日/月 token 限额。关闭后该用户不再受这些计量额度约束，但 Redis 并发任务上限以及单任务 token、轮次、工具次数和超时等服务端安全边界仍然生效；因此不能用该开关绕过并发与执行安全控制。
+
 ## 权限模型
 
 当前运行时主要区分普通用户和管理员：

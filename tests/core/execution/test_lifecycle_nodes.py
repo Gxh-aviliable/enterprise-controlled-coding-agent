@@ -139,6 +139,40 @@ async def test_non_modifying_task_finishes_succeeded():
     assert result["failure_reason"] is None
 
 
+async def test_open_todo_cannot_finish_as_success_without_code_changes():
+    result = await finalize_task_node({
+        "task_status": "running",
+        "changed_files": [],
+        "validation_results": [],
+        "messages": [{"role": "assistant", "content": "I am done."}],
+        "todos": [{"content": "write the implementation", "status": "in_progress"}],
+        "has_open_todos": True,
+    })
+
+    assert result["task_status"] == "failed"
+    assert "pending or in-progress todo" in result["failure_reason"]
+    assert result["todos"][0]["status"] == "failed"
+
+
+async def test_execution_request_without_execution_evidence_cannot_finish_as_success():
+    result = await finalize_task_node({
+        "task_status": "running",
+        "task_requires_execution": True,
+        "changed_files": [],
+        "validation_results": [],
+        "tool_execution_records": [{
+            "tool_name": "read_file",
+            "tool_call_id": "read-only",
+            "status": "success",
+            "ok": True,
+        }],
+        "messages": [{"role": "assistant", "content": "Implemented."}],
+    })
+
+    assert result["task_status"] == "failed"
+    assert "no successful execution evidence" in result["failure_reason"]
+
+
 async def test_multi_agent_task_cannot_succeed_without_real_delegation():
     result = await finalize_task_node({
         "task_status": "running",

@@ -13,14 +13,17 @@ from enterprise_agent.models.chat_message import ChatMessage
 from enterprise_agent.models.session import Session
 
 _OPEN_TOOL_STATUSES = {"running", "waiting"}
-_TERMINAL_TOOL_STATUSES = {"done", "error"}
+_TERMINAL_TOOL_STATUSES = {"done", "error", "rejected"}
 _TOOL_STATUS_ALIASES = {
+    "approval_rejected": "rejected",
     "blocked": "error",
     "cancelled": "error",
     "completed": "done",
     "failed": "error",
     "interrupted": "error",
     "pending": "running",
+    "not_approved": "rejected",
+    "rejected": "rejected",
     "success": "done",
     "succeeded": "done",
     "timeout": "error",

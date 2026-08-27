@@ -35,8 +35,14 @@ from langgraph.types import Command
 from enterprise_agent.config.settings import settings
 from enterprise_agent.core.agent import context as agent_context
 from enterprise_agent.core.agent.graph import build_simple_agent_graph
-from enterprise_agent.core.agent.nodes import finalize_task_node, tool_executor_node
+from enterprise_agent.core.agent.nodes import (
+    MAX_COMPLETION_GATE_RECOVERIES,
+    MAX_INCOMPLETE_RESPONSE_RECOVERIES,
+    finalize_task_node,
+    tool_executor_node,
+)
 from enterprise_agent.core.agent.tools.background import clear_background_manager
+from enterprise_agent.core.agent.tools.contracts import TOOL_CONTRACTS
 from enterprise_agent.core.agent.tools.task import clear_task_managers, clear_todo_manager
 from enterprise_agent.core.agent.tools.workspace import (
     OPERATIONAL_AGENT_PATH_PARTS,
@@ -196,10 +202,18 @@ def build_run_metadata(
             "api_key_configured": bool(settings.get_effective_api_key()),
             "parameters": {
                 "temperature": "provider_default",
-                "max_output_tokens": "provider_default",
+                "max_output_tokens": settings.MODEL_MAX_OUTPUT_TOKENS,
                 "thinking": "provider_default",
-                "request_timeout_seconds": 300 if deepseek else "sdk_default",
-                "sdk_max_retries": 0 if deepseek else "sdk_default",
+                "context_window_tokens": settings.MODEL_CONTEXT_WINDOW_TOKENS,
+                "context_compression_ratio": settings.CONTEXT_COMPRESSION_RATIO,
+            "context_compression_threshold_tokens": int(
+                settings.MODEL_CONTEXT_WINDOW_TOKENS
+                * settings.CONTEXT_COMPRESSION_RATIO
+            ),
+            "max_incomplete_response_recoveries": MAX_INCOMPLETE_RESPONSE_RECOVERIES,
+            "max_completion_gate_recoveries": MAX_COMPLETION_GATE_RECOVERIES,
+            "request_timeout_seconds": 300 if deepseek else "sdk_default",
+            "sdk_max_retries": 0 if deepseek else "sdk_default",
             },
         },
         "agent_limits": {
@@ -218,6 +232,7 @@ def build_run_metadata(
             "lockfile": "uv.lock",
             "uv_lock_sha256": hashlib.sha256((ROOT / "uv.lock").read_bytes()).hexdigest(),
             "python_executable": Path(sys.executable).name,
+            "uv": _command_version("uv"),
             "node": _command_version("node"),
             "npm": _command_version("npm"),
         },
@@ -850,6 +865,124 @@ def extract_response(messages: list[Any]) -> str:
             )
         return str(content)
     return ""
+
+
+TERMINAL_TRUNCATION_REASONS = {
+    "length",
+    "max_completion_tokens",
+    "max_output_tokens",
+    "max_tokens",
+    "max_tokens_exceeded",
+    "token_limit",
+}
+OPEN_TODO_STATUSES = {"in-progress", "in_progress", "pending", "running", "todo"}
+
+
+def _last_assistant_message(messages: list[Any]) -> Any | None:
+    for message in reversed(messages or []):
+        role = (
+            message.get("role")
+            if isinstance(message, dict)
+            else getattr(message, "type", None)
+        )
+        if role in {"assistant", "ai"}:
+            return message
+    return None
+
+
+def _message_field(message: Any, name: str, default: Any = None) -> Any:
+    if isinstance(message, dict):
+        return message.get(name, default)
+    return getattr(message, name, default)
+
+
+def _terminal_message_has_thinking(message: Any) -> bool:
+    content = _message_field(message, "content", "")
+    return isinstance(content, list) and any(
+        isinstance(block, dict)
+        and block.get("type") in {"thinking", "redacted_thinking"}
+        for block in content
+    )
+
+
+def _terminal_message_has_visible_text(message: Any) -> bool:
+    return bool(extract_response([message]).strip())
+
+
+def _state_has_open_todos(state: dict[str, Any]) -> bool:
+    if state.get("has_open_todos") is True:
+        return True
+    return any(
+        str(item.get("status", "")).strip().lower() in OPEN_TODO_STATUSES
+        for item in state.get("todos", [])
+        if isinstance(item, dict)
+    )
+
+
+def _state_has_execution_evidence(state: dict[str, Any]) -> bool:
+    if state.get("changed_files"):
+        return True
+    for record in state.get("tool_execution_records", []):
+        if not isinstance(record, dict) or record.get("ok") is not True:
+            continue
+        contract = TOOL_CONTRACTS.get(str(record.get("tool_name", "")))
+        if contract and contract.side_effect not in {"none", "task_state", "agent_state"}:
+            return True
+    return False
+
+
+def agent_terminal_integrity_error(state: dict[str, Any]) -> str | None:
+    """Reject a false-success graph state before benchmark assertions run.
+
+    Task assertions verify the requested repository outcome. This guard instead
+    verifies that the Agent itself reached a coherent terminal boundary. It is
+    deliberately runner-only and does not add a synthetic case to the official
+    30-task suite.
+    """
+    if state.get("task_status") != TaskStatus.SUCCEEDED.value:
+        return None
+
+    issues: list[str] = []
+    stop_reason = str(state.get("last_model_stop_reason") or "").strip().lower()
+    normalized_stop_reason = stop_reason.replace("-", "_")
+    if normalized_stop_reason in TERMINAL_TRUNCATION_REASONS:
+        issues.append(f"truncated model response ({stop_reason})")
+
+    terminal_message = _last_assistant_message(state.get("messages", []))
+    if terminal_message is None:
+        issues.append("missing terminal assistant message")
+    elif not _terminal_message_has_visible_text(terminal_message):
+        descriptor = (
+            "thinking-only terminal assistant response"
+            if _terminal_message_has_thinking(terminal_message)
+            else "terminal assistant response has no visible text"
+        )
+        issues.append(descriptor)
+
+    if _state_has_open_todos(state):
+        issues.append("pending or in-progress Todo remains")
+
+    for field in (
+        "incomplete_response_recovery_attempts",
+        "completion_gate_recovery_attempts",
+    ):
+        raw_attempts = state.get(field, 0) or 0
+        try:
+            attempts = int(raw_attempts)
+        except (TypeError, ValueError):
+            issues.append(f"{field}={raw_attempts!r} is invalid")
+            continue
+        if attempts:
+            issues.append(f"{field}={attempts} was not cleared")
+
+    if state.get("task_requires_execution") is True and not _state_has_execution_evidence(
+        state
+    ):
+        issues.append("execution task has no successful tool or workspace evidence")
+
+    if not issues:
+        return None
+    return "Agent terminal integrity violation: " + "; ".join(issues)
 
 
 def evaluate_case(
@@ -1745,6 +1878,10 @@ async def run_agent_case(case: dict[str, Any], index: int, mode: str) -> dict[st
             pass
 
     response = extract_response(state.get("messages", []))
+    terminal_integrity_error = agent_terminal_integrity_error(state)
+    if terminal_integrity_error and error_kind is None:
+        error_kind = "system_error"
+        error_message = terminal_integrity_error
     try:
         trace = store.get_trace(user_id, trace_id)
         if trace.get("status") not in {"succeeded", "failed", "cancelled"}:

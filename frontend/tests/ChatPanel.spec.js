@@ -204,7 +204,7 @@ describe('ChatPanel session history restoration', () => {
     wrapper.unmount()
   })
 
-  it('keeps an existing session locked when authoritative status lookup fails', async () => {
+  it('keeps an existing session locked without exposing a manual status button when restoration fails', async () => {
     api.getStreamStatus.mockRejectedValueOnce(new Error('status service unavailable'))
     const wrapper = mountChatPanel()
     await flushPromises()
@@ -212,12 +212,55 @@ describe('ChatPanel session history restoration', () => {
     expect(wrapper.text()).toContain('Task status unknown')
     expect(wrapper.text()).toContain('status service unavailable')
     expect(wrapper.find('textarea').attributes('disabled')).toBeDefined()
-    expect(wrapper.find('[data-testid="check-stream-status"]').exists()).toBe(true)
+    expect(wrapper.find('[data-testid="check-stream-status"]').exists()).toBe(false)
+    expect(wrapper.find('[data-testid="stop-task"]').attributes('aria-label')).toBe('Stop task with unknown status')
+    wrapper.unmount()
+  })
 
-    api.getStreamStatus.mockResolvedValueOnce({ status: 'terminal' })
-    await wrapper.find('[data-testid="check-stream-status"]').trigger('click')
+  it('unlocks immediately when an HTTP request is rejected before task_started', async () => {
+    const wrapper = mountChatPanel()
     await flushPromises()
+    await wrapper.find('textarea').setValue('超出额度的请求')
+    await wrapper.find('.btn-send').trigger('click')
+    const streamOptions = api.streamMessage.mock.calls[0][0]
+
+    streamOptions.onError('Daily token quota has been reached', {
+      phase: 'request',
+      httpStatus: 429,
+      detail: { code: 'daily_token_limit_exceeded' }
+    })
+    await flushPromises()
+
+    expect(wrapper.text()).toContain('Daily token quota has been reached')
+    expect(wrapper.text()).not.toContain('Stream status is unknown')
     expect(wrapper.find('textarea').attributes('disabled')).toBeUndefined()
+    expect(wrapper.find('[data-testid="check-stream-status"]').exists()).toBe(false)
+    expect(api.getStreamStatus).toHaveBeenCalledTimes(1)
+    wrapper.unmount()
+  })
+
+  it('automatically reconciles an interrupted started trace exactly once', async () => {
+    const wrapper = mountChatPanel()
+    await flushPromises()
+    await wrapper.find('textarea').setValue('执行会断流的任务')
+    await wrapper.find('.btn-send').trigger('click')
+    const streamOptions = api.streamMessage.mock.calls[0][0]
+    streamOptions.onTaskStarted({
+      event: 'task_started',
+      session_id: 'session-existing',
+      trace_id: 'trace-disconnected'
+    })
+    api.getStreamStatus.mockResolvedValueOnce({
+      status: 'terminal',
+      trace_id: 'trace-disconnected'
+    })
+
+    streamOptions.onError('Stream transport closed before a terminal event was received.')
+    await flushPromises()
+
+    expect(api.getStreamStatus).toHaveBeenCalledTimes(2)
+    expect(wrapper.find('textarea').attributes('disabled')).toBeUndefined()
+    expect(wrapper.find('[data-testid="check-stream-status"]').exists()).toBe(false)
     wrapper.unmount()
   })
 
@@ -555,7 +598,7 @@ describe('ChatPanel session history restoration', () => {
     wrapper.unmount()
   })
 
-  it('sends an explicit rejection back to the interrupted graph', async () => {
+  it('only rejects from an explicit button and marks the tool as not approved', async () => {
     const wrapper = mountChatPanel()
     await flushPromises()
     await wrapper.find('textarea').setValue('执行一个需要确认的任务')
@@ -576,6 +619,16 @@ describe('ChatPanel session history restoration', () => {
     expect(document.body.textContent).toContain('Approve Current Batch')
     expect(document.body.textContent).toContain('Approval applies only to this current batch')
     expect(document.body.textContent).toContain('review')
+
+    const overlay = document.body.querySelector('[data-testid="tool-confirm-overlay"]')
+    expect(overlay).not.toBeNull()
+    overlay.click()
+    await flushPromises()
+
+    expect(api.resumeStream).not.toHaveBeenCalled()
+    expect(document.body.textContent).toContain('Confirm Tool Execution')
+    expect(wrapper.find('tool-call-card-stub').attributes('status')).toBe('waiting')
+
     rejectButton.click()
     await flushPromises()
 
@@ -585,8 +638,33 @@ describe('ChatPanel session history restoration', () => {
       approved: false,
       approved_ids: []
     })
-    expect(wrapper.find('tool-call-card-stub').attributes('status')).toBe('error')
+    expect(wrapper.find('tool-call-card-stub').attributes('status')).toBe('rejected')
+    expect(wrapper.find('tool-call-card-stub').attributes('error')).toContain('not run')
 
+    wrapper.unmount()
+  })
+
+  it('maps an authoritative rejected outcome to the not-approved tool state', async () => {
+    const wrapper = mountChatPanel()
+    await flushPromises()
+    await wrapper.find('textarea').setValue('执行需要确认的操作')
+    await wrapper.find('.btn-send').trigger('click')
+
+    const streamOptions = api.streamMessage.mock.calls[0][0]
+    streamOptions.onToolStart('write_file', 'call-rejected')
+    streamOptions.onToolEnd('write_file', {
+      id: 'call-rejected',
+      name: 'write_file',
+      status: 'rejected',
+      ok: false,
+      error_code: 'confirmation_rejected',
+      duration_ms: 0
+    })
+    await flushPromises()
+
+    const tool = wrapper.find('tool-call-card-stub')
+    expect(tool.attributes('status')).toBe('rejected')
+    expect(tool.attributes('error')).toContain('not run')
     wrapper.unmount()
   })
 
@@ -679,7 +757,7 @@ describe('ChatPanel session history restoration', () => {
     expect(wrapper.text()).toContain('Cancellation needs attention')
     expect(wrapper.text()).toContain('Redis unavailable')
     expect(wrapper.find('textarea').attributes('disabled')).toBeDefined()
-    expect(wrapper.find('[data-testid="check-stream-status"]').exists()).toBe(true)
+    expect(wrapper.find('[data-testid="check-stream-status"]').exists()).toBe(false)
     expect(api.streamMessage).toHaveBeenCalledTimes(1)
 
     await wrapper.find('[data-testid="stop-task"]').trigger('click')
@@ -709,7 +787,7 @@ describe('ChatPanel session history restoration', () => {
     wrapper.unmount()
   })
 
-  it('keeps a wrong-trace cancel response locked until status confirms the original trace', async () => {
+  it('keeps a wrong-trace cancel response locked until exact-trace termination is retried', async () => {
     api.cancelStream.mockResolvedValueOnce({
       status: 'cancelled',
       trace_id: 'trace-wrong'
@@ -732,10 +810,12 @@ describe('ChatPanel session history restoration', () => {
     expect(wrapper.find('textarea').attributes('disabled')).toBeDefined()
     expect(streamOptions.signal.aborted).toBe(false)
 
-    api.getStreamStatus.mockResolvedValueOnce({ status: 'cancelled', trace_id: 'trace-right' })
-    await wrapper.find('[data-testid="check-stream-status"]').trigger('click')
+    expect(wrapper.find('[data-testid="check-stream-status"]').exists()).toBe(false)
+    await wrapper.find('[data-testid="stop-task"]').trigger('click')
     await flushPromises()
 
+    expect(api.cancelStream).toHaveBeenCalledTimes(2)
+    expect(api.cancelStream).toHaveBeenLastCalledWith('session-existing', 'trace-right')
     expect(wrapper.find('textarea').attributes('disabled')).toBeUndefined()
     expect(streamOptions.signal.aborted).toBe(true)
     wrapper.unmount()

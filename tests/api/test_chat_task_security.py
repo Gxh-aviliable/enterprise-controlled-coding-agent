@@ -221,6 +221,26 @@ def test_tool_sse_events_use_normalized_execution_record_not_empty_pending_list(
     }
 
 
+def test_tool_sse_events_preserve_confirmation_rejection():
+    events = chat._tool_sse_events({
+        "tool_results": {"call-rejected": "Tool execution rejected by user."},
+        "tool_execution_records": [{
+            "tool_name": "write_file",
+            "tool_call_id": "call-rejected",
+            "status": "rejected",
+            "ok": False,
+            "output": "Tool execution rejected by user.",
+            "duration_ms": 0,
+            "error_code": "user_rejected",
+        }],
+    })
+
+    assert [event["event"] for event in events] == ["tool_result", "tool_end"]
+    assert events[1]["status"] == "rejected"
+    assert events[1]["ok"] is False
+    assert events[1]["error_code"] == "user_rejected"
+
+
 def test_tool_sse_events_expose_artifact_metadata():
     events = chat._tool_sse_events({
         "tool_results": {"call-stored": "bounded preview"},

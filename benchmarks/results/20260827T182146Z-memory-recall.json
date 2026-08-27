@@ -1,0 +1,542 @@
+{
+  "generated_at": "2026-08-27T18:21:46.302527+00:00",
+  "report": {
+    "suite_id": "memory-recall-v1",
+    "case_count": 6,
+    "passed": 6,
+    "metrics": {
+      "recall_at_3": 1.0,
+      "precision_at_3": 1.0,
+      "mean_reciprocal_rank": 1.0,
+      "negative_false_injection_rate": 0.0,
+      "forbidden_injections": 0,
+      "trace_coverage": 1.0,
+      "token_budget_compliance": 1.0
+    },
+    "limitations": [
+      "Measures local semantic retrieval and eligibility filtering only.",
+      "Injected memory is not proof that the model applied it.",
+      "Current-instruction override behavior requires a real Agent run."
+    ],
+    "cases": [
+      {
+        "id": "direct_python_preference",
+        "category": "direct_recall",
+        "passed": true,
+        "expected": [
+          "python_workflow"
+        ],
+        "injected": [
+          "python_workflow"
+        ],
+        "missing": [],
+        "unexpected": [],
+        "forbidden_injected": [],
+        "injected_tokens": 20,
+        "behavior_status": "not_applicable"
+      },
+      {
+        "id": "paraphrased_validation",
+        "category": "paraphrase_recall",
+        "passed": true,
+        "expected": [
+          "python_workflow"
+        ],
+        "injected": [
+          "python_workflow"
+        ],
+        "missing": [],
+        "unexpected": [],
+        "forbidden_injected": [],
+        "injected_tokens": 20,
+        "behavior_status": "not_applicable"
+      },
+      {
+        "id": "frontend_preference",
+        "category": "direct_recall",
+        "passed": true,
+        "expected": [
+          "frontend_stack"
+        ],
+        "injected": [
+          "frontend_stack"
+        ],
+        "missing": [],
+        "unexpected": [],
+        "forbidden_injected": [],
+        "injected_tokens": 14,
+        "behavior_status": "not_applicable"
+      },
+      {
+        "id": "deployment_recall",
+        "category": "task_outcome_recall",
+        "passed": true,
+        "expected": [
+          "linux_deployment"
+        ],
+        "injected": [
+          "linux_deployment"
+        ],
+        "missing": [],
+        "unexpected": [],
+        "forbidden_injected": [],
+        "injected_tokens": 13,
+        "behavior_status": "not_applicable"
+      },
+      {
+        "id": "unrelated_negative",
+        "category": "negative_recall",
+        "passed": true,
+        "expected": [],
+        "injected": [],
+        "missing": [],
+        "unexpected": [],
+        "forbidden_injected": [],
+        "injected_tokens": 0,
+        "behavior_status": "not_applicable"
+      },
+      {
+        "id": "current_instruction_override",
+        "category": "conflict_recall",
+        "passed": true,
+        "expected": [
+          "python_workflow"
+        ],
+        "injected": [
+          "python_workflow"
+        ],
+        "missing": [],
+        "unexpected": [],
+        "forbidden_injected": [],
+        "injected_tokens": 20,
+        "behavior_status": "not_measured"
+      }
+    ]
+  },
+  "observations": [
+    {
+      "case_id": "direct_python_preference",
+      "candidate_ids": [
+        "python_workflow",
+        "linux_deployment",
+        "frontend_stack",
+        "disabled_secret",
+        "legacy_fiction"
+      ],
+      "candidates": [
+        {
+          "memory_id": "python_workflow",
+          "rank": 1,
+          "distance": 0.362244,
+          "semantic_rank": 1,
+          "lexical_score": 0.235294,
+          "lexical_match_count": 4,
+          "retrieval_strategy": "cjk_lexical_rerank",
+          "eligible": true,
+          "filter_reason": "eligible"
+        },
+        {
+          "memory_id": "linux_deployment",
+          "rank": 2,
+          "distance": 0.670318,
+          "semantic_rank": 4,
+          "lexical_score": 0.058824,
+          "lexical_match_count": 1,
+          "retrieval_strategy": "cjk_lexical_rerank",
+          "eligible": false,
+          "filter_reason": "cjk_lexical_below_threshold"
+        },
+        {
+          "memory_id": "frontend_stack",
+          "rank": 3,
+          "distance": 0.715188,
+          "semantic_rank": 5,
+          "lexical_score": 0.058824,
+          "lexical_match_count": 1,
+          "retrieval_strategy": "cjk_lexical_rerank",
+          "eligible": false,
+          "filter_reason": "cjk_lexical_below_threshold"
+        },
+        {
+          "memory_id": "disabled_secret",
+          "rank": 4,
+          "distance": 0.412416,
+          "semantic_rank": 2,
+          "lexical_score": 0.0,
+          "lexical_match_count": 0,
+          "retrieval_strategy": "cjk_lexical_rerank",
+          "eligible": false,
+          "filter_reason": "retrieval_disabled"
+        },
+        {
+          "memory_id": "legacy_fiction",
+          "rank": 5,
+          "distance": 0.423609,
+          "semantic_rank": 3,
+          "lexical_score": 0.0,
+          "lexical_match_count": 0,
+          "retrieval_strategy": "cjk_lexical_rerank",
+          "eligible": false,
+          "filter_reason": "quality_not_active"
+        }
+      ],
+      "injected_ids": [
+        "python_workflow"
+      ],
+      "injected_tokens": 20
+    },
+    {
+      "case_id": "paraphrased_validation",
+      "candidate_ids": [
+        "python_workflow",
+        "disabled_secret",
+        "linux_deployment",
+        "legacy_fiction",
+        "frontend_stack"
+      ],
+      "candidates": [
+        {
+          "memory_id": "python_workflow",
+          "rank": 1,
+          "distance": 0.620853,
+          "semantic_rank": 3,
+          "lexical_score": 0.095238,
+          "lexical_match_count": 2,
+          "retrieval_strategy": "cjk_lexical_rerank",
+          "eligible": true,
+          "filter_reason": "eligible"
+        },
+        {
+          "memory_id": "disabled_secret",
+          "rank": 2,
+          "distance": 0.430093,
+          "semantic_rank": 1,
+          "lexical_score": 0.047619,
+          "lexical_match_count": 1,
+          "retrieval_strategy": "cjk_lexical_rerank",
+          "eligible": false,
+          "filter_reason": "retrieval_disabled"
+        },
+        {
+          "memory_id": "linux_deployment",
+          "rank": 3,
+          "distance": 0.686723,
+          "semantic_rank": 4,
+          "lexical_score": 0.047619,
+          "lexical_match_count": 1,
+          "retrieval_strategy": "cjk_lexical_rerank",
+          "eligible": false,
+          "filter_reason": "cjk_lexical_below_threshold"
+        },
+        {
+          "memory_id": "legacy_fiction",
+          "rank": 4,
+          "distance": 0.508052,
+          "semantic_rank": 2,
+          "lexical_score": 0.0,
+          "lexical_match_count": 0,
+          "retrieval_strategy": "cjk_lexical_rerank",
+          "eligible": false,
+          "filter_reason": "quality_not_active"
+        },
+        {
+          "memory_id": "frontend_stack",
+          "rank": 5,
+          "distance": 0.736112,
+          "semantic_rank": 5,
+          "lexical_score": 0.0,
+          "lexical_match_count": 0,
+          "retrieval_strategy": "cjk_lexical_rerank",
+          "eligible": false,
+          "filter_reason": "cjk_lexical_below_threshold"
+        }
+      ],
+      "injected_ids": [
+        "python_workflow"
+      ],
+      "injected_tokens": 20
+    },
+    {
+      "case_id": "frontend_preference",
+      "candidate_ids": [
+        "frontend_stack",
+        "python_workflow",
+        "disabled_secret",
+        "legacy_fiction",
+        "linux_deployment"
+      ],
+      "candidates": [
+        {
+          "memory_id": "frontend_stack",
+          "rank": 1,
+          "distance": 0.728013,
+          "semantic_rank": 5,
+          "lexical_score": 0.1875,
+          "lexical_match_count": 3,
+          "retrieval_strategy": "cjk_lexical_rerank",
+          "eligible": true,
+          "filter_reason": "eligible"
+        },
+        {
+          "memory_id": "python_workflow",
+          "rank": 2,
+          "distance": 0.69984,
+          "semantic_rank": 3,
+          "lexical_score": 0.125,
+          "lexical_match_count": 2,
+          "retrieval_strategy": "cjk_lexical_rerank",
+          "eligible": false,
+          "filter_reason": "cjk_lexical_below_threshold"
+        },
+        {
+          "memory_id": "disabled_secret",
+          "rank": 3,
+          "distance": 0.386396,
+          "semantic_rank": 2,
+          "lexical_score": 0.0625,
+          "lexical_match_count": 1,
+          "retrieval_strategy": "cjk_lexical_rerank",
+          "eligible": false,
+          "filter_reason": "retrieval_disabled"
+        },
+        {
+          "memory_id": "legacy_fiction",
+          "rank": 4,
+          "distance": 0.381224,
+          "semantic_rank": 1,
+          "lexical_score": 0.0,
+          "lexical_match_count": 0,
+          "retrieval_strategy": "cjk_lexical_rerank",
+          "eligible": false,
+          "filter_reason": "quality_not_active"
+        },
+        {
+          "memory_id": "linux_deployment",
+          "rank": 5,
+          "distance": 0.725821,
+          "semantic_rank": 4,
+          "lexical_score": 0.0,
+          "lexical_match_count": 0,
+          "retrieval_strategy": "cjk_lexical_rerank",
+          "eligible": false,
+          "filter_reason": "cjk_lexical_below_threshold"
+        }
+      ],
+      "injected_ids": [
+        "frontend_stack"
+      ],
+      "injected_tokens": 14
+    },
+    {
+      "case_id": "deployment_recall",
+      "candidate_ids": [
+        "linux_deployment",
+        "python_workflow",
+        "disabled_secret",
+        "legacy_fiction",
+        "frontend_stack"
+      ],
+      "candidates": [
+        {
+          "memory_id": "linux_deployment",
+          "rank": 1,
+          "distance": 0.529083,
+          "semantic_rank": 4,
+          "lexical_score": 0.125,
+          "lexical_match_count": 2,
+          "retrieval_strategy": "cjk_lexical_rerank",
+          "eligible": true,
+          "filter_reason": "eligible"
+        },
+        {
+          "memory_id": "python_workflow",
+          "rank": 2,
+          "distance": 0.523824,
+          "semantic_rank": 3,
+          "lexical_score": 0.0625,
+          "lexical_match_count": 1,
+          "retrieval_strategy": "cjk_lexical_rerank",
+          "eligible": false,
+          "filter_reason": "cjk_lexical_below_threshold"
+        },
+        {
+          "memory_id": "disabled_secret",
+          "rank": 3,
+          "distance": 0.241361,
+          "semantic_rank": 1,
+          "lexical_score": 0.0,
+          "lexical_match_count": 0,
+          "retrieval_strategy": "cjk_lexical_rerank",
+          "eligible": false,
+          "filter_reason": "retrieval_disabled"
+        },
+        {
+          "memory_id": "legacy_fiction",
+          "rank": 4,
+          "distance": 0.360754,
+          "semantic_rank": 2,
+          "lexical_score": 0.0,
+          "lexical_match_count": 0,
+          "retrieval_strategy": "cjk_lexical_rerank",
+          "eligible": false,
+          "filter_reason": "quality_not_active"
+        },
+        {
+          "memory_id": "frontend_stack",
+          "rank": 5,
+          "distance": 0.627131,
+          "semantic_rank": 5,
+          "lexical_score": 0.0,
+          "lexical_match_count": 0,
+          "retrieval_strategy": "cjk_lexical_rerank",
+          "eligible": false,
+          "filter_reason": "cjk_lexical_below_threshold"
+        }
+      ],
+      "injected_ids": [
+        "linux_deployment"
+      ],
+      "injected_tokens": 13
+    },
+    {
+      "case_id": "unrelated_negative",
+      "candidate_ids": [
+        "legacy_fiction",
+        "disabled_secret",
+        "python_workflow",
+        "linux_deployment",
+        "frontend_stack"
+      ],
+      "candidates": [
+        {
+          "memory_id": "legacy_fiction",
+          "rank": 1,
+          "distance": 0.483005,
+          "semantic_rank": 1,
+          "lexical_score": 0.0,
+          "lexical_match_count": 0,
+          "retrieval_strategy": "cjk_lexical_rerank",
+          "eligible": false,
+          "filter_reason": "quality_not_active"
+        },
+        {
+          "memory_id": "disabled_secret",
+          "rank": 2,
+          "distance": 0.522318,
+          "semantic_rank": 2,
+          "lexical_score": 0.0,
+          "lexical_match_count": 0,
+          "retrieval_strategy": "cjk_lexical_rerank",
+          "eligible": false,
+          "filter_reason": "retrieval_disabled"
+        },
+        {
+          "memory_id": "python_workflow",
+          "rank": 3,
+          "distance": 0.724674,
+          "semantic_rank": 3,
+          "lexical_score": 0.0,
+          "lexical_match_count": 0,
+          "retrieval_strategy": "cjk_lexical_rerank",
+          "eligible": false,
+          "filter_reason": "cjk_lexical_below_threshold"
+        },
+        {
+          "memory_id": "linux_deployment",
+          "rank": 4,
+          "distance": 0.741757,
+          "semantic_rank": 4,
+          "lexical_score": 0.0,
+          "lexical_match_count": 0,
+          "retrieval_strategy": "cjk_lexical_rerank",
+          "eligible": false,
+          "filter_reason": "cjk_lexical_below_threshold"
+        },
+        {
+          "memory_id": "frontend_stack",
+          "rank": 5,
+          "distance": 0.76733,
+          "semantic_rank": 5,
+          "lexical_score": 0.0,
+          "lexical_match_count": 0,
+          "retrieval_strategy": "cjk_lexical_rerank",
+          "eligible": false,
+          "filter_reason": "cjk_lexical_below_threshold"
+        }
+      ],
+      "injected_ids": [],
+      "injected_tokens": 0
+    },
+    {
+      "case_id": "current_instruction_override",
+      "candidate_ids": [
+        "python_workflow",
+        "disabled_secret",
+        "linux_deployment",
+        "frontend_stack",
+        "legacy_fiction"
+      ],
+      "candidates": [
+        {
+          "memory_id": "python_workflow",
+          "rank": 1,
+          "distance": 0.581759,
+          "semantic_rank": 3,
+          "lexical_score": 0.185185,
+          "lexical_match_count": 5,
+          "retrieval_strategy": "cjk_lexical_rerank",
+          "eligible": true,
+          "filter_reason": "eligible"
+        },
+        {
+          "memory_id": "disabled_secret",
+          "rank": 2,
+          "distance": 0.297367,
+          "semantic_rank": 1,
+          "lexical_score": 0.037037,
+          "lexical_match_count": 1,
+          "retrieval_strategy": "cjk_lexical_rerank",
+          "eligible": false,
+          "filter_reason": "retrieval_disabled"
+        },
+        {
+          "memory_id": "linux_deployment",
+          "rank": 3,
+          "distance": 0.626612,
+          "semantic_rank": 4,
+          "lexical_score": 0.037037,
+          "lexical_match_count": 1,
+          "retrieval_strategy": "cjk_lexical_rerank",
+          "eligible": false,
+          "filter_reason": "cjk_lexical_below_threshold"
+        },
+        {
+          "memory_id": "frontend_stack",
+          "rank": 4,
+          "distance": 0.675328,
+          "semantic_rank": 5,
+          "lexical_score": 0.037037,
+          "lexical_match_count": 1,
+          "retrieval_strategy": "cjk_lexical_rerank",
+          "eligible": false,
+          "filter_reason": "cjk_lexical_below_threshold"
+        },
+        {
+          "memory_id": "legacy_fiction",
+          "rank": 5,
+          "distance": 0.367241,
+          "semantic_rank": 2,
+          "lexical_score": 0.0,
+          "lexical_match_count": 0,
+          "retrieval_strategy": "cjk_lexical_rerank",
+          "eligible": false,
+          "filter_reason": "quality_not_active"
+        }
+      ],
+      "injected_ids": [
+        "python_workflow"
+      ],
+      "injected_tokens": 20
+    }
+  ]
+}

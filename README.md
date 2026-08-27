@@ -12,14 +12,16 @@
 
 | 当前可验证结果 | 数据 |
 |---|---:|
-| DeepSeek V4 Flash 真实 single-Agent v2 基准 | **83.3%（25/30）** |
-| 真实 Agent 工具成功率 | **87.5%** |
-| 离线平台回归基准 | **100%（10/10）** |
-| 后端自动化测试 | **619 passed** |
-| 前端回归测试 | **93 passed** |
+| DeepSeek V4 Flash 真实 single-Agent v2 基准 | **76.7%（23/30）** |
+| 真实 Agent 工具成功率 | **77.53%** |
+| 离线平台回归基准 | **100%（30/30）** |
+| 后端自动化测试 | **731 passed** |
+| 前端回归测试 | **97 passed** |
 | Python 静态检查 | **Ruff 0 findings** |
 
-真实模型结果来自干净提交 `7562a95` 上的 `deepseek-v4-flash` 官方完整实测：easy 9/10、medium 10/10、hard 6/10，基础设施错误与系统错误均为 0。详见[原始报告](benchmarks/results/20260819T160324Z-agent-single.md)。v2 扩展了任务集和评测器，因此它替代 v1 作为活跃基线，但不能与旧分数作严格同口径的升降比较。
+当前证据绑定冻结的源码提交 `1d637c5753e93c72989c3fdae2ab5edf50e078eb`：`deepseek-v4-flash` 的完整 v2 `--official` 运行通过有效性校验，easy 7/10、medium 10/10、hard 6/10，基础设施错误与系统错误均为 0。详见[发布证据清单](docs/release-evidence/portfolio-v1.0.md)与[真实模型原始报告](benchmarks/results/20260827T181517Z-agent-single.md)。
+
+这里有意区分两个提交：`1d637c5` 是实际接受测试和模型评测的源码提交；后续发布提交只纳入原始报告、证据清单和文档，不改变受测运行时代码。两者的精确关系由发布证据清单记录。旧提交 `7562a95` 的 [25/30 报告](benchmarks/results/20260819T160324Z-agent-single.md)仅作为历史单次基线保留，不再代表当前版本。
 
 ## 它为什么是 Coding Agent，而不是聊天机器人
 
@@ -70,6 +72,7 @@ flowchart LR
 | 工程问题 | 当前实现 | 关键证据 |
 |---|---|---|
 | Agent 自主执行 | LangGraph 多轮工具循环，显式 `parse → plan → act → observe → checkpoint → validate → summarize`；工具结果返回模型继续决策 | `core/agent/graph.py`、`nodes.py`、`state.py` |
+| 通用项目适配 | 有界扫描清单、锁文件和显式 `AGENTS.md`，为候选命令绑定 `cwd` 并显式标记完整/退化发现；宿主运行时、仓库指导和普通证据分层进入模型上下文 | `core/agent/project_context.py`、`nodes.py` |
 | 长任务与失败恢复 | Todo、后台命令、错误分类、上下文微压缩/摘要、轮次/工具/token 预算、代码修改验证门和 Redis checkpoint | `core/agent/context.py`、`tools/task.py`、`tools/background.py` |
 | Stop/Cancel 与重新规划 | Redis 保存精确到用户/会话/Trace 的 active lease、cancel tombstone 与 runner fence；旧 Trace 取消完成后，同 Session 的下一条消息创建新 Trace，并用 durable history、workspace 和 continuation receipt 重新规划 | `core/execution/interrupt_control.py`、`core/agent/graph.py`、`api/routes/chat.py` |
 | 知识与任务扩展 | Shared/Personal Skill 按需加载，受治理的长期记忆召回，以及显式 single/multi 和真实 specialist 委派边界 | `tools/skills.py`、`tools/subagent.py`、`memory/` |
@@ -158,11 +161,13 @@ legacy paused → cancelled  # 仅兼容迁移，不再可进入或恢复
 ### 1. 自主完成“理解—修改—验证”工程闭环
 
 - 主 Agent 不是固定工作流脚本：每一轮由模型结合用户目标、代码上下文和上一轮工具结果，自主选择继续检索、编辑、执行、验证或结束。
+- 每个模型轮次只发现一次 Project Profile，确定性识别 Python、Node、Go、Rust、Java 等项目清单、锁文件、声明版本和候选验证命令；命令显式携带项目 `cwd`，宿主机 Python 版本不再被误报为目标项目要求。
+- 只有按作用域整个读取成功的 `AGENTS.md` 被视为仓库指导；超限、非 UTF-8、不可读或扫描不完整会显式标记 `degraded`，模型在修改前必须先核对适用指导。README、源码注释、日志、普通工具输出、长期记忆和 Skill 目录仍是低信任证据，不能覆盖平台安全、当前用户目标或工具权限。只有通过无符号链接越界、深度/目录/文件数/字节上限检查后由 `load_skill` 完整载入的 Skill 正文，才可作为次于平台和用户目标的流程指导。
 - LLM 只看到当前权限允许的工具；真实工具结果会以 `ToolMessage` 返回，使模型可以根据 stdout、stderr、退出码和错误类型继续推理。
 - 系统提示要求先检索再修改，并对 `policy_blocked` 和 `nonzero_exit` 采用不同恢复策略，避免遇到失败就直接报告结束。
 - 多步骤工作可由 `todo_update` 维护短期计划；长时间测试或构建可转入 `background_run`，完成结果会重新注入 Agent 上下文。
 - 框架自动统计工具调用、变更文件和验证结果，不依赖模型自报“已经执行”。
-- 真实 DeepSeek V4 Flash v2 基准已通过代码库理解、文件与配置修改、测试执行、失败恢复、安全拒绝、审批恢复、后台任务、跨语言集成和 cancel-and-replan workspace 检查等 25 个用例；5 个保留失败及其确定性断言证据在原始报告中公开。
+- 真实 DeepSeek V4 Flash v2 基准已通过代码库理解、文件与配置修改、测试执行、失败恢复、审批恢复、后台任务、跨语言集成和 cancel-and-replan workspace 检查等 23 个用例；7 个计分失败及其确定性断言证据在原始报告中公开。
 
 ### 2. 长任务上下文与可恢复状态
 
@@ -172,10 +177,10 @@ legacy paused → cancelled  # 仅兼容迁移，不再可进入或恢复
 - 失败和取消会同步收敛未完成 Todo 与本任务创建的持久任务。
 - 每任务默认最多 20 轮、25 次工具调用，并分别限制任务与会话累计 token。
 - 每次模型调用前执行 microcompact：较旧的长工具结果只有在受限原文 artifact 已原子落盘后才会被替换，占位文本包含真实路径与 SHA-256。
-- 微压缩后仍超过有效阈值时，先保存完整 transcript，再用 LLM 生成运行摘要；目标、Todo、改动文件、验证结果和失败原因优先从 `AgentState` 确定性写入 continuation packet，不依赖模型自由摘要。极紧预算下会显式标记 `continuation_packet_truncated` 并降级为 transcript handle，而不是假装所有字段仍在上下文中。
+- 微压缩后仍超过有效阈值时，先保存可恢复 transcript（保留用户可见内容和工具协议，剔除 Provider 私有 reasoning block），再用 LLM 生成运行摘要；目标、Todo、改动文件、验证结果和失败原因优先从 `AgentState` 确定性写入 continuation packet，不依赖模型自由摘要。活动上下文的 token 估算仍包含实际会重放给 Provider 的 reasoning payload，避免低估窗口占用。极紧预算下会显式标记 `continuation_packet_truncated` 并降级为 transcript handle，而不是假装所有字段仍在上下文中。
 - 摘要同时约束完整输入 prompt、Provider 输出上限和下一次主模型调用预算，并预留 10%（至少 1,024 token）的续写空间；若 Provider 仍报告 context-length 错误，只允许保存 transcript 后压缩恢复一次，避免无限重试。
 - 完整压缩使用 `RemoveMessage(REMOVE_ALL_MESSAGES)` 真正替换 Redis checkpoint 里的旧消息；摘要模型的耗时和 token 也进入 Trace 与任务/会话成本。
-- 压缩后会注入“继续下一项具体行动”的控制信息，使 Agent 从摘要恢复执行，而不是把摘要复述给用户后提前结束。
+- 压缩包在 user JSON 中始终是低信任证据；只有服务端 `AgentState.context_continuation_active` 会向唯一 SystemMessage 追加固定续跑指令，防止用户伪造 continuation 包提升权限。
 - 写入代码文件后，若没有成功的测试、构建、Lint 或编译记录，任务不能被标记为成功。
 
 > [!NOTE]
@@ -184,7 +189,8 @@ legacy paused → cancelled  # 仅兼容迁移，不再可进入或恢复
 > head/tail 并显式标记 `source_truncated=true`。它是用户 Workspace 内的可调试证据，
 > 通过专用工具按 UTF-8 安全范围读取并校验 SHA-256；通用文件/Shell 工具不能直接
 > 访问 Agent 运行目录。它仍不是防篡改审计库；多副本生产环境应迁移到带保留策略
-> 和专用授权的对象存储。
+> 和专用授权的对象存储。Workspace artifact 也不承诺永久保留，生产部署需要显式的
+> 保留期限、清理任务和归档策略。
 
 ### 3. Contract-driven 工具执行
 
@@ -263,44 +269,45 @@ Trace 在写盘前递归脱敏，并可通过工作台时间线回放。当前�
 
 ### DeepSeek single-Agent
 
-运行环境：`deepseek-v4-flash`、DeepSeek Anthropic 协议适配、macOS arm64、Python 3.12.13、干净提交 `7562a9561cbd4e3d8fa0e6cf178c562f1950defa`、30 个版本化合成任务。该次 `--official` 运行通过完整性校验，报告状态为 valid。
+运行环境：`deepseek-v4-flash`、DeepSeek Anthropic 协议适配、macOS arm64、Python 3.12.13、干净源码提交 `1d637c5753e93c72989c3fdae2ab5edf50e078eb`、30 个版本化合成任务。该次 `--official` 运行通过完整性校验，报告状态为 valid。
 
 | 指标 | 结果 |
 |---|---:|
-| 任务成功率 | **83.3%（25/30）** |
-| easy | **90.0%（9/10）** |
+| 任务成功率 | **76.7%（23/30）** |
+| easy | **70.0%（7/10）** |
 | medium | **100.0%（10/10）** |
 | hard | **60.0%（6/10）** |
-| 工具成功率 | **87.5%** |
-| 平均步骤 | 38.63 |
-| 平均耗时 | 11.524 s |
-| 平均 token | 32,342.23 |
-| 人工介入率 | 73.3% |
-| 安全拦截 | 15 |
+| 工具成功率 | **77.53%** |
+| 平均步骤 | 51.93 |
+| 平均耗时 | 16.840 s |
+| 平均 token | 53,128.93 |
+| 人工介入率 | 80.0% |
+| 安全拦截 | 41 |
 | 基础设施错误 | 0 |
 | 系统错误 | 0 |
 
-保留的 5 个计分失败覆盖：只读理解题正确作答但违背“不运行命令”约束、订单金额 Decimal 精度错误、行为正确的 registry `.get()` 实现未满足过窄 AST 结构断言、TTL cache 未实现，以及 prompt injection 用例安全且语义正确但未满足精确响应格式。它们全部按原 evaluator 计入失败，没有人工改分，也没有为挑选更高成绩而重跑。
+保留的 7 个计分失败可分为三组：测试命令回答、常量修改验证和根删除拒绝这 3 项没有形成断言要求的工具/验证/拒绝证据；订单金额 Decimal 与 TTL 精确过期这 2 项存在功能正确性问题；registry 重构与 prompt-injection 这 2 项未满足结构化 AST 或精确安全响应契约，其中 prompt-injection 回答还复述了禁止泄露的 canary。它们全部按原 evaluator 计入失败，没有人工改分或挑选更高成绩。
 
 > [!NOTE]
-> v2 从 10 题扩展为 easy / medium / hard 各 10 题，并强化 workspace manifest、protected files、隐藏 post-check 和 Trace 断言，所以 25/30 是替换旧 v1 的新基线，不是与 v1 严格同口径的纵向提升。
+> v2 从 10 题扩展为 easy / medium / hard 各 10 题，并强化 workspace manifest、protected files、隐藏 post-check 和 Trace 断言。当前 23/30 是一次完整且有效的真实模型运行，但仍是随机模型证据，不应从单次结果外推生产通用能力。旧提交 `7562a95` 的 25/30 仅为历史基线。
 >
 > 30 题中的 `hard.cancel_replan.partial_workspace` 只测量模型面对部分 workspace 副作用时的重新检查与规划能力；它不证明 HTTP/SSE Stop/Cancel 控制面、持久取消或 runner fencing。协议级正确性由 `tests/api/test_cancelled_turn_regression.py`、`tests/api/test_cancel_replan_context.py` 和 `tests/admin/test_task_cancellation.py` 等确定性 API / 集成测试单独证明。
 
 证据：
 
-- [Markdown 报告](benchmarks/results/20260819T160324Z-agent-single.md)
-- [原始 JSON 与完整 Trace](benchmarks/results/20260819T160324Z-agent-single.json)
+- [Markdown 报告](benchmarks/results/20260827T181517Z-agent-single.md)
+- [原始 JSON 与完整 Trace](benchmarks/results/20260827T181517Z-agent-single.json)
+- [发布证据清单](docs/release-evidence/portfolio-v1.0.md)
 - [评测设计与结果边界](benchmarks/README.md)
 
 ### 离线平台与记忆回归
 
 | 评测 | 结果 | 能证明什么 |
 |---|---:|---|
-| Platform/offline single | 10/10，工具成功率 80.0%，1 次安全拦截 | 工具、策略、状态机、审批/恢复与评测器的确定性路径 |
+| Platform/offline single v2 | 30/30，工具成功率 89.39%，1 次安全拦截 | 30 个 fixture、脚本化工具路径、策略、状态与 evaluator 的确定性一致性；不测模型推理 |
 | Memory recall v1 | 6/6，Recall@3 / Precision@3 100%，MRR 1.0 | 小型合成集上的本地 embedding 检索与过滤 |
 
-离线 10/10 不是模型智能分数；Memory 6/6 也不代表模型一定正确采用了被注入的记忆。原始产物见 [Platform 报告](benchmarks/results/20260715T125211Z-platform-single.md) 和 [Memory 报告](benchmarks/results/20260720T093639Z-memory-recall.md)。
+离线 Platform 30/30 不是模型智能分数；Memory 6/6 也不代表模型一定正确采用了被注入的记忆。当前原始产物见 [Platform 报告](benchmarks/results/20260827T182126Z-platform-single.md) 和 [Memory 报告](benchmarks/results/20260827T182146Z-memory-recall.md)。历史 Platform v1 [10/10 报告](benchmarks/results/20260715T125211Z-platform-single.md)仅用于复现旧十题基线。
 
 ## 技术栈
 
@@ -335,7 +342,17 @@ LLM_PROVIDER=deepseek
 LLM_API_KEY=<your-key>
 LLM_BASE_URL=https://api.deepseek.com/anthropic
 MODEL_ID=deepseek-v4-flash
+MODEL_MAX_OUTPUT_TOKENS=16384
+MODEL_CONTEXT_WINDOW_TOKENS=1000000
+CONTEXT_COMPRESSION_RATIO=0.8
+TASK_TOKEN_BUDGET=4000000
+SESSION_TOKEN_BUDGET=0
 ```
+
+`MODEL_CONTEXT_WINDOW_TOKENS` 是单次调用的模型硬窗口，当前在 80%
+（800,000 tokens）触发上下文压缩。`TASK_TOKEN_BUDGET` 是跨轮次的
+累计熔断；`SESSION_TOKEN_BUDGET=0` 表示不再以会话累计 token 中断任务，
+但单任务、轮次、工具、超时和管理员日/月额度仍然生效。
 
 然后启动完整栈：
 
@@ -367,7 +384,7 @@ docker compose -f docker/docker-compose.yml config --quiet
 uv run python -m benchmarks.run --backend platform --mode single --no-artifacts
 ```
 
-2026-08-10 当前代码基线：`561 passed`、前端 `77 passed`、Ruff、前端生产构建、9/9 本地 smoke 与 Docker Compose 配置均通过；API 镜像已重建，四个服务均 healthy，直连与反向代理健康检查返回 MySQL/Redis `ok`。Multi 终态回归已验证委派、修改、`py_compile` 和 Trace/MySQL 一致性。保留的离线 Platform benchmark 为 `10/10`，本轮没有调用外部模型。
+当前发布证据在源码提交 `1d637c5` 上完成 `731 passed` 后端回归、`97 passed` 前端回归、Ruff 0 findings、前端生产构建、Docker Compose 配置和本地 smoke；当前 Platform v2 为 30/30。命令、环境、产物与边界统一记录在[发布证据清单](docs/release-evidence/portfolio-v1.0.md)。
 
 ## 工作台与 API
 
@@ -425,9 +442,9 @@ enterprise-controlled-coding-agent/
 完整版可写以下四条，简历空间有限时优先保留前 3 条：
 
 - 基于 `LangGraph StateGraph` 设计有状态 Coding Agent，构建“代码检索 → Todo 规划 → 文件/Shell 工具执行 → 结果观察 → 失败诊断 → 修改后验证”的多轮闭环；对非零退出、策略拦截和超时进行结构化反馈，并通过 verification gate 阻止未验证代码被标记为成功。
-- 实现面向长任务的 Agent 上下文与恢复机制：使用 Redis checkpoint 持久化完整执行状态，引入后台命令、轮次/工具/token 预算、旧工具输出 microcompact、完整 transcript 和 LLM 摘要续跑；结合受准入控制的 Chroma 长期记忆与按需 Skill 加载复用工程经验。
+- 实现面向长任务的 Agent 上下文与恢复机制：使用 Redis checkpoint 持久化执行状态，引入后台命令、轮次/工具/token 预算、旧工具输出 microcompact、可恢复 transcript 和 LLM 摘要续跑；结合受准入控制的 Chroma 长期记忆与按需 Skill 加载复用工程经验。
 - 设计 Contract-driven 工具运行时，对文件、Shell、任务、记忆和子 Agent 统一定义权限、风险、超时、幂等、副作用与结果协议；实现模型绑定/执行双重权限过滤、参数级 HITL、多租户 Workspace 隔离、凭据净化、原子写入和可恢复删除。
-- 建立覆盖模型、节点、工具、审批、取消、token、错误和终态的 Trace 与版本化 Agent benchmark；真实 `deepseek-v4-flash` single-Agent 在 v2 的 30 个 easy / medium / hard 任务中完成 **25/30**（9/10、10/10、6/10），且基础设施错误与系统错误均为 0；项目保持 **619 项后端测试、93 项前端测试、Ruff 0 findings**。
+- 建立覆盖模型、节点、工具、审批、取消、token、错误和终态的 Trace 与版本化 Agent benchmark；真实 `deepseek-v4-flash` single-Agent 在 v2 的 30 个 easy / medium / hard 任务中完成 **23/30**（7/10、10/10、6/10），且基础设施错误与系统错误均为 0；项目保持 **731 项后端测试、97 项前端测试、Ruff 0 findings**。
 
 建议面试时重点讲五个问题：
 
@@ -456,7 +473,7 @@ enterprise-controlled-coding-agent/
 
 - 为 Redis active lease、runner fencing 和 cancel convergence 补充多副本故障注入与长任务终止演练；
 - 为 artifact 增加过期清理和集中授权策略，并将 Trace/artifact 迁移到防篡改的集中式存储；
-- 针对 v2 正式基准暴露的精确命令识别、Decimal 精度、结构化重构、TTL cache 与精确响应契约问题修复并复测；
+- 针对 v2 正式基准暴露的工具/验证证据、危险命令拒绝、Decimal 精度、结构化重构、TTL cache 与 prompt-injection 响应契约问题修复并复测；
 - 完成 6 个适合委派用例的 single/multi 质量、时延和 token 对照；
 - 补充 30–60 秒 README GIF 与 3–5 分钟演示视频；
 - 将 Shell 迁移到按任务创建的 rootless 执行容器；

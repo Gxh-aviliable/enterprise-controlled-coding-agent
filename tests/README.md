@@ -4,11 +4,20 @@
 
 ## 当前基线
 
-截至 2026-08-10：
+截至 2026-08-28，当前发布证据绑定源码提交
+`1d637c5753e93c72989c3fdae2ab5edf50e078eb`：
 
-- 后端：561 passed
-- 前端：77 passed
+- 后端：731 passed
+- 前端：97 passed
 - Ruff：0 findings
+- 前端生产构建、Docker Compose 配置和本地 smoke：通过
+- Platform v2：30/30（离线确定性路径，不是模型智能分）
+- Memory recall：6/6（小型合成检索集）
+- 真实 Agent v2：23/30（`deepseek-v4-flash`，基础设施/系统错误均为 0）
+
+原始命令、产物、源码/证据提交关系和解释边界见
+[发布证据清单](../docs/release-evidence/portfolio-v1.0.md)。pytest、Platform、Memory
+和真实模型 Agent 是四种不同证据，不得合并成一个“测试通过率”。
 
 ## 目录
 
@@ -19,7 +28,7 @@ tests/
 ├── benchmark/      # benchmark runner 与 memory evaluator
 ├── config/         # 配置与运行时安全校验
 ├── core/
-│   ├── execution/  # 七态状态机、暂停控制和生命周期
+│   ├── execution/  # 可进入任务状态、Stop/Cancel、HITL 恢复和生命周期
 │   ├── test_context.py        # artifact-first、reducer 替换、transcript 与摘要续跑
 │   ├── test_tool_artifacts.py # 路径隔离、原子写入、脱敏、校验和双限长
 │   └── tools/      # 文件、Shell、任务、Skill、后台、委派和 Workspace

@@ -44,4 +44,23 @@ describe('ToolCallCard', () => {
     expect(wrapper.text()).toContain('Tool failed: policy_blocked')
     wrapper.unmount()
   })
+
+  it('distinguishes a declined approval from an execution failure', async () => {
+    const wrapper = mount(ToolCallCard, {
+      props: {
+        name: 'write_file',
+        status: 'rejected',
+        error: 'Not approved — this tool was not run.'
+      }
+    })
+
+    const card = wrapper.get('[data-tool-status="rejected"]')
+    expect(card.text()).toContain('Not approved')
+    expect(card.text()).not.toContain('Failed')
+
+    await wrapper.get('button.tool-header').trigger('click')
+    expect(wrapper.text()).toContain('Execution decision')
+    expect(wrapper.text()).toContain('this tool was not run')
+    wrapper.unmount()
+  })
 })
