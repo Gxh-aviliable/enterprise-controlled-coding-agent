@@ -8,17 +8,31 @@ from enterprise_agent.core.agent.tools import (
     tool_requires_confirmation,
 )
 from enterprise_agent.core.agent.tools.contracts import (
+    ArtifactPolicy,
     RiskLevel,
     ToolResultStatus,
     describe_tool,
+    get_tool_contract,
     normalize_tool_result,
     resolve_tool_risk,
+    should_persist_artifact,
     validate_tool_contracts,
 )
 
 
 def test_every_executable_tool_has_exactly_one_contract():
     validate_tool_contracts(ALL_TOOLS)
+
+
+def test_recovery_and_bounded_memory_tools_never_create_artifacts():
+    for name in ("read_tool_artifact", "search_memory", "list_memories"):
+        contract = get_tool_contract(name)
+        assert contract.artifact_policy is ArtifactPolicy.NEVER
+        assert should_persist_artifact(
+            contract,
+            raw_chars=1_000_000,
+            source_truncated=True,
+        ) is False
 
 
 def test_contract_exposes_input_schema_and_policy():
@@ -75,6 +89,26 @@ def test_jwt_permission_names_map_to_executable_tools():
     assert shell == {"bash", "background_run", "check_background"}
     assert {"task", "delegate_task", "spawn_teammate", "broadcast"}.issubset(advanced)
     assert "bash" not in basic
+
+
+def test_memory_query_mode_exposes_exactly_one_retrieval_path():
+    semantic = {
+        tool.name
+        for tool in get_tools_for_permissions(
+            ["tools:memory"],
+            memory_query_mode="semantic",
+        )
+    }
+    listing = {
+        tool.name
+        for tool in get_tools_for_permissions(
+            ["tools:memory"],
+            memory_query_mode="listing",
+        )
+    }
+
+    assert semantic == {"search_memory"}
+    assert listing == {"list_memories"}
 
 
 def test_shell_risk_is_argument_sensitive():

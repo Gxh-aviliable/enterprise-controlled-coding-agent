@@ -35,10 +35,22 @@ def test_runtime_rejects_missing_model_context_boundary():
         candidate.validate_runtime_security()
 
 
+def test_runtime_rejects_context_window_verified_for_another_model():
+    candidate = Settings(
+        JWT_SECRET_KEY="a" * 32,
+        DEBUG=False,
+        MODEL_ID="another-model",
+        MODEL_CONTEXT_WINDOW_MODEL_ID="deepseek-v4-flash",
+    )
+    with pytest.raises(RuntimeError, match="MODEL_CONTEXT_WINDOW_MODEL_ID"):
+        candidate.validate_runtime_security()
+
+
 def test_default_context_and_cumulative_budget_policy():
     fields = Settings.model_fields
 
     assert fields["MODEL_CONTEXT_WINDOW_TOKENS"].default == 1_000_000
+    assert fields["MODEL_CONTEXT_WINDOW_MODEL_ID"].default == "deepseek-v4-flash"
     assert fields["CONTEXT_COMPRESSION_RATIO"].default == 0.8
     assert fields["TASK_TOKEN_BUDGET"].default == 4_000_000
     assert fields["SESSION_TOKEN_BUDGET"].default == 0
