@@ -1,0 +1,249 @@
+{
+  "schema_version": "1.0",
+  "release": {
+    "name": "Portfolio v1.0",
+    "tag": "portfolio-v1.0",
+    "tag_target": "final_master_release_commit",
+    "evaluated_commit_is_tag_target": false,
+    "target_branches": [
+      "develop",
+      "master"
+    ],
+    "rationale": "The benchmark artifacts were produced from the clean evaluated source commit. Adding those artifacts and this manifest necessarily creates a later evidence commit; the tag is applied to the final master integration commit whose tree contains that evidence."
+  },
+  "source": {
+    "evaluated_commit": "1d637c5753e93c72989c3fdae2ab5edf50e078eb",
+    "agent_suite": {
+      "id": "mini-claude-code-v2",
+      "schema_version": "2.0",
+      "path": "benchmarks/v2/cases.json",
+      "sha256": "f63a76cd2be94db2439649fdeb8f735c243887cc8218dbf5edff22a6d4e3d64b"
+    },
+    "memory_suite": {
+      "id": "memory-recall-v1",
+      "path": "benchmarks/v1/memory_recall_cases.json",
+      "sha256": "54b5d47cce5e82f8fbb2d6e88cb19af0efb0669f8106b43cebe3d112b711f060"
+    },
+    "dependency_lock": {
+      "path": "uv.lock",
+      "sha256": "63a40b42f43e9a8edb39377417808126b34fa61e2ccc0e092305c67ffb3465bb"
+    }
+  },
+  "verification": {
+    "evaluated_commit": "1d637c5753e93c72989c3fdae2ab5edf50e078eb",
+    "environment": {
+      "platform": "macOS arm64",
+      "python": "3.12.13",
+      "node": "v24.17.0",
+      "npm": "11.13.0",
+      "uv": "0.11.31"
+    },
+    "checks": {
+      "backend_tests": {
+        "command": "uv run --frozen pytest -q",
+        "status": "passed",
+        "passed": 731
+      },
+      "ruff": {
+        "command": "uv run --frozen ruff check .",
+        "status": "passed",
+        "findings": 0
+      },
+      "smoke": {
+        "command": "uv run --frozen python scripts/smoke_test.py",
+        "status": "passed"
+      },
+      "frontend_tests": {
+        "command": "npm test --prefix frontend",
+        "status": "passed",
+        "passed": 97
+      },
+      "frontend_build": {
+        "command": "npm run build --prefix frontend",
+        "status": "passed"
+      },
+      "compose_config": {
+        "command": "docker compose -f docker/docker-compose.yml config --quiet",
+        "status": "passed"
+      }
+    }
+  },
+  "evidence": {
+    "agent": {
+      "json": {
+        "path": "benchmarks/results/20260827T181517Z-agent-single.json",
+        "sha256": "261ab58fd4aa47a4e9674f92c38534bbc175e1302ec3f41d459211ff194ec547"
+      },
+      "markdown": {
+        "path": "benchmarks/results/20260827T181517Z-agent-single.md",
+        "sha256": "a9cf1c549c4fae7d4581a2c6db4bdb7012ed6d7b4a4a5e53c6f926e8d662d758"
+      },
+      "expected": {
+        "schema_version": "2.0",
+        "suite_id": "mini-claude-code-v2",
+        "backend": "agent",
+        "mode": "single",
+        "model_id": "deepseek-v4-flash",
+        "official": {
+          "requested": true,
+          "valid": true
+        },
+        "summary": {
+          "case_count": 30,
+          "executed": 30,
+          "passed": 23,
+          "failed": 7,
+          "skipped": 0,
+          "infrastructure_errors": 0,
+          "system_errors": 0,
+          "task_success_rate": 0.7667,
+          "tool_success_rate": 0.7753,
+          "by_difficulty": {
+            "easy": {
+              "executed": 10,
+              "passed": 7,
+              "failed": 3
+            },
+            "medium": {
+              "executed": 10,
+              "passed": 10,
+              "failed": 0
+            },
+            "hard": {
+              "executed": 10,
+              "passed": 6,
+              "failed": 4
+            }
+          }
+        }
+      }
+    },
+    "platform": {
+      "json": {
+        "path": "benchmarks/results/20260827T182126Z-platform-single.json",
+        "sha256": "a31ab6882f3c8ed3ab19f6576f700f954a426d0f69e6dc3d1ed25b85cdd6bf01"
+      },
+      "markdown": {
+        "path": "benchmarks/results/20260827T182126Z-platform-single.md",
+        "sha256": "386c319a697570716536dd795c50c68c872ccb03b1c9dbcbb406f9ab4ab5dbc6"
+      },
+      "expected": {
+        "schema_version": "2.0",
+        "suite_id": "mini-claude-code-v2",
+        "backend": "platform",
+        "mode": "single",
+        "model_id": null,
+        "official": {
+          "requested": false,
+          "valid": false
+        },
+        "summary": {
+          "case_count": 30,
+          "executed": 30,
+          "passed": 30,
+          "failed": 0,
+          "skipped": 0,
+          "infrastructure_errors": 0,
+          "system_errors": 0,
+          "task_success_rate": 1.0,
+          "tool_success_rate": 0.8939,
+          "by_difficulty": {
+            "easy": {
+              "executed": 10,
+              "passed": 10,
+              "failed": 0
+            },
+            "medium": {
+              "executed": 10,
+              "passed": 10,
+              "failed": 0
+            },
+            "hard": {
+              "executed": 10,
+              "passed": 10,
+              "failed": 0
+            }
+          }
+        }
+      }
+    },
+    "memory": {
+      "json": {
+        "path": "benchmarks/results/20260827T182146Z-memory-recall.json",
+        "sha256": "8d000e60524bfb7bd207b0c5c8b946149b5483431a4de77ef8402ace5ca9e436"
+      },
+      "markdown": {
+        "path": "benchmarks/results/20260827T182146Z-memory-recall.md",
+        "sha256": "aea017d1ff379ef07ad83e40d2882195fdd66c751325edcffc1cee0c2c04f13e"
+      },
+      "expected": {
+        "report": {
+          "suite_id": "memory-recall-v1",
+          "case_count": 6,
+          "passed": 6,
+          "metrics": {
+            "recall_at_3": 1.0,
+            "precision_at_3": 1.0,
+            "mean_reciprocal_rank": 1.0,
+            "negative_false_injection_rate": 0.0,
+            "forbidden_injections": 0,
+            "trace_coverage": 1.0,
+            "token_budget_compliance": 1.0
+          }
+        }
+      }
+    },
+    "diagnostics": [
+      {
+        "purpose": "repeat five historical Agent failures without changing the official score",
+        "json": {
+          "path": "benchmarks/results/20260827T181737Z-agent-single.json",
+          "sha256": "0c798ade3a437a196ad54fccd3164616d7ec418ae968d905fe1c43b407a4690a"
+        },
+        "markdown": {
+          "path": "benchmarks/results/20260827T181737Z-agent-single.md",
+          "sha256": "e7d3d5c0a3b38faa6d93520560ca1893dc82702ae7e631ba5b2249cf08aad326"
+        },
+        "expected": {
+          "case_count": 5,
+          "passed": 1,
+          "failed": 4
+        }
+      },
+      {
+        "purpose": "second repeat of the same five historical Agent failures",
+        "json": {
+          "path": "benchmarks/results/20260827T181934Z-agent-single.json",
+          "sha256": "388d32094c2ce967a2a4010fb8d5077203a717e5cc483d11626052a8d0c5aa18"
+        },
+        "markdown": {
+          "path": "benchmarks/results/20260827T181934Z-agent-single.md",
+          "sha256": "4085dccb2401fdb3f776bc8a29b566e791c8a1e37d8ccf3fbe3b60a80c1ac2cf"
+        },
+        "expected": {
+          "case_count": 5,
+          "passed": 0,
+          "failed": 5
+        }
+      }
+    ]
+  },
+  "limitations": [
+    {
+      "id": "agent-host-paths",
+      "statement": "The raw Agent JSON contains local host absolute paths from the recorded macOS run and should be treated as reproducibility evidence, not a portable replay bundle."
+    },
+    {
+      "id": "ephemeral-tool-artifacts",
+      "statement": "Benchmark workspaces are temporary, so tool artifact files referenced by recorded paths were not permanently retained after the run."
+    },
+    {
+      "id": "memory-application-not-measured",
+      "statement": "The Memory benchmark measures retrieval and filtering; it does not prove that a chat model correctly applied an injected memory."
+    },
+    {
+      "id": "platform-not-model-quality",
+      "statement": "The Platform benchmark is deterministic and offline; its 30/30 result is not an LLM or autonomous Agent capability score."
+    }
+  ]
+}

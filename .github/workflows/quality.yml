@@ -48,6 +48,9 @@ jobs:
           uv run --frozen python -m benchmarks.run
           --suite v2 --backend platform --mode single --no-artifacts
 
+      - name: Release evidence integrity
+        run: uv run --frozen python scripts/check_release_evidence.py
+
   frontend:
     name: Frontend tests and production build
     runs-on: ubuntu-latest

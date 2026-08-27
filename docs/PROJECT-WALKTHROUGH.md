@@ -3684,8 +3684,9 @@ tool_name=delegate_task and ok=true
 
 ### 45.3 当前评测边界
 
-- 保留的正式 single-Agent 基线是 [v2 DeepSeek V4 Flash 25/30](../benchmarks/results/20260819T160324Z-agent-single.md)（[JSON](../benchmarks/results/20260819T160324Z-agent-single.json)）：easy 9/10、medium 10/10、hard 6/10，基础设施错误 0、系统错误 0；
-- v2 30 题 suite 与旧 v1 10 题的用例、断言和 evaluator 均不同，25/30 与旧 8/10 不能作为严格同口径的纵向对比；
+- 当前正式 single-Agent 基线是 [v2 DeepSeek V4 Flash 23/30](../benchmarks/results/20260827T181517Z-agent-single.md)（[JSON](../benchmarks/results/20260827T181517Z-agent-single.json)）：easy 7/10、medium 10/10、hard 6/10，工具成功率 77.53%，基础设施错误 0、系统错误 0；
+- 正式运行绑定干净候选源码 commit `1d637c5753e93c72989c3fdae2ab5edf50e078eb`，7 项失败全部保留；两次局部诊断复跑使用 dirty worktree 且不是 official run，不替代 23/30；
+- 旧 25/30、旧 Platform 10/10 与旧 v1 8/10 只作历史证据，不代表当前候选版本；v1 与 v2 的题集、断言和 evaluator 也不同；
 - `hard.cancel_replan.partial_workspace` 评估的是模型对部分 Workspace 的重新规划，不执行真实 Stop/Cancel 协议；lease、cancel tombstone、runner fencing 和 UI 输入锁由确定性测试证明，不计入模型成功率；
 - 六个 `delegation_suitable` 用例已定义；
 - single/multi 对照尚未完成；
@@ -3755,12 +3756,12 @@ uv run python -m benchmarks.run --backend platform --mode single --no-artifacts
 
 | Backend/套件 | 是否调用聊天模型 | 当前结果 | 正确解释 |
 |---|---:|---:|---|
-| Platform | 否 | 10/10 | 工具、策略、状态、评测器 |
+| Platform | 否 | 30/30 | 工具成功率 89.39%；确定性工具、策略、状态和评测器，不是模型能力 |
 | Memory | 否 | 6/6 | 小型检索与过滤 |
-| Agent single v2 | 是 | 25/30 | DeepSeek V4 Flash；easy 9/10、medium 10/10、hard 6/10；0 infrastructure/system errors |
+| Agent single v2 | 是 | 23/30 | DeepSeek V4 Flash；easy 7/10、medium 10/10、hard 6/10；工具成功率 77.53%；0 infrastructure/system errors |
 | Agent multi | 是 | 待测 | 尚无收益结论 |
 
-Agent single 行的权威 artifact 是 [Markdown 正式报告](../benchmarks/results/20260819T160324Z-agent-single.md)与[机器可读 JSON](../benchmarks/results/20260819T160324Z-agent-single.json)。旧 v1 与 v2 的 suite/evaluator 发生变化，因此不得把旧 8/10 与 v2 25/30 解释为严格同口径提升。模型基线不覆盖真实 Stop/Cancel 控制面；`hard.cancel_replan.partial_workspace` 只验证取消后部分 Workspace 场景中的模型重新规划，控制协议由 `tests/core/execution/test_interrupt_control.py`、`tests/api/test_chat_task_security.py`、`tests/api/test_cancelled_turn_regression.py` 和 `frontend/tests/ChatPanel.spec.js` 等确定性测试证明。
+当前权威产物包括 [Agent Markdown 正式报告](../benchmarks/results/20260827T181517Z-agent-single.md)与[机器可读 JSON](../benchmarks/results/20260827T181517Z-agent-single.json)、[Platform 30/30](../benchmarks/results/20260827T182126Z-platform-single.md)和[Memory 6/6](../benchmarks/results/20260827T182146Z-memory-recall.md)；完整验证链见[求职展示版 v1.0 证据清单](release-evidence/portfolio-v1.0.md)。7 项正式失败不能由后续局部诊断复跑追溯改分。模型基线不覆盖真实 Stop/Cancel 控制面；`hard.cancel_replan.partial_workspace` 只验证取消后部分 Workspace 场景中的模型重新规划，控制协议由 `tests/core/execution/test_interrupt_control.py`、`tests/api/test_chat_task_security.py`、`tests/api/test_cancelled_turn_regression.py` 和 `frontend/tests/ChatPanel.spec.js` 等确定性测试证明。
 
 `benchmarks/v2/cases.json` 每个用例包含：
 
@@ -4008,14 +4009,15 @@ uv run python scripts/smoke_test.py
 - `tests/README.md`
 - `benchmarks/README.md`
 - `benchmarks/v2/cases.json`
-- `benchmarks/results/20260819T160324Z-agent-single.md`
+- `benchmarks/results/20260827T181517Z-agent-single.md`
+- `docs/release-evidence/portfolio-v1.0.md`
 - `docs/portfolio-guide.md`
 
 需要回答：
 
-- Platform 10/10 为什么不能与 Agent v2 25/30 当作同一种分数？
-- v2 single 的五个失败说明什么？
-- 为什么旧 v1 8/10 与 v2 25/30 不能做严格纵向比较？
+- Platform 30/30 为什么不能与 Agent v2 23/30 当作同一种分数？
+- v2 single 的 7 个正式失败说明什么？
+- 为什么旧 25/30、局部诊断复跑与当前正式 23/30 不能互相替代？
 - 为什么 Stop/Cancel 控制面不计入模型成功率？
 - 为什么 Multi 目前没有收益结论？
 
@@ -4066,7 +4068,7 @@ uv run python -m benchmarks.run --backend platform --mode single --no-artifacts
 第 2 分钟：FastAPI → AgentState → LangGraph 主循环
 第 3 分钟：ToolContract → 权限 → 风险 → HITL → 执行器
 第 4 分钟：验证门、Checkpoint、Trace 和记忆治理
-第 5 分钟：v2 DeepSeek V4 Flash 25/30、Platform 10/10、当前安全/Multi 边界
+第 5 分钟：v2 DeepSeek V4 Flash 23/30、Platform 30/30、当前安全/Multi 边界
 ```
 
 ## C. 最容易讲错的十件事
@@ -4088,6 +4090,7 @@ uv run python -m benchmarks.run --backend platform --mode single --no-artifacts
 - [工具与能力矩阵](capability-matrix.md)
 - [长期记忆治理](memory-governance.md)
 - [Benchmark 设计](../benchmarks/README.md)
+- [求职展示版 v1.0 证据清单](release-evidence/portfolio-v1.0.md)
 - [作品集与面试指南](portfolio-guide.md)
 - [管理员控制台](admin-console.md)
 
