@@ -794,9 +794,9 @@ Agent 节点不需要知道具体 SDK。它只依赖 LangChain 的统一 ChatMod
 ### 关键代码块一：预算先于模型调用
 
 ```python
-if session_tokens_used >= settings.SESSION_TOKEN_BUDGET:
+if settings.SESSION_TOKEN_BUDGET > 0 and session_tokens_used >= settings.SESSION_TOKEN_BUDGET:
     budget_scope = "Session"
-elif task_tokens_used >= settings.TASK_TOKEN_BUDGET:
+elif settings.TASK_TOKEN_BUDGET > 0 and task_tokens_used >= settings.TASK_TOKEN_BUDGET:
     budget_scope = "Task"
 
 if budget_scope:
@@ -822,16 +822,19 @@ lc_messages.insert(
 
 这里组合：
 
-- 固定 Agent 行为规范；
-- 当前运行环境；
-- 可用 Skill；
+- 固定的通用 Coding Agent 工作流、权限边界和证据真实性要求；
+- 最小工具运行环境，只描述 OS family、Shell、Workspace 和路径策略，不把宿主 Python 版本当成项目要求；
+- `project_context.py` 对清单、锁文件、声明版本和候选验证命令生成的有界 Project Profile，每条命令携带项目 `cwd`；
+- 根目录与嵌套 `AGENTS.md` 的路径作用域和来源；只注入完整有效文件，超限/不可读/非 UTF-8 或扫描触发上限时显式标记 `discovery.status=degraded`；
+- JSON 格式的可用 Skill 元数据目录；
 - Single/Multi 模式约束；
-- 本轮临时召回的长期记忆。
+- 本轮 continuation receipt 和临时召回的长期记忆参考数据。
 
-召回内容由 `_build_runtime_system_prompt()` 作为参考数据合并到唯一
-`SystemMessage`，不伪装成新的 `HumanMessage`。它也不直接写回
-`messages`，避免进入 checkpoint 后在未来每一轮永久重复。系统提示同时
-声明，记忆中的历史 `[User Request]` 只是证据，不是当前或“上一条”待执行请求。
+动态内容由 `_build_runtime_system_prompt()` 合并到唯一 `SystemMessage`，但内部
+明确区分平台规则、仓库指导和参考数据。Project Profile 每个模型轮次只扫描一次并在估算/实际调用间复用，不含绝对服务路径和时间戳，
+普通代码变更不会让稳定前缀无意义地抖动。Skill 描述、记忆和 receipt 使用 JSON 数据
+边界，不伪装成新的用户请求，也不直接写回 `messages`，避免进入 checkpoint 后在未来
+每一轮永久重复。普通 README、源码、日志和工具输出不能被提升为仓库指令。
 
 ### 关键代码块三：调用和重试
 
@@ -2650,7 +2653,8 @@ Settings
 边界：
 
 - 不同 Provider 的 token usage 字段和错误类型仍有差异；
-- `TASK_TOKEN_BUDGET=1_000_000` 是平台预算，不代表任意模型都支持 100 万上下文；
+- `MODEL_CONTEXT_WINDOW_TOKENS=1_000_000` 来自当前默认模型的硬上下文窗口；
+  `TASK_TOKEN_BUDGET=4_000_000` 是跨模型轮次的平台熔断，两者不是同一概念；
 - 公网 endpoint 会让发送给模型的上下文离开内网。
 
 ---
@@ -2661,21 +2665,27 @@ Settings
 
 - `core/agent/nodes.py:get_llm_with_tools`
 - `core/agent/nodes.py:_build_environment_info`
+- `core/agent/project_context.py:build_project_context`
 - `core/agent/nodes.py:_build_available_skills`
 - `core/agent/nodes.py:_build_execution_mode_info`
 
 系统提示包含：
 
-- 工程 Agent 的角色和完成标准；
-- 当前操作系统和 Shell 规则；
+- 通用 Coding Agent 的授权层级、工作流和完成标准；
+- 工具运行 OS family 和 Shell 规则，但不注入宿主 Python 版本；
 - Workspace 相对路径要求；
+- 清单/锁文件驱动的 Project Profile，候选命令的 `cwd`，以及带目录作用域的 `AGENTS.md`；
 - Todo、验证和汇报要求；
-- 可用 Skill；
+- JSON 格式的可用 Skill 元数据；
 - Single/Multi 模式边界；
-- 长期记忆使用约束；
-- 安全策略提醒。
+- 长期记忆、continuation 和普通仓库内容的数据边界；
+- 提示词注入与证据真实性约束。
 
-动态提示只能帮助模型做出更好的申请，不能替代执行器策略。
+上下文摘要、任务记忆摘要、重要性评分和偏好提取也使用固定
+`SystemMessage` 加 JSON 数据消息，避免把待分析文本插入规则本身。动态提示只能帮助
+模型做出更好的申请，不能替代执行器权限、Tool Contract、HITL 或 Workspace 隔离。
+压缩后的 continuation packet 仍是 user JSON 证据；只有服务端状态中的
+`context_continuation_active=true` 才会在唯一 SystemMessage 追加固定续跑规则，用户伪造同形 JSON 不能提权。
 
 ---
 
@@ -3324,11 +3334,14 @@ pytest -q test_calculator.py
 |---|---:|---|
 | `MAX_AGENT_ROUNDS` | 20 | 防止模型无限循环 |
 | `MAX_TOOL_CALLS_PER_TASK` | 25 | 防止工具失控 |
-| `TASK_TOKEN_BUDGET` | 1,000,000 | 单任务模型用量上限 |
-| `SESSION_TOKEN_BUDGET` | 1,000,000 | 单会话累计模型用量上限 |
+| `TASK_TOKEN_BUDGET` | 4,000,000 | 单任务跨轮次模型用量熔断；0 可显式关闭 |
+| `SESSION_TOKEN_BUDGET` | 0（关闭） | 可选的单会话累计用量上限 |
 | `CONFIRMATION_TIMEOUT_SECONDS` | 300 | 防止永久等待 |
 
-平台预算是安全阈值，不是性能目标。设置 100 万不意味着应该让每个任务消耗 100 万 token。
+平台预算是安全阈值，不是模型上下文大小。配置值为 0 仅关闭
+该级累计 token 熔断，不会关闭轮次、工具、超时和用户日/月额度。
+当前会话级熔断关闭，单任务仍保留 400 万 token 上限，避免 20 轮
+都携带近满上下文时出现千万级累计输入。
 
 ---
 
@@ -3384,9 +3397,10 @@ pytest -q test_calculator.py
 
 ### 39.2 自动完整压缩
 
-- microcompact 后的活动上下文估计达到有效阈值；若配置
-  `MODEL_CONTEXT_WINDOW_TOKENS`，有效阈值取显式上限与模型窗口比例的较小值；
-- 保存 transcript；
+- microcompact 后的活动上下文估计达到有效阈值；有效阈值直接由
+  `MODEL_CONTEXT_WINDOW_TOKENS × CONTEXT_COMPRESSION_RATIO` 计算，当前为
+  `1,000,000 × 0.8 = 800,000 tokens`；`TOKEN_THRESHOLD` 仅作为缺少模型窗口时的兼容回退；
+- 保存可恢复 transcript：保留用户可见内容和工具调用协议，剔除 Provider 私有 reasoning block；活动上下文的 token 估算仍按完整 Provider replay payload 计算；
 - 从 `AgentState` 确定性构造目标、Todo、改动文件、验证和失败证据；
 - 调模型生成辅助性运行摘要；
 - 给摘要完整输入与 Provider 输出设置上限，并为下一次主模型调用预留 10%（至少
@@ -4041,7 +4055,7 @@ uv run python -m benchmarks.run --backend platform --mode single --no-artifacts
 | Trace | 一趟任务从请求到终态的结构化执行证据 |
 | microcompact | 不调用总结模型的轻量上下文清理 |
 | artifact | 工具输出在模型预览/微压缩前落盘的受限、脱敏、带校验和证据 |
-| transcript | 完整/手动压缩前原子保存的规范化当前任务上下文 |
+| transcript | 完整/手动压缩前原子保存的可恢复上下文；保留可见内容与工具协议，不持久化 Provider 私有 reasoning block |
 | Active Memory | 允许参与召回的高质量长期记忆 |
 | Legacy Memory | 可查看/删除，但不能自动注入的旧记录 |
 

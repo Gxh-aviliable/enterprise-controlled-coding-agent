@@ -35,6 +35,8 @@ class AgentState(TypedDict):
 
     # 上下文管理
     context_summary: Optional[str]
+    context_continuation_active: bool
+    project_context_snapshot: str
     token_count: int  # Current active-context estimate; never cumulative model spend
     session_token_count: int  # Cumulative model usage across requests in this chat session
     transcript_path: Optional[str]  # Path to saved transcript after compression
@@ -51,6 +53,12 @@ class AgentState(TypedDict):
     task_token_count: int  # Per-task model usage, separate from total context estimate
     should_compress: bool
     context_overflow_recovery_attempts: int
+    # Model completion integrity. Provider metadata is stored as scalar state,
+    # never copied into replayed AI messages.
+    last_model_stop_reason: Optional[str]
+    incomplete_response_recovery_attempts: int
+    completion_gate_recovery_attempts: int
+    task_requires_execution: bool
     should_end: bool
     should_end_after_save: bool  # 标记：文本响应完成后应该结束（由 llm_call_node 设置）
 

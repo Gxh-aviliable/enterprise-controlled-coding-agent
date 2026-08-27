@@ -224,11 +224,17 @@ async function openEventStream(path, options, handlers, fallbackError, label) {
     const res = await request(path, options)
     if (!res.ok) {
       let errText = fallbackError
+      let detail = null
       try {
         const err = await res.json()
+        detail = err?.detail ?? null
         errText = errorMessage(err.detail, errText)
       } catch {}
-      handlers.onError?.(errText)
+      handlers.onError?.(errText, {
+        phase: 'request',
+        httpStatus: res.status,
+        detail
+      })
       return
     }
     await consumeEventStream(res, handlers, label)

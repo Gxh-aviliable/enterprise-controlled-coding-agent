@@ -84,6 +84,72 @@ async def test_session_token_budget_stops_before_another_model_call(monkeypatch,
     assert budget_event["data"] == {"scope": "session", "used": 100, "limit": 100}
 
 
+async def test_task_token_budget_stops_before_another_model_call(monkeypatch, tmp_path):
+    monkeypatch.setenv("WORKSPACE_BASE", str(tmp_path))
+    monkeypatch.setattr(nodes.settings, "SESSION_TOKEN_BUDGET", 0)
+    monkeypatch.setattr(nodes.settings, "TASK_TOKEN_BUDGET", 100)
+    _start(40, "trace-task-budget")
+
+    result = await nodes.llm_call_node({
+        "trace_id": "trace-task-budget",
+        "session_id": "session",
+        "user_id": 40,
+        "permissions": ["tools:basic"],
+        "task_status": "running",
+        "messages": [{"role": "user", "content": "Continue"}],
+        "task_token_count": 100,
+        "session_token_count": 500,
+        "token_count": 10,
+        "round_count": 1,
+    })
+
+    assert result["task_status"] == "failed"
+    assert result["failure_reason"] == "Task token budget exhausted (100 / 100)."
+    trace = get_trace_store().get_trace(40, "trace-task-budget")
+    budget_event = next(event for event in trace["events"] if event["type"] == "budget")
+    assert budget_event["data"] == {"scope": "task", "used": 100, "limit": 100}
+
+
+async def test_zero_token_budgets_disable_cumulative_guard(monkeypatch, tmp_path):
+    monkeypatch.setenv("WORKSPACE_BASE", str(tmp_path))
+    monkeypatch.setattr(nodes.settings, "TASK_TOKEN_BUDGET", 0)
+    monkeypatch.setattr(nodes.settings, "SESSION_TOKEN_BUDGET", 0)
+    _start(41, "trace-unlimited-token-budgets")
+    calls = 0
+
+    class FakeBoundModel:
+        async def ainvoke(self, _messages):
+            nonlocal calls
+            calls += 1
+            return AIMessage(
+                content="Still allowed",
+                usage_metadata={"input_tokens": 10, "output_tokens": 5, "total_tokens": 15},
+            )
+
+    monkeypatch.setattr(
+        nodes,
+        "get_llm_with_tools",
+        lambda _permissions, _execution_mode="single_agent": FakeBoundModel(),
+    )
+    result = await nodes.llm_call_node({
+        "trace_id": "trace-unlimited-token-budgets",
+        "session_id": "session",
+        "user_id": 41,
+        "permissions": ["tools:basic"],
+        "task_status": "running",
+        "messages": [{"role": "user", "content": "Continue"}],
+        "task_token_count": 10_000_000,
+        "session_token_count": 20_000_000,
+        "token_count": 10,
+        "round_count": 1,
+    })
+
+    assert calls == 1
+    assert result["task_token_count"] == 10_000_015
+    assert result["session_token_count"] == 20_000_015
+    assert result["should_end_after_save"] is True
+
+
 async def test_provider_context_overflow_requests_one_compression_recovery(
     monkeypatch,
     tmp_path,
@@ -195,8 +261,8 @@ async def test_tool_trace_links_artifact_without_copying_raw_output(monkeypatch,
 
 async def test_auto_compact_records_summary_cost_and_context_event(monkeypatch, tmp_path):
     monkeypatch.setenv("WORKSPACE_BASE", str(tmp_path))
-    monkeypatch.setattr(nodes.settings, "TOKEN_THRESHOLD", 20_000)
-    monkeypatch.setattr(nodes.settings, "MODEL_CONTEXT_WINDOW_TOKENS", 128_000)
+    monkeypatch.setattr(nodes.settings, "MODEL_CONTEXT_WINDOW_TOKENS", 25_000)
+    monkeypatch.setattr(nodes.settings, "CONTEXT_COMPRESSION_RATIO", 0.8)
     _start(37, "trace-auto-compact")
 
     class FakeSummaryModel:
@@ -273,6 +339,40 @@ async def test_finalize_wrapper_records_node_then_finishes_trace(monkeypatch, tm
         "finalize_task",
         "task_finished",
     ]
+
+
+async def test_finalize_wrapper_excludes_thinking_from_trace_summary(monkeypatch, tmp_path):
+    monkeypatch.setenv("WORKSPACE_BASE", str(tmp_path))
+    _start(39, "trace-final-thinking")
+
+    async def fake_finalize(_state):
+        return {
+            "task_status": "succeeded",
+            "execution_phase": "summarizing",
+            "failure_reason": None,
+        }
+
+    wrapped = _traced_node("finalize_task", fake_finalize)
+    await wrapped({
+        "trace_id": "trace-final-thinking",
+        "user_id": 39,
+        "task_status": "running",
+        "messages": [
+            {"role": "assistant", "content": "Earlier visible progress"},
+            {
+                "role": "assistant",
+                "content": [{
+                    "type": "thinking",
+                    "thinking": "private reasoning must not become the result",
+                    "signature": "sig",
+                }],
+            },
+        ],
+    })
+
+    trace = get_trace_store().get_trace(39, "trace-final-thinking")
+    assert trace["result_summary"] == "Earlier visible progress"
+    assert "private reasoning" not in json.dumps(trace, ensure_ascii=False)
 
 
 async def test_human_interrupt_is_traced_as_waiting_control_flow(monkeypatch, tmp_path):

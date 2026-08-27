@@ -70,7 +70,17 @@ describe('API client structured errors', () => {
     })
 
     await vi.waitFor(() => {
-      expect(onError).toHaveBeenCalledWith('Concurrent task quota exceeded')
+      expect(onError).toHaveBeenCalledWith(
+        'Concurrent task quota exceeded',
+        {
+          phase: 'request',
+          httpStatus: 429,
+          detail: {
+            code: 'quota_exceeded',
+            message: 'Concurrent task quota exceeded'
+          }
+        }
+      )
     })
   })
 })

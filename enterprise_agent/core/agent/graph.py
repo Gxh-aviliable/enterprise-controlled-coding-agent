@@ -70,6 +70,26 @@ _checkpointer_pool = redis_async.ConnectionPool(
 _checkpointer_client = redis_async.Redis(connection_pool=_checkpointer_pool)
 
 
+def _assistant_visible_text(content) -> str:
+    """Return only user-visible assistant text for terminal Trace summaries."""
+    if isinstance(content, str):
+        return content.strip()
+    if not isinstance(content, list):
+        return ""
+
+    parts = []
+    for block in content:
+        if isinstance(block, dict) and block.get("type") == "text":
+            text = str(block.get("text") or "").strip()
+        elif getattr(block, "type", "") == "text":
+            text = str(getattr(block, "text", "") or "").strip()
+        else:
+            text = ""
+        if text:
+            parts.append(text)
+    return "\n".join(parts)
+
+
 def _traced_node(node_name, node):
     """Wrap a LangGraph node with local duration/error tracing."""
 
@@ -157,8 +177,10 @@ def _traced_node(node_name, node):
                                 if isinstance(message, dict)
                                 else getattr(message, "content", "")
                             )
-                            result_summary = str(content)
-                            break
+                            visible_text = _assistant_visible_text(content)
+                            if visible_text:
+                                result_summary = visible_text
+                                break
                     store.finish_trace(
                         user_id=state["user_id"],
                         trace_id=state["trace_id"],

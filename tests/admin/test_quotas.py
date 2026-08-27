@@ -15,6 +15,14 @@ class FakeTraceStore:
         return self.traces[:limit]
 
 
+class PerUserTraceStore:
+    def __init__(self, traces_by_user):
+        self.traces_by_user = traces_by_user
+
+    def list_traces(self, user_id, limit=500):
+        return self.traces_by_user.get(user_id, [])[:limit]
+
+
 class FakeRedis:
     def __init__(self, initial=0):
         self.value = initial
@@ -57,6 +65,15 @@ class FakeDb:
 
     async def rollback(self):
         self.rollbacks += 1
+
+
+class PerUserFakeDb(FakeDb):
+    def __init__(self, quotas_by_user):
+        super().__init__(quota=None)
+        self.quotas_by_user = quotas_by_user
+
+    async def get(self, _model, user_id):
+        return self.quotas_by_user.get(user_id)
 
 
 def make_quota(**overrides):
@@ -124,6 +141,84 @@ async def test_concurrent_limit_releases_rejected_reservation(monkeypatch):
     assert exc_info.value.detail["code"] == "concurrent_task_limit_exceeded"
     assert redis.value == 1
     assert db.commits == 0
+
+
+@pytest.mark.asyncio
+async def test_disabled_metering_still_reserves_and_releases_concurrent_slot(monkeypatch):
+    redis = FakeRedis()
+
+    def traces_must_not_be_read():
+        raise AssertionError("Periodic traces should not be read when metering is disabled")
+
+    monkeypatch.setattr(quotas, "get_trace_store", traces_must_not_be_read)
+
+    async def get_fake_redis():
+        return redis
+
+    monkeypatch.setattr(quotas, "get_redis", get_fake_redis)
+    db = FakeDb(make_quota(enabled=False))
+
+    lease = await quotas.acquire_task_quota(1, db)
+
+    assert redis.value == 1
+    assert db.added is None
+    assert db.commits == 0
+    await lease.release()
+    assert redis.value == 0
+    assert redis.deleted is True
+
+
+@pytest.mark.asyncio
+async def test_disabled_metering_does_not_disable_concurrent_limit(monkeypatch):
+    redis = FakeRedis(initial=1)
+
+    def traces_must_not_be_read():
+        raise AssertionError("Periodic traces should not be read when metering is disabled")
+
+    monkeypatch.setattr(quotas, "get_trace_store", traces_must_not_be_read)
+
+    async def get_fake_redis():
+        return redis
+
+    monkeypatch.setattr(quotas, "get_redis", get_fake_redis)
+    db = FakeDb(make_quota(enabled=False, concurrent_task_limit=1))
+
+    with pytest.raises(HTTPException) as exc_info:
+        await quotas.acquire_task_quota(1, db)
+
+    assert exc_info.value.detail["code"] == "concurrent_task_limit_exceeded"
+    assert redis.value == 1
+    assert db.commits == 0
+
+
+@pytest.mark.asyncio
+async def test_metering_exemption_is_scoped_to_exact_user_id(monkeypatch):
+    today = datetime.now(timezone.utc).isoformat()
+    store = PerUserTraceStore({
+        1: [{"started_at": today, "metrics": {"total_tokens": 2_000}}],
+        2: [{"started_at": today, "metrics": {"total_tokens": 2_000}}],
+    })
+    redis = FakeRedis()
+    monkeypatch.setattr(quotas, "get_trace_store", lambda: store)
+
+    async def get_fake_redis():
+        return redis
+
+    monkeypatch.setattr(quotas, "get_redis", get_fake_redis)
+    db = PerUserFakeDb({
+        1: make_quota(enabled=False, daily_token_limit=1_000),
+        2: make_quota(enabled=True, daily_token_limit=1_000),
+    })
+
+    exempt_lease = await quotas.acquire_task_quota(1, db)
+    assert redis.value == 1
+    await exempt_lease.release()
+
+    with pytest.raises(HTTPException) as exc_info:
+        await quotas.acquire_task_quota(2, db)
+
+    assert exc_info.value.detail["code"] == "daily_token_limit_exceeded"
+    assert redis.value == 0
 
 
 @pytest.mark.asyncio

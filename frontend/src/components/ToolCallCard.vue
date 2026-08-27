@@ -11,6 +11,7 @@
         <span v-if="status === 'running'" class="spinner"></span>
         <svg v-else-if="status === 'waiting'" width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4"><circle cx="12" cy="12" r="8.5"/><path d="M12 7.5v5l3 1.8"/></svg>
         <svg v-else-if="status === 'done'" width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.7"><polyline points="19 7 10 16 5 11"/></svg>
+        <svg v-else-if="status === 'rejected'" width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4"><circle cx="12" cy="12" r="8.5"/><path d="M7.5 16.5l9-9"/></svg>
         <svg v-else width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.7"><line x1="17" y1="7" x2="7" y2="17"/><line x1="7" y1="7" x2="17" y2="17"/></svg>
       </span>
 
@@ -24,15 +25,24 @@
     </button>
 
     <div v-show="expanded" class="tool-body">
-      <div class="tool-body-label">Execution output</div>
+      <div class="tool-body-label">
+        {{ status === 'rejected' ? 'Execution decision' : 'Execution output' }}
+      </div>
       <div v-if="result" class="tool-output">
         <pre>{{ result }}</pre>
       </div>
-      <div v-else-if="error" class="tool-error">{{ error }}</div>
+      <div v-else-if="error" :class="status === 'rejected' ? 'tool-rejection' : 'tool-error'">
+        {{ error }}
+      </div>
+      <div v-else-if="status === 'rejected'" class="tool-rejection">
+        The tool was not run because approval was declined.
+      </div>
       <div v-else class="tool-waiting">
         {{ status === 'waiting' ? 'Waiting for approval before this tool can run.' : 'No output has been received yet.' }}
       </div>
-      <div v-if="result && error" class="tool-error">{{ error }}</div>
+      <div v-if="result && error" :class="status === 'rejected' ? 'tool-rejection' : 'tool-error'">
+        {{ error }}
+      </div>
     </div>
   </article>
 </template>
@@ -42,7 +52,7 @@ import { computed, ref } from 'vue'
 
 const props = defineProps({
   name: { type: String, required: true },
-  status: { type: String, default: 'running' },  // 'running' | 'waiting' | 'done' | 'error'
+  status: { type: String, default: 'running' },  // 'running' | 'waiting' | 'done' | 'rejected' | 'error'
   result: { type: String, default: '' },
   error: { type: String, default: '' },
   duration: { type: Number, default: null }
@@ -61,6 +71,7 @@ const stateLabel = computed(() => {
   if (props.status === 'running') return 'Running'
   if (props.status === 'waiting') return 'Approval needed'
   if (props.status === 'done') return durationLabel.value || 'Complete'
+  if (props.status === 'rejected') return 'Not approved'
   return 'Failed'
 })
 
@@ -84,6 +95,7 @@ function toggle() {
 .tool-card.running { --tool-accent: #d97706; }
 .tool-card.waiting { --tool-accent: #4f46e5; }
 .tool-card.done { --tool-accent: #059669; }
+.tool-card.rejected { --tool-accent: #b45309; }
 .tool-card.error { --tool-accent: #dc2626; }
 
 .tool-card:hover {
@@ -223,6 +235,12 @@ function toggle() {
 
 .tool-error {
   color: #dc2626;
+  font-size: var(--text-sm);
+  padding: 6px 0;
+}
+
+.tool-rejection {
+  color: var(--tool-accent);
   font-size: var(--text-sm);
   padding: 6px 0;
 }

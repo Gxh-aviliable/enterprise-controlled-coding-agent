@@ -9,6 +9,13 @@
 - `platform`: offline and deterministic, and intentionally supports `single` mode only. It validates suite fixtures, workspace isolation, tools, selected policy blocks, scripted representative confirmation/recovery flows, Trace collection, and evaluators. It does **not** measure LLM reasoning quality or an exhaustive real-policy intervention rate.
 - `agent`: invokes the configured model through the real in-memory LangGraph, tools, confirmation interrupts, verification gate, and Trace pipeline. It is the source of model task-success, token, and latency measurements.
 
+These results are intentionally separate: `platform` passing 30/30 means the 30
+fixtures, scripted tool paths, and deterministic assertions are internally
+consistent. It never asks a model to produce a response, so it cannot exercise
+provider finish reasons, token-limit truncation, thinking-only output, or model
+decisions to stop too early. The checked-in real-Agent v2 baseline is 25/30,
+not 30/30.
+
 The 30-case Agent score measures completion of synthetic coding tasks. It does **not** by itself prove the HTTP/SSE Stop/Cancel control plane, durable cancellation, or cancel-and-replan semantics. Those behaviors are evidenced separately by deterministic API and integration tests, for example:
 
 ```bash
@@ -67,6 +74,14 @@ Unless `--no-artifacts` is supplied, reports are written as raw JSON plus a huma
 
 ## V2 evaluator safeguards
 
+- Before task assertions are scored, the Agent runner applies a terminal-integrity
+  guard. A graph state marked `succeeded` is recorded as `system_error` when the
+  provider stop reason indicates token truncation, the terminal assistant message
+  has no visible text (including thinking-only output), pending/in-progress Todos
+  remain, recovery counters were not cleared, or a task classified as requiring
+  execution has no successful execution evidence. These are deterministic runner
+  regressions; they do not increase the formal suite beyond 30 tasks and do not
+  imply that the offline `platform` backend exercises real provider streaming.
 - Workspace manifests hash the initial and final user-visible files, including type, content digest, size, mode, mtime, and ctime. Operational `.agent` artifacts are excluded. Assertions can require an exact added/modified/deleted path set.
 - `protected_files` supports exact paths and glob patterns. A case that declares protected paths automatically receives final-state content/metadata integrity plus successful first-party `write_file` / `edit_file` / `delete_paths` Trace checks. This catches normal direct and shell touch-and-restore attempts, but it remains bounded benchmark evidence rather than a kernel-level filesystem-audit claim.
 - `post_checks` run deterministic, argv-based commands after the Agent finishes. They use a minimal environment that excludes host `PYTHONPATH`, `PYTEST_ADDOPTS`, `NODE_OPTIONS`, and npm configuration, plus a private HOME/TMP, bounded timeout, captured output, and optional hidden fixtures injected after the final workspace manifest.
@@ -85,7 +100,7 @@ Six v2 cases are marked `delegation_suitable`. Multi-Agent mode intentionally ex
 
 ## Canonical checked-in reports
 
-The active Agent baseline is the complete, valid v2 `--official` run on clean commit `7562a9561cbd4e3d8fa0e6cf178c562f1950defa`. `deepseek-v4-flash` passed 25/30 cases: easy 9/10, medium 10/10, and hard 6/10, with zero provider-infrastructure errors and zero system errors. Because v2 expands both the workload and evaluator safeguards, this replaces the historical v1 baseline but is not a strictly like-for-like score comparison.
+The active Agent baseline is the complete, valid v2 `--official` run on clean commit `7562a9561cbd4e3d8fa0e6cf178c562f1950defa`. `deepseek-v4-flash` passed 25/30 cases: easy 9/10, medium 10/10, and hard 6/10, with zero provider-infrastructure errors and zero system errors. Because v2 expands both the workload and evaluator safeguards, this replaces the historical v1 baseline but is not a strictly like-for-like score comparison. This checked-in artifact predates the terminal-integrity runner guard described above, so it remains historical evidence for its recorded commit; publish a new `--official` run before comparing a current model or Agent revision against it.
 
 | Layer | Result | Canonical artifact | What it proves |
 |---|---:|---|---|

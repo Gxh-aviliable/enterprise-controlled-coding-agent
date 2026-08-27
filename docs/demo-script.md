@@ -90,7 +90,7 @@ uv run python -m benchmarks.run --backend platform --mode single --no-artifacts
 
 展示以下真实结果：
 
-- 后端 619 passed，前端 93 passed，Ruff 通过；
+- 后端 730 passed，前端 97 passed，Ruff 通过；
 - Platform 10/10；
 - Memory 6/6；
 - v2 DeepSeek V4 Flash single-Agent 25/30（83.3%）：easy 9/10、medium 10/10、hard 6/10，基础设施错误 0、系统错误 0；

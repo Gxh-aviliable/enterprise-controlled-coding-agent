@@ -24,7 +24,7 @@
 | Workspace UI | 安全 Preview/Edit 与并发保护 | 已验证 | read SHA-256、原子 write、409 冲突、前端 dirty/快捷键/导航防护测试，以及 Markdown Preview/Edit/Discard 浏览器 smoke | 仅既有、至多 1 MiB 的普通 UTF-8 文件；敏感/Agent operational/symlink 拒绝；实机 smoke 未保存测试草稿 |
 | Observability | 统一 Trace 与回放 | 已验证 | 模型/节点/工具/HITL/Cancel/预算事件和 UI 测试；历史 paused 事件只读兼容 | JSON 后端是单进程基线 |
 | Observability | 六类核心指标 | 已验证 | `/tasks/metrics` 与 Agent/Platform 报告 | 尚无集中监控告警 |
-| Evaluation | 后端/前端自动化 | 已验证 | 619 后端、93 前端、Ruff 0 findings | 浏览器 E2E 仍主要为手工 smoke；本轮 Preview/Edit 已完成不落盘草稿验证 |
+| Evaluation | 后端/前端自动化 | 已验证 | 730 后端、97 前端、Ruff 0 findings | 浏览器 E2E 仍主要为手工 smoke；本轮 Preview/Edit 已完成不落盘草稿验证 |
 | Evaluation | Platform benchmark | 已验证 | 10/10、80.0% 工具成功率 | 不代表模型智能 |
 | Evaluation | Agent single benchmark | 已验证 | `deepseek-v4-flash` v2 25/30（easy 9/10、medium 10/10、hard 6/10），基础设施/系统错误均为 0 | 30 个合成用例的一次正式运行；与旧 v1 8/10 不严格同口径 |
 | Evaluation | Multi-Agent 对照 | 待测 | 六个用例已标记适合委派 | 不宣称多 Agent 收益 |
@@ -33,8 +33,8 @@
 
 ## 当前允许使用的量化结论
 
-- 后端：619 passed。
-- 前端：93 passed。
+- 后端：730 passed。
+- 前端：97 passed。
 - Platform：10/10，平均 84.8 ms，工具成功率 80.0%，人工介入率 20.0%。
 - Memory：6/6，Recall@3、Precision@3、MRR 在该小型数据集上均为 100%。
 - DeepSeek V4 Flash single-Agent v2：25/30（easy 9/10、medium 10/10、hard 6/10），工具成功率 87.5%，平均 11.524 s，平均 32,342.23 token，人工介入率 73.3%，安全拦截 15，基础设施错误 0，系统错误 0。

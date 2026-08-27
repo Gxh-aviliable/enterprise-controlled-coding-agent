@@ -34,14 +34,14 @@
 
 ## 当前可复现证据
 
-当前自动化验证更新于 2026-08-19；最新真实模型正式评测产物生成于 2026-08-19（UTC）：
+当前自动化验证更新于 2026-08-28；最新真实模型正式评测产物生成于 2026-08-19（UTC）：
 
 | 证据 | 结果 | 解释边界 |
 |---|---:|---|
-| 后端 pytest | 619 passed | 单元、API、任务状态机、Stop 闭环、工具、Workspace 安全写入、上下文、记忆和 Trace 回归 |
-| 前端 Vitest | 93 passed | 关键交互、SSE 控制流、Stop/HITL、Preview/Edit、冲突和未保存导航防护回归 |
+| 后端 pytest | 730 passed | 单元、API、任务状态机、Stop 闭环、工具、Workspace 安全写入、上下文、记忆和 Trace 回归 |
+| 前端 Vitest | 97 passed | 关键交互、SSE 控制流、Stop/HITL、Preview/Edit、冲突和未保存导航防护回归 |
 | Ruff | 0 findings | 当前配置覆盖的 Python 静态检查 |
-| Platform benchmark | 10/10 | 确定性工具、状态、策略和评测器，不是模型智能分 |
+| Platform benchmark | 30/30 | 确定性工具、状态、策略和评测器，不是模型智能分 |
 | Memory benchmark | 6/6 | 小型合成集的检索与过滤，不证明模型正确采用记忆 |
 | DeepSeek single-Agent v2 | 25/30 | `deepseek-v4-flash`：easy 9/10、medium 10/10、hard 6/10；工具成功率 87.5%，平均 11.524 s / 32,342.23 token，HITL 73.3%，安全拦截 15，基础设施/系统错误均为 0 |
 | Multi-Agent 对照 | 待测 | 不宣称多 Agent 优于单 Agent |

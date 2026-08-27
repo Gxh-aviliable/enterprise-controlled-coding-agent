@@ -139,10 +139,10 @@
               </div>
 
               <div class="data-panel form-panel">
-                <div class="panel-title"><h3>Product quota</h3><span>Safety ceilings remain controlled by server policy.</span></div>
+                <div class="panel-title"><h3>Metered usage quota</h3><span>Concurrency and server safety ceilings remain enforced.</span></div>
                 <label class="quota-toggle">
                   <input v-model="quotaDraft.enabled" type="checkbox" />
-                  Enforce this user's product quota
+                  Enforce this user's daily and monthly usage quota
                 </label>
                 <div class="form-grid">
                   <label>Daily tasks<input v-model.number="quotaDraft.daily_task_limit" type="number" min="1" /></label>

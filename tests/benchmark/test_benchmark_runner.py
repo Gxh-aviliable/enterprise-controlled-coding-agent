@@ -6,6 +6,7 @@ import json
 import os
 import sys
 from collections import Counter
+from datetime import datetime, timezone
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -655,6 +656,122 @@ def test_provider_infrastructure_errors_are_narrowly_classified():
     assert not benchmark.is_provider_infrastructure_error(RuntimeError("graph bug"))
 
 
+def test_agent_terminal_integrity_rejects_truncated_thinking_only_false_success():
+    from langchain_core.messages import AIMessage, HumanMessage
+
+    error = benchmark.agent_terminal_integrity_error({
+        "task_status": "succeeded",
+        "messages": [
+            HumanMessage(content="implement the selected plan"),
+            AIMessage(content=[{
+                "type": "thinking",
+                "thinking": "planning until the output limit",
+                "signature": "sig-test",
+            }]),
+        ],
+        "last_model_stop_reason": "max_tokens",
+        "todos": [{"content": "write the fix", "status": "in_progress"}],
+        "has_open_todos": True,
+        "incomplete_response_recovery_attempts": 2,
+        "completion_gate_recovery_attempts": 1,
+    })
+
+    assert error is not None
+    assert "truncated model response (max_tokens)" in error
+    assert "thinking-only terminal assistant response" in error
+    assert "pending or in-progress Todo remains" in error
+    assert "incomplete_response_recovery_attempts=2" in error
+    assert "completion_gate_recovery_attempts=1" in error
+
+
+def test_agent_terminal_integrity_requires_visible_text_and_execution_evidence():
+    missing_text = benchmark.agent_terminal_integrity_error({
+        "task_status": "succeeded",
+        "messages": [{"role": "assistant", "content": []}],
+    })
+    missing_execution = benchmark.agent_terminal_integrity_error({
+        "task_status": "succeeded",
+        "messages": [{"role": "assistant", "content": "Starting now."}],
+        "task_requires_execution": True,
+        "tool_execution_records": [{"tool_name": "todo_update", "ok": True}],
+    })
+
+    assert missing_text is not None
+    assert "no visible text" in missing_text
+    assert missing_execution is not None
+    assert "no successful tool or workspace evidence" in missing_execution
+
+
+def test_agent_terminal_integrity_accepts_coherent_success_and_ignores_failures():
+    coherent = {
+        "task_status": "succeeded",
+        "messages": [{
+            "role": "assistant",
+            "content": [{"type": "text", "text": "Implemented and verified."}],
+        }],
+        "last_model_stop_reason": "end_turn",
+        "todos": [{"content": "implement", "status": "completed"}],
+        "has_open_todos": False,
+        "incomplete_response_recovery_attempts": 0,
+        "completion_gate_recovery_attempts": 0,
+        "task_requires_execution": True,
+        "tool_execution_records": [{"tool_name": "edit_file", "ok": True}],
+    }
+
+    assert benchmark.agent_terminal_integrity_error(coherent) is None
+    assert benchmark.agent_terminal_integrity_error({
+        **coherent,
+        "task_status": "failed",
+        "last_model_stop_reason": "max_tokens",
+        "has_open_todos": True,
+    }) is None
+
+
+@pytest.mark.asyncio
+async def test_agent_runner_records_false_success_as_system_error(monkeypatch, tmp_path):
+    monkeypatch.setenv("WORKSPACE_BASE", str(tmp_path))
+    monkeypatch.setattr(benchmark, "build_simple_agent_graph", lambda **_kwargs: object())
+
+    async def fake_run_agent_graph(**_kwargs):
+        return ({
+            "task_status": "succeeded",
+            "messages": [{
+                "role": "assistant",
+                "content": [{
+                    "type": "thinking",
+                    "thinking": "unfinished plan",
+                    "signature": "sig-runner",
+                }],
+            }],
+            "last_model_stop_reason": "max_tokens",
+            "todos": [{"content": "implement", "status": "pending"}],
+            "has_open_todos": True,
+            "tool_execution_records": [],
+            "validation_results": [],
+        }, 0)
+
+    monkeypatch.setattr(benchmark, "_run_agent_graph", fake_run_agent_graph)
+
+    result = await benchmark.run_agent_case(
+        {
+            "id": "regression.false-success",
+            "title": "Runner false-success regression",
+            "category": "runner_regression",
+            "difficulty": "easy",
+            "prompt": "Implement the selected plan.",
+            "assertions": [],
+        },
+        index=991,
+        mode="single",
+    )
+
+    assert result["status"] == "system_error"
+    assert result["task_status"] == "succeeded"
+    assert "truncated model response" in result["system_error"]
+    assert "thinking-only terminal assistant response" in result["system_error"]
+    assert "pending or in-progress Todo remains" in result["system_error"]
+
+
 def test_summary_counts_system_errors_as_failures_and_groups_results():
     def result(status, difficulty, category, duration, tokens):
         return {
@@ -775,3 +892,39 @@ def test_endpoint_metadata_never_contains_credentials_or_query_values():
     }
     assert "password" not in json.dumps(endpoint)
     assert "secret" not in json.dumps(endpoint)
+
+
+def test_agent_metadata_records_explicit_output_and_context_limits(monkeypatch):
+    monkeypatch.setattr(benchmark, "_git_value", lambda *args: "release-source")
+    monkeypatch.setattr(benchmark, "_git_worktree_dirty", lambda: False)
+    monkeypatch.setattr(benchmark, "_command_version", lambda command: f"{command}-version")
+    monkeypatch.setattr(benchmark.settings, "LLM_PROVIDER", "deepseek")
+    monkeypatch.setattr(benchmark.settings, "LLM_BASE_URL", "https://api.deepseek.com/anthropic")
+    monkeypatch.setattr(benchmark.settings, "LLM_API_KEY", "configured-but-never-recorded")
+    monkeypatch.setattr(benchmark.settings, "MODEL_MAX_OUTPUT_TOKENS", 16_384)
+    monkeypatch.setattr(benchmark.settings, "MODEL_CONTEXT_WINDOW_TOKENS", 1_000_000)
+    monkeypatch.setattr(benchmark.settings, "CONTEXT_COMPRESSION_RATIO", 0.8)
+    suite = benchmark.load_suite()
+    now = datetime.now(timezone.utc)
+
+    metadata = benchmark.build_run_metadata(
+        backend="agent",
+        mode="single",
+        suite=suite,
+        selected_cases=suite["cases"],
+        suite_path=benchmark.SUITE_PATH,
+        started_at=now,
+        finished_at=now,
+        official=True,
+    )
+
+    parameters = metadata["model"]["parameters"]
+    assert parameters["max_output_tokens"] == 16_384
+    assert parameters["context_window_tokens"] == 1_000_000
+    assert parameters["context_compression_ratio"] == 0.8
+    assert parameters["context_compression_threshold_tokens"] == 800_000
+    assert parameters["max_incomplete_response_recoveries"] == 2
+    assert parameters["max_completion_gate_recoveries"] == 2
+    assert metadata["model"]["api_key_configured"] is True
+    assert metadata["dependencies"]["uv"] == "uv-version"
+    assert "configured-but-never-recorded" not in json.dumps(metadata)
