@@ -15,6 +15,8 @@ from enterprise_agent.core.execution.state_machine import (
     [
         (TaskStatus.PENDING, TaskStatus.RUNNING),
         (TaskStatus.PENDING, TaskStatus.CANCELLED),
+        (TaskStatus.PAUSED, TaskStatus.FAILED),
+        (TaskStatus.PAUSED, TaskStatus.CANCELLED),
         (TaskStatus.RUNNING, TaskStatus.WAITING_CONFIRMATION),
         (TaskStatus.WAITING_CONFIRMATION, TaskStatus.RUNNING),
         (TaskStatus.WAITING_CONFIRMATION, TaskStatus.FAILED),
@@ -31,6 +33,18 @@ def test_legal_transitions(source, target):
 def test_terminal_states_cannot_restart(terminal):
     with pytest.raises(InvalidTaskTransitionError, match="Illegal task status transition"):
         transition_task_status(terminal, "running")
+
+
+@pytest.mark.parametrize(
+    ("source", "target"),
+    [
+        (TaskStatus.RUNNING, TaskStatus.PAUSED),
+        (TaskStatus.PAUSED, TaskStatus.RUNNING),
+    ],
+)
+def test_retired_user_pause_cannot_be_entered_or_resumed(source, target):
+    with pytest.raises(InvalidTaskTransitionError, match="Illegal task status transition"):
+        transition_task_status(source, target)
 
 
 def test_same_transition_is_idempotent_for_graph_replay():

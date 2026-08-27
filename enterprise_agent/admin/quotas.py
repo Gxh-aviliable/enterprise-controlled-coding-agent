@@ -25,6 +25,7 @@ class QuotaLimits:
     daily_token_limit: int = 500_000
     monthly_token_limit: int = 5_000_000
     concurrent_task_limit: int = 2
+    # Controls daily/monthly metering only; concurrency remains always-on.
     enabled: bool = True
 
 
@@ -111,33 +112,33 @@ def _quota_error(code: str, message: str, *, limit: int, used: int) -> HTTPExcep
 
 
 async def acquire_task_quota(user_id: int, db: AsyncSession) -> TaskQuotaLease:
-    """Validate product limits and reserve one concurrent execution slot.
+    """Validate metered-usage limits and reserve one concurrent task slot.
 
     Daily accepted-task usage is settled in MySQL. Token usage is derived from
-    persisted traces, while the concurrency guard uses an atomic Redis counter
-    with a crash-recovery TTL.
+    persisted traces. Disabling a user's metered quota bypasses those periodic
+    checks, but the concurrency guard always uses an atomic Redis counter with
+    a crash-recovery TTL.
     """
     quota = await db.get(UserQuota, user_id)
     limits = _limits_from_model(quota)
-    if not limits.enabled:
-        return TaskQuotaLease()
-
-    traces = get_trace_store().list_traces(user_id, limit=500)
-    usage = period_usage_from_traces(traces)
-    if usage["daily_tokens"] >= limits.daily_token_limit:
-        raise _quota_error(
-            "daily_token_limit_exceeded",
-            "Daily token quota has been reached",
-            limit=limits.daily_token_limit,
-            used=usage["daily_tokens"],
-        )
-    if usage["monthly_tokens"] >= limits.monthly_token_limit:
-        raise _quota_error(
-            "monthly_token_limit_exceeded",
-            "Monthly token quota has been reached",
-            limit=limits.monthly_token_limit,
-            used=usage["monthly_tokens"],
-        )
+    usage: dict[str, int] | None = None
+    if limits.enabled:
+        traces = get_trace_store().list_traces(user_id, limit=500)
+        usage = period_usage_from_traces(traces)
+        if usage["daily_tokens"] >= limits.daily_token_limit:
+            raise _quota_error(
+                "daily_token_limit_exceeded",
+                "Daily token quota has been reached",
+                limit=limits.daily_token_limit,
+                used=usage["daily_tokens"],
+            )
+        if usage["monthly_tokens"] >= limits.monthly_token_limit:
+            raise _quota_error(
+                "monthly_token_limit_exceeded",
+                "Monthly token quota has been reached",
+                limit=limits.monthly_token_limit,
+                used=usage["monthly_tokens"],
+            )
 
     try:
         redis = await get_redis()
@@ -162,6 +163,11 @@ async def acquire_task_quota(user_id: int, db: AsyncSession) -> TaskQuotaLease:
             used=concurrent - 1,
         )
 
+    # Metering can be disabled for a specific account, while concurrency
+    # remains an operational safety boundary for every account.
+    if not limits.enabled:
+        return lease
+
     try:
         today = datetime.now(timezone.utc).date()
         usage_row = await db.scalar(
@@ -170,7 +176,7 @@ async def acquire_task_quota(user_id: int, db: AsyncSession) -> TaskQuotaLease:
             .with_for_update()
         )
         settled_tasks = int(usage_row.task_count if usage_row else 0)
-        effective_tasks = max(settled_tasks, usage["daily_tasks"])
+        effective_tasks = max(settled_tasks, usage["daily_tasks"] if usage else 0)
         if effective_tasks >= limits.daily_task_limit:
             await db.rollback()
             await lease.release()

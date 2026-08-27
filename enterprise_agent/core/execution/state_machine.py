@@ -11,6 +11,7 @@ from enum import Enum
 class TaskStatus(str, Enum):
     PENDING = "pending"
     RUNNING = "running"
+    PAUSED = "paused"
     WAITING_CONFIRMATION = "waiting_confirmation"
     SUCCEEDED = "succeeded"
     FAILED = "failed"
@@ -42,6 +43,12 @@ ALLOWED_TRANSITIONS = {
     },
     TaskStatus.WAITING_CONFIRMATION: {
         TaskStatus.RUNNING,
+        TaskStatus.FAILED,
+        TaskStatus.CANCELLED,
+    },
+    # Retained temporarily so pre-retirement checkpoints can be terminalized.
+    # User pause is no longer enterable or resumable.
+    TaskStatus.PAUSED: {
         TaskStatus.FAILED,
         TaskStatus.CANCELLED,
     },

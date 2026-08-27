@@ -81,3 +81,4 @@ obsidian/
 
 # Runtime-managed shared Skill materialization
 managed_shared_skills/
+workspaces/*/.agent/

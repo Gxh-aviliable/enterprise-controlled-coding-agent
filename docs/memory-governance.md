@@ -112,8 +112,9 @@ last_retrieved_at=<timestamp>
 
 - Agent 在**每次用户任务**检索，不再只在新 Chat 第一轮检索。
 - 自动检索只读取 `quality_status=active && retrieval_enabled=true`；Legacy 和禁用记录只出现在审计候选中，不会注入。
-- 英文等非 CJK 查询保留 Chroma 距离门槛；中文查询使用字符 bigram 与工程术语重排，并只保留达到最低分且接近本次最佳分的候选。原因是现有 `all-MiniLM-L6-v2` 对中文排序较弱。
-- 召回内容存放在任务级 `retrieved_memory_context`，每次 LLM 调用临时插入，不再写回消息历史或 Redis checkpoint，避免旧召回块跨任务累积。
+- 英文和中文查询都必须通过 Chroma 距离硬门槛；中文再使用连续字符 bigram 与工程标识符重排，排除“你的/什么/问题/刚才”等通用词，并要求足够的有效重合。
+- “刚才/上一条/上一个问题/previous message/last question”等近指问题不检索 Chroma；它们以当前会话 checkpoint 为权威来源，Trace 记录 `recent_conversation_reference` 跳过原因。
+- 召回内容存放在任务级 `retrieved_memory_context`，每次 LLM 调用时合并到唯一 `SystemMessage`，不再伪装为用户消息；它也不写回消息历史或 Redis checkpoint，避免旧召回块跨任务累积。
 - 没有相关结果时只记录空的 Recall receipt，不再执行宽泛兜底。
 - “列出我的记忆”使用确定性 list API，而不是用向量查询假装完整列表。
 - 自动上下文检索与模型主动调用 `search_memory` 是两个入口，但共用 Active、`retrieval_enabled`、语言相关性门槛、召回计数和 `memory_retrieval` Trace schema；工具检索不再成为审计旁路。
@@ -155,13 +156,13 @@ MEMORY_DEDUP_MAX_DISTANCE=0.3
 
 ## 6. 当前验证
 
-- 当前仓库后端完整回归：381 passed；Ruff 通过。
+- 当前仓库后端完整回归：442 passed；Ruff 通过。
 - Ruff：本次修改文件通过。
 - 前端完整回归：16 passed，其中 Memory Ledger 5 passed；前端生产构建通过。
 - 本地 embedding 初始基线：6 个用例通过 5 个，Precision@3 27.78%，无关负例误注入率 100%，证明原始中文检索门槛不可接受。
 - 加入中文词法重排和相对门槛后：6/6 通过，Recall@3、Precision@3、MRR 均为 100%，负例误注入率 0%，Forbidden injection 0。
 - 原始报告见 `benchmarks/results/20260720T093639Z-memory-recall.json` 和同名 Markdown。该结果只证明小型合成集上的**本地检索与过滤**，不证明模型正确采用记忆。
-- 真实模型是否正确采用已注入记忆仍未单独归因评测；现有 Agent 8/10 报告不能替代该指标。
+- 真实模型是否正确采用已注入记忆仍未单独归因评测；现有 Agent v2 `deepseek-v4-flash` 25/30 报告不能替代该指标。
 
 ## 7. 下一阶段评测
 

@@ -6,15 +6,19 @@
 
   <div v-else class="app-layout">
     <Sidebar
+      ref="sidebarRef"
       :sessions="sessions"
       :activeId="activeSessionId"
       :selectedFilePath="selectedFile?.path"
+      :before-file-mutation="beforeWorkspaceMutation"
       @select="selectSession"
       @new-session="newSession"
       @delete="deleteSession"
       @file-select="onFileSelect"
       @tab-change="onTabChange"
       @open-admin="openAdminConsole"
+      @logout="requestLogout"
+      @workspace-mutated="onWorkspaceMutated"
     />
 
     <div class="main-area">
@@ -25,8 +29,10 @@
       />
       <FileViewer
         v-if="mainView === 'file'"
+        ref="fileViewerRef"
         :file="selectedFile"
         @close="onCloseFileViewer"
+        @saved="onFileSaved"
       />
       <MemoryViewer
         v-else-if="mainView === 'memory'"
@@ -44,7 +50,7 @@
 </template>
 
 <script setup>
-import { defineAsyncComponent, onMounted, onUnmounted, ref } from 'vue'
+import { defineAsyncComponent, nextTick, onMounted, onUnmounted, ref } from 'vue'
 import { auth } from './stores/auth.js'
 import * as api from './api/client.js'
 import LoginForm from './components/LoginForm.vue'
@@ -62,6 +68,8 @@ const activeSessionId = ref('')
 const selectedFile = ref(null)
 const mainView = ref('chat')
 const updateAvailable = ref(false)
+const sidebarRef = ref(null)
+const fileViewerRef = ref(null)
 let versionPollTimer = null
 
 async function checkFrontendVersion() {
@@ -76,7 +84,23 @@ async function checkFrontendVersion() {
 }
 
 function reloadForUpdate() {
+  if (!canLeaveFile()) return
   window.location.reload()
+}
+
+function canLeaveFile() {
+  if (mainView.value !== 'file') return true
+  return fileViewerRef.value?.confirmLeave?.() !== false
+}
+
+function restoreFilesTab() {
+  nextTick(() => sidebarRef.value?.setActiveTab?.('files'))
+}
+
+function allowFileNavigation() {
+  if (canLeaveFile()) return true
+  restoreFilesTab()
+  return false
 }
 
 async function loadSessions() {
@@ -90,12 +114,14 @@ async function loadSessions() {
 }
 
 function selectSession(id) {
+  if (!allowFileNavigation()) return
   activeSessionId.value = id
   selectedFile.value = null
   mainView.value = 'chat'
 }
 
 function newSession() {
+  if (!allowFileNavigation()) return
   activeSessionId.value = ''
   selectedFile.value = null
   mainView.value = 'chat'
@@ -108,17 +134,20 @@ async function onSessionCreated(sid) {
 
 function onFileSelect(node) {
   if (node.type === 'file') {
+    if (node.path !== selectedFile.value?.path && !allowFileNavigation()) return
     selectedFile.value = node
     mainView.value = 'file'
   }
 }
 
 function onCloseFileViewer() {
+  if (!allowFileNavigation()) return
   selectedFile.value = null
   mainView.value = 'chat'
 }
 
 function onTabChange(tab) {
+  if (tab !== 'files' && !allowFileNavigation()) return
   if (tab === 'sessions') { mainView.value = 'chat'; selectedFile.value = null }
   else if (tab === 'files') { /* keep current view, let file tree control it */ }
   else if (tab === 'memory') { mainView.value = 'memory'; selectedFile.value = null }
@@ -127,8 +156,32 @@ function onTabChange(tab) {
 
 function openAdminConsole() {
   if (!auth.isAdmin) return
+  if (!allowFileNavigation()) return
   selectedFile.value = null
   mainView.value = 'admin'
+}
+
+function onFileSaved(fileState) {
+  if (selectedFile.value?.path !== fileState?.path) return
+  selectedFile.value = { ...selectedFile.value, ...fileState }
+}
+
+function beforeWorkspaceMutation() {
+  return allowFileNavigation()
+}
+
+function onWorkspaceMutated(change) {
+  if (!change?.affectsSelected || change.selectedPath !== selectedFile.value?.path) return
+  // The user may have started editing while the workspace request was pending.
+  // Re-run the guard immediately before invalidating the now-stale viewer.
+  if (!allowFileNavigation()) return
+  selectedFile.value = null
+  mainView.value = 'chat'
+}
+
+function requestLogout() {
+  if (!allowFileNavigation()) return
+  auth.logout()
 }
 
 async function deleteSession(id) {

@@ -156,3 +156,55 @@ async def test_get_session_messages_prefers_durable_mysql_history(monkeypatch):
         {"role": "user", "content": "persisted request"},
         {"role": "assistant", "content": "persisted answer"},
     ]
+
+
+@pytest.mark.asyncio
+async def test_get_session_messages_keeps_tool_only_assistant_timeline(monkeypatch):
+    from enterprise_agent.api.routes import chat
+
+    session = _session("tool-session", "tool")
+    durable = [
+        SimpleNamespace(role="user", content="run the tool", timeline=None),
+        SimpleNamespace(
+            role="assistant",
+            content="",
+            timeline=[{
+                "role": "tool_call",
+                "toolCallId": "call-1",
+                "toolName": "bash",
+                "toolStatus": "done",
+                "toolResult": "ok",
+            }],
+        ),
+    ]
+
+    async def durable_messages(_db, *, session_id, user_id):
+        assert session_id == "tool-session"
+        assert user_id == 1
+        return durable
+
+    monkeypatch.setattr(chat, "list_durable_messages", durable_messages)
+
+    result = await chat.get_session_messages(
+        session_id="tool-session",
+        user_id=1,
+        db=_FakeDb(session),
+    )
+
+    assert result["message_count"] == 2
+    assert result["messages"] == [
+        {"role": "user", "content": "run the tool"},
+        {
+            "role": "assistant",
+            "content": "",
+            "timeline": [{
+                "role": "tool_call",
+                "toolCallId": "call-1",
+                "toolName": "bash",
+                "toolStatus": "done",
+                "toolResult": "ok",
+                "toolError": "",
+                "toolDuration": None,
+            }],
+        },
+    ]

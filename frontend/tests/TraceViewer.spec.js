@@ -101,4 +101,39 @@ describe('TraceViewer memory evidence', () => {
     expect(wrapper.find('.candidate-row.eligible').exists()).toBe(true)
     expect(wrapper.find('.candidate-row.filtered').exists()).toBe(true)
   })
+
+  it('renders distinct pause lifecycle states in the run index and detail badge', async () => {
+    api.listTaskRuns.mockResolvedValueOnce({
+      tasks: [
+        {
+          trace_id: 'trace-paused', request_summary: 'Paused task', status: 'paused',
+          mode: 'single_agent', started_at: '2026-08-10T10:00:00Z', duration_ms: 100
+        },
+        {
+          trace_id: 'trace-pausing', request_summary: 'Pausing task', status: 'pause_requested',
+          mode: 'single_agent', started_at: '2026-08-10T10:01:00Z', duration_ms: 50
+        },
+        {
+          trace_id: 'trace-resuming', request_summary: 'Resuming task', status: 'resuming',
+          mode: 'single_agent', started_at: '2026-08-10T10:02:00Z', duration_ms: 25
+        }
+      ]
+    })
+    api.replayTaskTrace.mockResolvedValueOnce({
+      trace_id: 'trace-paused',
+      request_summary: 'Paused task',
+      status: 'paused',
+      duration_ms: 100,
+      metrics: { model_calls: 1, tool_calls: 0, total_tokens: 100, memory_injected: 0 },
+      events: []
+    })
+
+    const wrapper = mount(TraceViewer)
+    await flushPromises()
+
+    expect(wrapper.find('.status-pip.paused').exists()).toBe(true)
+    expect(wrapper.find('.status-pip.pause_requested').exists()).toBe(true)
+    expect(wrapper.find('.status-pip.resuming').exists()).toBe(true)
+    expect(wrapper.find('.status-badge.paused').text()).toBe('paused')
+  })
 })

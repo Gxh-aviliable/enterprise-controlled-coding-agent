@@ -6,22 +6,191 @@ All paths are scoped to the authenticated user's workspace via resolve_path().
 
 import io
 import logging
+import os
 import shutil
+import stat
+import tempfile
 import zipfile
 from pathlib import Path
 from urllib.parse import quote, urlencode
 
 from fastapi import APIRouter, Depends, HTTPException, Query, UploadFile
 from fastapi.responses import FileResponse, StreamingResponse
+from starlette.concurrency import run_in_threadpool
 
 from enterprise_agent.api.middleware.auth import get_current_user
-from enterprise_agent.api.services.workspace_read import build_tree, read_workspace_text
+from enterprise_agent.api.schemas.workspace import WorkspaceFileWriteRequest
+from enterprise_agent.api.services.workspace_read import (
+    WorkspaceBinaryFileError,
+    WorkspaceFileTooLargeError,
+    WorkspaceWriteConflictError,
+    build_tree,
+    read_workspace_text,
+    write_workspace_text,
+)
 from enterprise_agent.config.settings import settings
-from enterprise_agent.core.agent.tools.workspace import get_user_workspace, resolve_path
+from enterprise_agent.core.agent.tools.workspace import (
+    get_user_workspace,
+    is_operational_agent_path,
+    is_sensitive_agent_path,
+    resolve_path,
+)
+from enterprise_agent.core.agent.tools.workspace_lock import (
+    WorkspaceWriteLockTimeoutError,
+    workspace_write_lock,
+)
 
 logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/workspace", tags=["workspace"])
+
+
+def _workspace_busy_error(exc: Exception) -> HTTPException:
+    return HTTPException(
+        status_code=423,
+        detail={
+            "code": "workspace_busy",
+            "message": "The workspace is busy with another write operation. Retry later.",
+        },
+    )
+
+
+def _log_browser_write(
+    *,
+    user_id: int,
+    path: str,
+    before_sha256: str,
+    after_sha256: str | None,
+    size: int,
+    outcome: str,
+) -> None:
+    """Emit metadata-only audit context; file content is deliberately excluded."""
+    logger.info(
+        "workspace_browser_write",
+        extra={
+            "workspace_user_id": user_id,
+            "workspace_path": path,
+            "workspace_before_sha256": before_sha256,
+            "workspace_after_sha256": after_sha256,
+            "workspace_size_bytes": size,
+            "workspace_write_outcome": outcome,
+        },
+    )
+
+
+def _atomic_write_bytes(path: Path, content: bytes) -> None:
+    """Atomically replace one upload target; callers hold the workspace lock."""
+    previous_mode = stat.S_IMODE(path.stat().st_mode) if path.exists() else None
+    temporary_path: Path | None = None
+    try:
+        with tempfile.NamedTemporaryFile(
+            mode="wb",
+            dir=path.parent,
+            prefix=f".{path.name}.",
+            suffix=".tmp",
+            delete=False,
+        ) as handle:
+            temporary_path = Path(handle.name)
+            handle.write(content)
+            handle.flush()
+            os.fsync(handle.fileno())
+        if previous_mode is not None:
+            os.chmod(temporary_path, previous_mode)
+        os.replace(temporary_path, path)
+        temporary_path = None
+    finally:
+        if temporary_path is not None:
+            temporary_path.unlink(missing_ok=True)
+
+
+def _plain_mutation_path(user_id: int, path: str) -> Path:
+    """Resolve a mutation path lexically and reject every symlink component.
+
+    Read-only APIs may expose a symlink entry, but browser mutations must not
+    follow it and accidentally edit, move, or delete its target. Sensitive and
+    Agent-managed paths use dedicated flows and remain outside this generic API.
+    """
+    normalized = str(path or "").strip()
+    if is_sensitive_agent_path(normalized) or is_operational_agent_path(normalized):
+        raise PermissionError("Sensitive or Agent-managed workspace paths cannot be changed")
+
+    root = get_user_workspace(user_id).resolve()
+    candidate = Path(normalized) if Path(normalized).is_absolute() else root / normalized
+    lexical = Path(os.path.abspath(candidate))
+    if not lexical.is_relative_to(root):
+        raise ValueError(f"Path escapes workspace: {path}")
+
+    current = root
+    for part in lexical.relative_to(root).parts:
+        current = current / part
+        if current.is_symlink():
+            raise PermissionError("Workspace paths reached through symlinks cannot be changed")
+        if not current.exists():
+            break
+    return lexical
+
+
+def _store_upload(user_id: int, path: str, filename: str, content: bytes) -> dict:
+    with workspace_write_lock(user_id):
+        if path:
+            resolved_dir = _plain_mutation_path(user_id, path)
+            if not resolved_dir.exists():
+                resolved_dir.mkdir(parents=True, exist_ok=True)
+            elif not resolved_dir.is_dir():
+                raise NotADirectoryError(path)
+        else:
+            resolved_dir = get_user_workspace(user_id)
+
+        workdir = get_user_workspace(user_id).resolve()
+        target_relative = (resolved_dir / Path(filename or "untitled").name).relative_to(workdir)
+        target = _plain_mutation_path(user_id, target_relative.as_posix())
+        _atomic_write_bytes(target, content)
+        return {
+            "path": target.relative_to(workdir).as_posix(),
+            "name": target.name,
+            "size": len(content),
+        }
+
+
+def _create_directory(user_id: int, path: str) -> dict:
+    with workspace_write_lock(user_id):
+        resolved = _plain_mutation_path(user_id, path)
+        if resolved.exists():
+            raise FileExistsError(path)
+        resolved.mkdir(parents=True)
+        workdir = get_user_workspace(user_id).resolve()
+        return {"path": resolved.relative_to(workdir).as_posix(), "created": True}
+
+
+def _delete_item(user_id: int, path: str) -> dict:
+    with workspace_write_lock(user_id):
+        resolved = _plain_mutation_path(user_id, path)
+        workdir = get_user_workspace(user_id).resolve()
+        if resolved == workdir:
+            raise ValueError("Cannot delete workspace root")
+        if not resolved.exists():
+            raise FileNotFoundError(path)
+        if resolved.is_dir():
+            shutil.rmtree(resolved)
+        else:
+            resolved.unlink()
+        return {"deleted": True, "path": path}
+
+
+def _move_item(user_id: int, source: str, dest: str) -> dict:
+    with workspace_write_lock(user_id):
+        src_resolved = _plain_mutation_path(user_id, source)
+        dst_resolved = _plain_mutation_path(user_id, dest)
+        workdir = get_user_workspace(user_id).resolve()
+        if src_resolved == workdir:
+            raise ValueError("Cannot move workspace root")
+        if not src_resolved.exists():
+            raise FileNotFoundError(source)
+        if dst_resolved.exists():
+            raise FileExistsError(dest)
+        dst_resolved.parent.mkdir(parents=True, exist_ok=True)
+        shutil.move(str(src_resolved), str(dst_resolved))
+        return {"from": source, "to": dest, "moved": True}
 
 
 def _quote_file_url_path(path: str) -> str:
@@ -156,6 +325,128 @@ async def get_open_url(
     return _build_open_url(resolved, root, relative_path, user_id)
 
 
+@router.put("/write")
+async def write_file(
+    payload: WorkspaceFileWriteRequest,
+    user_id: int = Depends(get_current_user),
+):
+    """Atomically replace an existing UTF-8 file if its read version is current."""
+    try:
+        result = await run_in_threadpool(
+            write_workspace_text,
+            user_id,
+            payload.path,
+            payload.content,
+            expected_sha256=payload.expected_sha256,
+        )
+        _log_browser_write(
+            user_id=user_id,
+            path=result["path"],
+            before_sha256=payload.expected_sha256,
+            after_sha256=result["sha256"],
+            size=result["size"],
+            outcome="succeeded",
+        )
+        return result
+    except FileNotFoundError as exc:
+        _log_browser_write(
+            user_id=user_id,
+            path=payload.path,
+            before_sha256=payload.expected_sha256,
+            after_sha256=None,
+            size=len(payload.content.encode("utf-8", errors="replace")),
+            outcome="not_found",
+        )
+        raise HTTPException(status_code=404, detail=f"File not found: {payload.path}") from exc
+    except IsADirectoryError as exc:
+        _log_browser_write(
+            user_id=user_id,
+            path=payload.path,
+            before_sha256=payload.expected_sha256,
+            after_sha256=None,
+            size=len(payload.content.encode("utf-8", errors="replace")),
+            outcome="not_a_file",
+        )
+        raise HTTPException(status_code=400, detail=f"Path is not a file: {payload.path}") from exc
+    except WorkspaceWriteLockTimeoutError as exc:
+        _log_browser_write(
+            user_id=user_id,
+            path=payload.path,
+            before_sha256=payload.expected_sha256,
+            after_sha256=None,
+            size=len(payload.content.encode("utf-8", errors="replace")),
+            outcome="workspace_busy",
+        )
+        raise _workspace_busy_error(exc) from exc
+    except PermissionError as exc:
+        _log_browser_write(
+            user_id=user_id,
+            path=payload.path,
+            before_sha256=payload.expected_sha256,
+            after_sha256=None,
+            size=len(payload.content.encode("utf-8", errors="replace")),
+            outcome="permission_denied",
+        )
+        raise HTTPException(status_code=403, detail=str(exc)) from exc
+    except WorkspaceBinaryFileError as exc:
+        _log_browser_write(
+            user_id=user_id,
+            path=payload.path,
+            before_sha256=payload.expected_sha256,
+            after_sha256=None,
+            size=len(payload.content.encode("utf-8", errors="replace")),
+            outcome="unsupported_media",
+        )
+        raise HTTPException(status_code=415, detail=str(exc)) from exc
+    except WorkspaceFileTooLargeError as exc:
+        _log_browser_write(
+            user_id=user_id,
+            path=payload.path,
+            before_sha256=payload.expected_sha256,
+            after_sha256=None,
+            size=len(payload.content.encode("utf-8", errors="replace")),
+            outcome="too_large",
+        )
+        raise HTTPException(status_code=413, detail=str(exc)) from exc
+    except WorkspaceWriteConflictError as exc:
+        _log_browser_write(
+            user_id=user_id,
+            path=payload.path,
+            before_sha256=payload.expected_sha256,
+            after_sha256=exc.current_sha256,
+            size=len(payload.content.encode("utf-8", errors="replace")),
+            outcome="version_conflict",
+        )
+        raise HTTPException(
+            status_code=409,
+            detail={
+                "code": "version_conflict",
+                "message": "The file changed after it was opened. Reload before saving.",
+                "current_sha256": exc.current_sha256,
+            },
+        ) from exc
+    except ValueError as exc:
+        _log_browser_write(
+            user_id=user_id,
+            path=payload.path,
+            before_sha256=payload.expected_sha256,
+            after_sha256=None,
+            size=len(payload.content.encode("utf-8", errors="replace")),
+            outcome="invalid_request",
+        )
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    except Exception:
+        _log_browser_write(
+            user_id=user_id,
+            path=payload.path,
+            before_sha256=payload.expected_sha256,
+            after_sha256=None,
+            size=len(payload.content.encode("utf-8", errors="replace")),
+            outcome="failed",
+        )
+        raise
+
+
 @router.get("/download")
 async def download_file(
     path: str = Query(..., description="Relative path to file"),
@@ -184,6 +475,7 @@ async def download_zip(
         raise HTTPException(status_code=400, detail="No paths specified")
 
     buf = io.BytesIO()
+    workspace_root = get_user_workspace(user_id).resolve()
     with zipfile.ZipFile(buf, "w", zipfile.ZIP_DEFLATED) as zf:
         for rel_path in selected:
             resolved = resolve_path(rel_path, user_id)
@@ -191,9 +483,17 @@ async def download_zip(
                 continue
             if resolved.is_dir():
                 for file in resolved.rglob("*"):
-                    if file.is_file():
+                    # Never follow a workspace symlink into host or another
+                    # tenant's data while building an archive.
+                    if file.is_symlink():
+                        continue
+                    try:
+                        safe_file = file.resolve()
+                    except OSError:
+                        continue
+                    if safe_file.is_file() and safe_file.is_relative_to(workspace_root):
                         arcname = str(file.relative_to(resolved).as_posix())
-                        zf.write(file, arcname)
+                        zf.write(safe_file, arcname)
             else:
                 zf.write(resolved, resolved.name)
 
@@ -213,33 +513,23 @@ async def upload_file(
     user_id: int = Depends(get_current_user),
 ):
     """Upload a file to user workspace."""
-    # Resolve target directory
-    if path:
-        resolved_dir = resolve_path(path, user_id)
-        if not resolved_dir.exists():
-            resolved_dir.mkdir(parents=True, exist_ok=True)
-        elif not resolved_dir.is_dir():
-            raise HTTPException(status_code=400, detail=f"Path is not a directory: {path}")
-    else:
-        resolved_dir = get_user_workspace(user_id)
-
-    # Security: sanitize filename (warn but keep)
-    safe_filename = file.filename or "untitled"
-    target = (resolved_dir / Path(safe_filename).name).resolve()
-
-    # Ensure target is within workspace
-    workdir = get_user_workspace(user_id).resolve()
-    if not target.is_relative_to(workdir):
-        raise HTTPException(status_code=400, detail="Invalid file path")
-
     content = await file.read()
-    target.write_bytes(content)
-
-    return {
-        "path": str(target.relative_to(workdir)).replace("\\", "/"),
-        "name": target.name,
-        "size": len(content),
-    }
+    try:
+        return await run_in_threadpool(
+            _store_upload,
+            user_id,
+            path,
+            file.filename or "untitled",
+            content,
+        )
+    except NotADirectoryError as exc:
+        raise HTTPException(status_code=400, detail=f"Path is not a directory: {path}") from exc
+    except WorkspaceWriteLockTimeoutError as exc:
+        raise _workspace_busy_error(exc) from exc
+    except PermissionError as exc:
+        raise HTTPException(status_code=403, detail=str(exc)) from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
 
 
 @router.post("/mkdir")
@@ -248,17 +538,16 @@ async def create_directory(
     user_id: int = Depends(get_current_user),
 ):
     """Create a directory in user workspace."""
-    resolved = resolve_path(path, user_id)
-
-    if resolved.exists():
+    try:
+        return await run_in_threadpool(_create_directory, user_id, path)
+    except FileExistsError:
         raise HTTPException(status_code=409, detail=f"Path already exists: {path}")
-
-    resolved.mkdir(parents=True)
-    workdir = get_user_workspace(user_id).resolve()
-    return {
-        "path": str(resolved.relative_to(workdir)).replace("\\", "/"),
-        "created": True,
-    }
+    except WorkspaceWriteLockTimeoutError as exc:
+        raise _workspace_busy_error(exc) from exc
+    except PermissionError as exc:
+        raise HTTPException(status_code=403, detail=str(exc)) from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
 
 
 @router.delete("/delete")
@@ -267,22 +556,16 @@ async def delete_item(
     user_id: int = Depends(get_current_user),
 ):
     """Delete a file or directory from user workspace."""
-    resolved = resolve_path(path, user_id)
-
-    # Protect workspace root
-    workdir = get_user_workspace(user_id).resolve()
-    if resolved == workdir:
-        raise HTTPException(status_code=400, detail="Cannot delete workspace root")
-
-    if not resolved.exists():
+    try:
+        return await run_in_threadpool(_delete_item, user_id, path)
+    except FileNotFoundError:
         raise HTTPException(status_code=404, detail=f"Path not found: {path}")
-
-    if resolved.is_dir():
-        shutil.rmtree(resolved)
-    else:
-        resolved.unlink()
-
-    return {"deleted": True, "path": path}
+    except WorkspaceWriteLockTimeoutError as exc:
+        raise _workspace_busy_error(exc) from exc
+    except PermissionError as exc:
+        raise HTTPException(status_code=403, detail=str(exc)) from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
 
 
 @router.put("/move")
@@ -292,19 +575,15 @@ async def move_item(
     user_id: int = Depends(get_current_user),
 ):
     """Move or rename a file/directory in user workspace."""
-    src_resolved = resolve_path(source, user_id)
-    dst_resolved = resolve_path(dest, user_id)
-
-    if not src_resolved.exists():
+    try:
+        return await run_in_threadpool(_move_item, user_id, source, dest)
+    except FileNotFoundError:
         raise HTTPException(status_code=404, detail=f"Source not found: {source}")
-    if dst_resolved.exists():
+    except FileExistsError:
         raise HTTPException(status_code=409, detail=f"Destination already exists: {dest}")
-
-    dst_resolved.parent.mkdir(parents=True, exist_ok=True)
-    shutil.move(str(src_resolved), str(dst_resolved))
-
-    return {
-        "from": source,
-        "to": dest,
-        "moved": True,
-    }
+    except WorkspaceWriteLockTimeoutError as exc:
+        raise _workspace_busy_error(exc) from exc
+    except PermissionError as exc:
+        raise HTTPException(status_code=403, detail=str(exc)) from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc

@@ -1,6 +1,6 @@
 ---
 title: Mini Claude Code 后端 Agent 从零精读指南
-date: 2026-07-23
+date: 2026-08-10
 status: current
 audience: 掌握 Python 基础、第一次系统阅读 Agent 项目的开发者
 ---
@@ -88,8 +88,9 @@ pyproject.toml
 
 - 携带 JWT 调用 `/chat/stream`；
 - 消费 `text/event-stream`；
-- 在收到 `interrupt` 后调用 `/chat/stream/resume`；
-- 在需要时调用取消接口；
+- 在收到 typed `tool_confirmation` interrupt 后调用 `/chat/stream/resume`，并保持原 Trace；
+- 在需要时调用 `/chat/stream/cancel`，只在 `/chat/stream/status` 确认原 Trace 已 `cancelled` 后解锁输入；
+- 取消后的下一条消息启动新 Trace，而不是 resume 旧 Graph；
 
 的 HTTP 客户端。
 
@@ -485,6 +486,19 @@ messages: Annotated[List[Dict], add_messages]
 
 而不必复制整段历史。
 
+这也意味着“返回一条摘要消息”默认只会追加，不会清空旧历史。
+完整上下文压缩必须显式返回：
+
+```python
+[
+    RemoveMessage(id=REMOVE_ALL_MESSAGES),
+    *compressed_messages,
+]
+```
+
+Reducer 先消费全量删除哨兵，再加入 continuation packet，这样 Redis
+checkpoint 和下一轮模型输入才会真正变短。
+
 ### 这时还没有的字段
 
 `_task_input()` 没有机械填满所有 State 字段。`init_context_node()` 会补齐本轮需要的计数、工具记录、验证证据和记忆上下文。这样可以保持 API 层只负责“启动任务”，不侵入 Agent 内部初始化。
@@ -529,7 +543,11 @@ graph.add_edge("init_context", "check_background")
 graph.add_edge("check_background", "check_inbox")
 graph.add_edge("check_inbox", "plan_task")
 graph.add_edge("plan_task", "pre_microcompact")
-graph.add_edge("pre_microcompact", "llm_call")
+graph.add_conditional_edges(
+    "pre_microcompact",
+    route_after_microcompact,
+    {"compress": "compress_context", "llm_call": "llm_call"},
+)
 ```
 
 模型后的条件边：
@@ -704,15 +722,24 @@ async def plan_task_node(state):
 ### 关键代码块一：microcompact
 
 ```python
-messages = state.get("messages", [])
-compacted = ctx_mgr.microcompact_langchain(
+report = ctx_mgr.microcompact_with_report(
     messages,
     keep_last=settings.MICROCOMPACT_KEEP_LAST,
+    trace_id=state.get("trace_id"),
+    user_id=state.get("user_id"),
 )
-return {"messages": compacted}
+return {
+    "messages": report["changed_messages"],
+    "token_count": report["tokens_after"],
+}
 ```
 
-它不调用模型总结，只缩减旧工具大输出，保留近期对话骨架。目的是让循环跑得久，而不是让上下文无限增长。
+它不调用模型总结，只缩减旧工具大输出，保留近期对话骨架。节点只返回
+带原 message ID 的变更项，由 `add_messages` 原位更新，不会重复追加。
+
+> [!NOTE]
+> 旧工具正文只有在真实 artifact 已落盘时才会被替换。如果写入失败，
+> 节点保留原消息并记录 error Trace，不生成虚假的恢复路径。
 
 ### 关键代码块二：权限决定模型能看见什么
 
@@ -767,9 +794,9 @@ Agent 节点不需要知道具体 SDK。它只依赖 LangChain 的统一 ChatMod
 ### 关键代码块一：预算先于模型调用
 
 ```python
-if session_tokens_used >= settings.SESSION_TOKEN_BUDGET:
+if settings.SESSION_TOKEN_BUDGET > 0 and session_tokens_used >= settings.SESSION_TOKEN_BUDGET:
     budget_scope = "Session"
-elif task_tokens_used >= settings.TASK_TOKEN_BUDGET:
+elif settings.TASK_TOKEN_BUDGET > 0 and task_tokens_used >= settings.TASK_TOKEN_BUDGET:
     budget_scope = "Task"
 
 if budget_scope:
@@ -789,28 +816,25 @@ if budget_scope:
 lc_messages = _convert_to_langchain_messages(messages)
 lc_messages.insert(
     0,
-    SystemMessage(
-        content=MAIN_SYSTEM_PROMPT.format(
-            environment_info=_build_environment_info(),
-            available_skills=_build_available_skills(state),
-            execution_mode_info=_build_execution_mode_info(state),
-        )
-    ),
+    SystemMessage(content=_build_runtime_system_prompt(state)),
 )
-
-if memory_context:
-    lc_messages.insert(1, HumanMessage(content=memory_context))
 ```
 
 这里组合：
 
-- 固定 Agent 行为规范；
-- 当前运行环境；
-- 可用 Skill；
+- 固定的通用 Coding Agent 工作流、权限边界和证据真实性要求；
+- 最小工具运行环境，只描述 OS family、Shell、Workspace 和路径策略，不把宿主 Python 版本当成项目要求；
+- `project_context.py` 对清单、锁文件、声明版本和候选验证命令生成的有界 Project Profile，每条命令携带项目 `cwd`；
+- 根目录与嵌套 `AGENTS.md` 的路径作用域和来源；只注入完整有效文件，超限/不可读/非 UTF-8 或扫描触发上限时显式标记 `discovery.status=degraded`；
+- JSON 格式的可用 Skill 元数据目录；
 - Single/Multi 模式约束；
-- 本轮临时召回的长期记忆。
+- 本轮 continuation receipt 和临时召回的长期记忆参考数据。
 
-召回内容不直接写回 `messages`，避免它进入 checkpoint 后在未来每一轮永久重复。
+动态内容由 `_build_runtime_system_prompt()` 合并到唯一 `SystemMessage`，但内部
+明确区分平台规则、仓库指导和参考数据。Project Profile 每个模型轮次只扫描一次并在估算/实际调用间复用，不含绝对服务路径和时间戳，
+普通代码变更不会让稳定前缀无意义地抖动。Skill 描述、记忆和 receipt 使用 JSON 数据
+边界，不伪装成新的用户请求，也不直接写回 `messages`，避免进入 checkpoint 后在未来
+每一轮永久重复。普通 README、源码、日志和工具输出不能被提升为仓库指令。
 
 ### 关键代码块三：调用和重试
 
@@ -890,7 +914,7 @@ if state.get("pending_tool_calls"):
 if state.get("round_count", 0) >= settings.MAX_AGENT_ROUNDS:
     return "save_memory"
 
-if state.get("token_count", 0) > settings.TOKEN_THRESHOLD:
+if state.get("token_count", 0) >= get_context_manager().token_threshold:
     return "compress"
 
 return "save_memory"
@@ -1330,13 +1354,14 @@ if should_end_after_save:
 if should_compress:
     return "manual_compress"
 
-if token_count > TOKEN_THRESHOLD:
-    return "compress"
-
 return "llm_call"
 ```
 
-只要任务还未结束，默认重新进入 `pre_microcompact → llm_call`。这就是多轮 Agent，不是单次 Function Calling。
+只要任务还未结束，默认重新进入 `pre_microcompact`。
+`route_after_microcompact` 会用重算后的活动上下文 token 估算做二次判断：
+若微压缩已足够，进入 `llm_call`；若仍达有效阈值，才进入
+`compress_context`。这既保证廉价清理先于摘要模型调用，也形成真正的多轮
+Agent 循环，而不是单次 Function Calling。
 
 ---
 
@@ -1718,7 +1743,7 @@ enterprise-controlled-coding-agent/
 │   ├── api/                    # FastAPI 控制面
 │   ├── core/
 │   │   ├── agent/              # AgentState、Graph、Nodes、Tools、LLM
-│   │   └── execution/          # 六态任务状态机
+│   │   └── execution/          # 任务状态机与 Redis interrupt/lease 控制
 │   ├── memory/                 # 长期记忆准入、召回、衰减
 │   ├── observability/          # Trace 存储与指标
 │   ├── auth/                   # JWT、权限和邮件
@@ -1923,7 +1948,7 @@ sequenceDiagram
     API->>G: astream(_task_input, thread_id=session_id)
     G->>R: 每个节点后保存 checkpoint
     G-->>API: messages / updates
-    API-->>C: delta / tool_start / interrupt / tool_result
+    API-->>C: delta / tool_start / interrupt / tool_result / cancelled
     API->>DB: 持续更新助手消息状态和正文
     API-->>C: [DONE]
 ```
@@ -2026,7 +2051,7 @@ RedisSaver 用 `thread_id` 找到这段对话的 Agent checkpoint。因此：
 | SSE | 含义 |
 |---|---|
 | `task_started` | 一趟新任务已建立，包含 trace_id |
-| `interrupt` | 图已暂停，等待用户确认 |
+| `interrupt` | typed `tool_confirmation` 已暂停，等待用户确认 |
 | `tool_result` | 规范化工具结果与摘要 |
 | `tool_end` | 工具卡片终态 |
 | `cancelled` | 用户主动取消 |
@@ -2158,7 +2183,7 @@ active / archived / deleted
 
 ### 11.2 Agent 任务状态
 
-`AgentState.task_status` 使用字符串保存六种值，对应
+`AgentState.task_status` 使用字符串保存执行状态，对应
 `enterprise_agent/core/execution/state_machine.py:TaskStatus`；合法迁移由
 `transition_task_status` 统一校验：
 
@@ -2168,6 +2193,12 @@ pending / running / waiting_confirmation / succeeded / failed / cancelled
 
 它描述“一条用户请求的执行结果”。
 
+> [!IMPORTANT]
+> `waiting_confirmation` 表示敏感工具在等待 typed `tool_confirmation`
+> HITL 决策，它是唯一可 `Command(resume)` 的中断。`cancelled` 是不可恢复终态。
+> `TaskStatus.PAUSED` 在兼容窗口内仍可解析，仅为了把旧 checkpoint 终态化为
+> `cancelled`；当前状态机不再允许进入或恢复 `paused`。
+
 ### 11.3 Todo 或持久任务状态
 
 Todo 和 `.tasks/` 任务板描述 Agent 计划中的工作项。它们不是 LangGraph 自身的运行状态。
@@ -2176,7 +2207,7 @@ Todo 和 `.tasks/` 任务板描述 Agent 计划中的工作项。它们不是 La
 
 ---
 
-## 12. 六态状态机
+## 12. 任务状态机与 legacy PAUSED 兼容
 
 源码定位：
 
@@ -2194,6 +2225,8 @@ stateDiagram-v2
     running --> cancelled
     waiting_confirmation --> failed
     waiting_confirmation --> cancelled
+    legacy_paused --> failed: 仅迁移
+    legacy_paused --> cancelled: 仅迁移
 ```
 
 ### 12.1 为什么同状态更新允许通过
@@ -2320,7 +2353,7 @@ flowchart TD
 | `save_memory` | 本轮文本/工具结果 | 累积任务级记忆素材 | accumulator |
 | `verification_gate` | changed/validation | 注入必须验证的控制消息 | phase=validating |
 | `compress_context` | 大上下文 | 保存 transcript 并生成摘要 | summary + 精简消息 |
-| `manual_compress` | 用户主动压缩 | 保存并结束当前 invocation | should_end |
+| `manual_compress` | 用户主动压缩 | 保存 transcript、替换历史并继续当前 invocation | llm_call |
 | `finalize_task` | 全部执行证据 | 决定 succeeded/failed/cancelled | 终态、失败原因、finished_at |
 | `persist_memory` | 已终态任务 | 执行长期记忆准入和写入 | 记忆回执，END |
 
@@ -2397,11 +2430,24 @@ flowchart TD
 microcompact 的目标不是总结整段对话，而是：
 
 - 保留最近重要上下文；
-- 删除旧工具结果正文；
+- 把已有可恢复 artifact 的旧工具结果替换为路径和校验和；
 - 保留“调用过什么、结果状态是什么”等骨架；
 - 重新估算 token。
 
 它发生在每次模型调用前，成本低于完整 LLM 摘要。
+
+当前顺序是：
+
+```text
+完整工具结果 → 先解析 status/exit_code
+                 → 脱敏、独立存储限长、原子落 artifact
+                 → 限长的 ToolMessage + receipt
+                 → 较旧正文替换为真实 artifact handle
+                 → 重算活动上下文 token
+```
+
+这个顺序还修复了一个容易忽略的错误：如果先从中间截断 Bash JSON，
+`normalize_tool_result` 就可能看不到尾部的非零 `exit_code`，把失败命令误判为成功。
 
 ### 16.6 `llm_call_node`
 
@@ -2510,7 +2556,8 @@ microcompact 的目标不是总结整段对话，而是：
 - 保留最近必要消息；
 - 注入“继续下一项具体行动”的控制信息。
 
-手动压缩是显式操作，并结束当前 invocation；自动压缩会返回 `llm_call` 继续工作。
+手动压缩和自动压缩都会真正替换旧历史，并返回 `llm_call` 从 continuation packet
+继续同一次任务；手动操作不是 Stop，也不会在只生成摘要后提前结束。
 
 ---
 
@@ -2525,12 +2572,12 @@ microcompact 的目标不是总结整段对话，而是：
 ```python
 if task_failed:
     return "save_memory"
+if provider_context_overflow_recovery_requested:
+    return "compress"
 if pending_tool_calls:
     return "tool_call"
 if max_rounds:
     return "save_memory"
-if token_count > threshold:
-    return "compress"
 return "save_memory"
 ```
 
@@ -2551,9 +2598,7 @@ if max_rounds:
     return "end"
 if manual_compress_requested:
     return "manual_compress"
-if token_threshold_exceeded:
-    return "compress"
-return "llm_call"
+return "pre_microcompact"  # 先做 artifact-backed 清理，再判断是否完整压缩
 ```
 
 ### 17.3 对应测试
@@ -2608,7 +2653,8 @@ Settings
 边界：
 
 - 不同 Provider 的 token usage 字段和错误类型仍有差异；
-- `TASK_TOKEN_BUDGET=1_000_000` 是平台预算，不代表任意模型都支持 100 万上下文；
+- `MODEL_CONTEXT_WINDOW_TOKENS=1_000_000` 来自当前默认模型的硬上下文窗口；
+  `TASK_TOKEN_BUDGET=4_000_000` 是跨模型轮次的平台熔断，两者不是同一概念；
 - 公网 endpoint 会让发送给模型的上下文离开内网。
 
 ---
@@ -2619,21 +2665,27 @@ Settings
 
 - `core/agent/nodes.py:get_llm_with_tools`
 - `core/agent/nodes.py:_build_environment_info`
+- `core/agent/project_context.py:build_project_context`
 - `core/agent/nodes.py:_build_available_skills`
 - `core/agent/nodes.py:_build_execution_mode_info`
 
 系统提示包含：
 
-- 工程 Agent 的角色和完成标准；
-- 当前操作系统和 Shell 规则；
+- 通用 Coding Agent 的授权层级、工作流和完成标准；
+- 工具运行 OS family 和 Shell 规则，但不注入宿主 Python 版本；
 - Workspace 相对路径要求；
+- 清单/锁文件驱动的 Project Profile，候选命令的 `cwd`，以及带目录作用域的 `AGENTS.md`；
 - Todo、验证和汇报要求；
-- 可用 Skill；
+- JSON 格式的可用 Skill 元数据；
 - Single/Multi 模式边界；
-- 长期记忆使用约束；
-- 安全策略提醒。
+- 长期记忆、continuation 和普通仓库内容的数据边界；
+- 提示词注入与证据真实性约束。
 
-动态提示只能帮助模型做出更好的申请，不能替代执行器策略。
+上下文摘要、任务记忆摘要、重要性评分和偏好提取也使用固定
+`SystemMessage` 加 JSON 数据消息，避免把待分析文本插入规则本身。动态提示只能帮助
+模型做出更好的申请，不能替代执行器权限、Tool Contract、HITL 或 Workspace 隔离。
+压缩后的 continuation packet 仍是 user JSON 证据；只有服务端状态中的
+`context_continuation_active=true` 才会在唯一 SystemMessage 追加固定续跑规则，用户伪造同形 JSON 不能提权。
 
 ---
 
@@ -3022,6 +3074,11 @@ ContextVar 让同一进程中的工具知道当前 user/session，但 API 在进
 - `api/routes/chat.py:confirm_tool`
 - `api/routes/chat.py:get_pending_confirmation`
 
+> [!IMPORTANT]
+> typed `tool_confirmation` 是当前唯一可恢复中断，由 RedisSaver 保存
+> checkpoint，并在原 Trace 上使用 `Command(resume=...)`。红色 Stop 执行
+> `/chat/stream/cancel`，任务进入不可恢复的 `cancelled`；后续任务创建新 Trace。
+
 ```mermaid
 sequenceDiagram
     participant L as llm_call
@@ -3089,35 +3146,89 @@ resume payload：
 
 ## 34. 取消任务
 
-`request_task_cancellation()` 处理两种情况：
+### 34.1 Redis 是多 worker 下的权威控制面
 
-### 34.1 SSE 正在运行
+开始新任务时，API 为精确的 `user_id + session_id + trace_id` 申请
+active-trace lease。lease 同时保存 owner token、runner token、fence 和
+runner epoch。进程内的 event/map 只是低延迟优化，不是多 worker 下的
+任务归属事实。
 
-- 设置 session 对应 cancel event；
-- 生成器检测后停止；
-- 标记 cancelled；
-- 清理后台进程管理器；
-- 持久化已经生成的片段。
+```text
+POST /stream/cancel(session_id, trace_id)
+→ 校验 MySQL 会话归属和 Redis active Trace 精确匹配
+→ 原子写入 trace-specific cancel tombstone
+→ runner 在模型/流边界以及每次工具调用前检查
+→ 持久化 cancelled checkpoint、Assistant tombstone 和 continuation receipt
+→ 持有正确 runner token 的一方标记 stopped
+→ 仅在 runner stopped 后释放精确 lease
+```
 
-### 34.2 图正停在 interrupt
+Cancel endpoint 在老 runner 尚未确认停止时返回 `cancelling`，不会伪造
+`cancelled`。前端在这种状态或请求失败时保持输入锁定，允许重试
+或重新查询 `/stream/status`。
 
-- 用拒绝 payload 恢复图；
-- 清理未完成 interrupt；
-- 收敛工具、Todo 和 Trace；
-- 不让 checkpoint 永久处于悬挂状态。
+runner/fence 身份也用于丢弃老 Trace 的晚到 delta、tool event、done 和
+checkpoint 终结回调。老 runner 不能释放新 Trace 的 lease，也不能修改新任务
+时间线。
+
+### 34.2 运行中、工具中和 waiting-confirmation 的 Stop
+
+- 运行中：流处理器观察 cancel tombstone，关闭 Graph stream，写入终态后才释放 lease。
+- 工具中：批次中的每个调用前都重新查 Redis。POSIX 前台 Shell 使用
+  `Popen` 和独立进程组，尽可能 TERM/KILL；没有立即中断原语的外部
+  操作明确记录为 best-effort cancellation。托管 `background_run` 会按原 Trace
+  终止进程组。
+- waiting-confirmation：确认弹窗里的“终止任务”调用 Cancel，不是
+  Reject All。后端直接终态化该 Trace，不用拒绝 payload 恢复图。
+
+Stop 只保证不再启动后续 Agent 工作，不承诺回滚已经完成的文件写入
+或外部副作用。
+
+### 34.3 Cancel-and-replan 为什么必须创建新 Trace
+
+一份 cancellation continuation receipt 至少保存：
+
+- 原任务目标；
+- 已完成事项与未完成事项；
+- 修改文件；
+- 验证结果；
+- 已知风险。
+
+同 Session 只有在服务端确认老 Trace 已经 `cancelled` 且 lease 已释放后，
+才能发送下一条消息。新请求创建全新 `trace_id`，不对老图使用
+`Command(resume)`。第一轮 LLM 根据经过裁剪和去重的 durable chat history、当前
+workspace 真实状态以及 receipt 自主重新规划。
+
+Redis checkpoint 已经过期时，API 从 MySQL 恢复模型上下文，避免 UI 看得到
+历史，Agent 却只看到一句“继续”。`plan_task_node` 只标记 planning phase，它不是
+一个真实规划器；真正的新计划发生在新 Trace 的 LLM 调用中。
+
+### 34.4 旧 paused 数据如何迁移
+
+当前图不再包含 pause gate 或 `user_pause` 节点。启动迁移会把旧
+`paused` / `pause_requested` / `resuming` checkpoint 和 Trace 幂等终态化为
+`cancelled`，原因为 `user_pause_feature_retired`，写入 receipt，并清理
+`agent:pause:*` key。历史 Trace 中的 paused 事件可以只读展示，但不再可恢复。
+
+`TaskStatus.PAUSED` 在兼容期结束前仍保留用于解析旧序列化值，只允许转到
+`failed/cancelled`。滚动发布必须先经过保留旧节点且识别 retirement marker
+的 Phase A 桥接版，再发布删除节点/API 的 Phase B。详见
+[Pause/Continue 下线与 Cancel-and-Replan 滚动迁移](cancel-and-replan-rolling-migration.md)。
 
 ---
 
 ## 35. 为什么恢复前必须重新鉴权
 
-暂停可能持续几分钟。在这期间：
+工具确认可能持续几分钟。在这期间：
 
 - 用户可能被停用；
 - 管理员可能降级角色；
 - 会话可能被删除；
 - token 可能属于另一个用户。
 
-因此 `/stream/resume`、`/confirm`、`/pending_confirm`、取消等路由都先查 MySQL 会话归属，再访问 Redis checkpoint。
+因此 `/stream/resume`、`/stream/status`、`/stream/cancel`、`/confirm`、
+`/pending_confirm` 等路由都先查 MySQL 会话归属，再访问
+Redis checkpoint 或该 Trace 的精确控制键。
 
 ---
 
@@ -3129,19 +3240,29 @@ resume payload：
 | 用户拒绝 | waiting → running/终态 | rejected | rejected |
 | 确认超时 | waiting → running/failed | rejected | confirmation_timeout |
 | dangerous Shell | 通常保持执行流程 | blocked/policy_blocked | safety interception |
-| 用户取消 | cancelled | 未执行调用关闭 | cancelled |
+| Stop running/tool | cancelling → cancelled | 未执行调用关闭，已发生副作用不回滚 | cancel_requested + cancelled + receipt |
+| Stop waiting-confirmation | cancelled | 待确认调用关闭，不伪装 Reject All | cancel_requested + cancelled |
+| Cancel 失败/未收敛 | 保持原活动态 | 不启动新调用 | 前端锁定并重查 status |
+| 取消后下一条消息 | 新 Trace running | 由新 LLM 规划 | durable history + receipt + workspace |
+| legacy paused 迁移 | cancelled | 不恢复旧图 | user_pause_feature_retired |
 
 ### 36.1 对应测试
 
 - `tests/api/test_chat_task_security.py`
+- `tests/core/execution/test_interrupt_control.py`
 - `tests/core/execution/test_lifecycle_nodes.py`
 - `tests/core/test_nodes.py`
+- `tests/core/test_graph.py`
+- `frontend/tests/ChatPanel.spec.js`
 
 ### 36.2 学完后你应该能回答
 
 - interrupt 后为什么节点会从头重放？
 - Approve All 为什么还可能再次弹确认？
-- 取消一个等待确认的任务，为什么要先拒绝式恢复？
+- 为什么取消一个等待确认的任务不能伪装成 Reject All？
+- 为什么只有 RedisSaver 还不够，项目仍需要 active lease、cancel tombstone 和 runner fence？
+- 为什么 Cancel endpoint 不能在老 runner 停止前返回 cancelled？
+- 为什么 Cancel 后的继续必须是新 Trace 的 LLM 重新规划？
 
 ---
 
@@ -3213,11 +3334,14 @@ pytest -q test_calculator.py
 |---|---:|---|
 | `MAX_AGENT_ROUNDS` | 20 | 防止模型无限循环 |
 | `MAX_TOOL_CALLS_PER_TASK` | 25 | 防止工具失控 |
-| `TASK_TOKEN_BUDGET` | 1,000,000 | 单任务模型用量上限 |
-| `SESSION_TOKEN_BUDGET` | 1,000,000 | 单会话累计模型用量上限 |
+| `TASK_TOKEN_BUDGET` | 4,000,000 | 单任务跨轮次模型用量熔断；0 可显式关闭 |
+| `SESSION_TOKEN_BUDGET` | 0（关闭） | 可选的单会话累计用量上限 |
 | `CONFIRMATION_TIMEOUT_SECONDS` | 300 | 防止永久等待 |
 
-平台预算是安全阈值，不是性能目标。设置 100 万不意味着应该让每个任务消耗 100 万 token。
+平台预算是安全阈值，不是模型上下文大小。配置值为 0 仅关闭
+该级累计 token 熔断，不会关闭轮次、工具、超时和用户日/月额度。
+当前会话级熔断关闭，单任务仍保留 400 万 token 上限，避免 20 轮
+都携带近满上下文时出现千万级累计输入。
 
 ---
 
@@ -3230,18 +3354,69 @@ pytest -q test_calculator.py
 - 主要清理旧工具大输出；
 - 保留最近消息和工具骨架。
 
+#### 39.1.1 当前实现：artifact-first
+
+主工具运行时按以下顺序处理：
+
+```text
+工具输出产生
+→ 脱敏并执行单文件/单任务大小限制
+→ 原子写入 .agent/tool-artifacts/<trace_id>/<tool_call_id>-<sha16>.txt
+→ 记录 checksum、原始/存储字符数、截断/脱敏状态
+→ messages 只保留受限预览与真实 artifact 路径
+→ microcompact 再替换更旧的消息正文
+→ 必要时授权读取 artifact 的指定范围并重新注入模型
+```
+
+较旧工具正文最终变为：
+
+```text
+[tool output compacted;
+ artifact: .agent/tool-artifacts/<trace_id>/<tool_call_id>-<sha16>.txt;
+ sha256=<digest>; original_chars=<count>]
+```
+
+这能同时满足两个目标：
+
+- **控制上下文成本**：模型默认只看结论、关键错误和定位线索；
+- **保留可追溯证据**：系统可按需读取原始/受限原始 artifact，而不是依赖一个
+  不一定存在的 transcript。
+
+当前已落地：
+
+- artifact 路径由服务端根据用户、Trace 和 tool call 生成，不能接受模型指定的任意路径；
+- 写入前脱敏，采用临时文件、`fsync`、`os.replace`、600/700 权限和独立大小上限；
+- Trace 只记录路径、校验和、大小和摘要，不重复塞入整段大输出；
+- artifact 保存失败时，microcompact 保留旧正文并写 error Trace，不伪造路径；
+- “受限原始输出”不承诺保存密钥、无限输出或所有二进制字节。
+
+`read_tool_artifact(path, sha256, offset_bytes, limit_bytes)` 已提供带用户 Workspace
+归属、受控根路径、SHA-256 和 UTF-8 边界校验的分页读取；通用 `read_file`/Shell
+不能直接绕过它读取 Agent 运行目录。仍待补的生产能力是 artifact 过期回收、
+集中授权策略，以及脱离 Workspace 的防篡改集中存储。
+
 ### 39.2 自动完整压缩
 
-- token 估计超过 `TOKEN_THRESHOLD`；
-- 保存 transcript；
-- 调模型生成结构化摘要；
-- 返回主循环继续执行。
+- microcompact 后的活动上下文估计达到有效阈值；有效阈值直接由
+  `MODEL_CONTEXT_WINDOW_TOKENS × CONTEXT_COMPRESSION_RATIO` 计算，当前为
+  `1,000,000 × 0.8 = 800,000 tokens`；`TOKEN_THRESHOLD` 仅作为缺少模型窗口时的兼容回退；
+- 保存可恢复 transcript：保留用户可见内容和工具调用协议，剔除 Provider 私有 reasoning block；活动上下文的 token 估算仍按完整 Provider replay payload 计算；
+- 从 `AgentState` 确定性构造目标、Todo、改动文件、验证和失败证据；
+- 调模型生成辅助性运行摘要；
+- 给摘要完整输入与 Provider 输出设置上限，并为下一次主模型调用预留 10%（至少
+  1,024 token）增长空间；Provider 若仍报告窗口超限，只恢复压缩一次；
+- 使用 `RemoveMessage(REMOVE_ALL_MESSAGES)` 真正替换 checkpoint 里的旧历史；
+- 摘要调用的 token/耗时进入 Trace 和任务/会话预算。
+
+当 continuation budget 极小时，确定性事实区会逐级裁剪，最终只保留经过验证的
+transcript handle，并设置 `continuation_packet_truncated=true`。这是诚实降级，
+不是声称所有原事实仍在模型窗口里。
 
 ### 39.3 手动压缩
 
 - 模型/用户显式调用 compress；
 - 保存 transcript 和摘要；
-- 结束当前 invocation。
+- 真正替换旧消息后回到 `llm_call`，继续当前 invocation。
 
 ### 39.4 为什么 transcript 不是长期记忆
 
@@ -3257,13 +3432,23 @@ transcript 只为当前长任务恢复服务。它可能包含：
 ### 39.5 对应测试
 
 - `tests/core/test_nodes.py`
+- `tests/core/test_context.py`
+- `tests/core/test_tool_artifacts.py`
+- `tests/core/execution/test_lifecycle_nodes.py`
 - `tests/core/tools/test_contracts.py`
 - `tests/observability/test_trace_integration.py`
+
+当前回归已覆盖先落盘后清理、跨用户隔离、非法 ID/符号链接、原子写、
+校验和、脱敏、长 Bash 失败的 `exit_code`、真实 reducer 替换、摘要遗漏时的确定性
+事实区、Trace receipt、SHA 校验以及 UTF-8 安全范围读取。保留期、集中授权与
+防篡改集中存储仍是待办。
 
 ### 39.6 学完后你应该能回答
 
 - 自动 re-read 文件为什么不等于运行测试？
 - microcompact 与完整摘要的成本差异是什么？
+- 为什么 artifact 是“受限原文”而不是无上限原始字节？
+- artifact-first 为什么必须先原子落盘，再修改 messages？
 - 为什么任务 token 和 session token 要分开累计？
 
 ---
@@ -3329,13 +3514,13 @@ flowchart LR
 
 `init_context_node()` 在每个用户任务开始时：
 
-1. 用当前请求查询 pattern 和 task outcome；
-2. 应用 Active、retrieval_enabled 和相关性门槛；
-3. 中文查询增加词法重排；
-4. 只取少量高相关候选；
-5. 更新 retrieval count；
-6. 生成临时 `<long_term_memory>` 块；
-7. 记录候选和过滤 Trace。
+1. 先识别“刚才/上一条/previous message”等当前会话近指问题；命中时跳过 Chroma，只使用当前 checkpoint 历史；
+2. 其他请求才查询 pattern 和 task outcome；
+3. 应用 Active、retrieval_enabled 和相关性门槛；
+4. 中文查询也必须通过向量距离硬门槛，再进行去通用词的词法重排；
+5. 只取少量高相关候选并更新 retrieval count；
+6. 生成临时 `<long_term_memory>` 块，将它并入唯一系统消息；
+7. 记录候选、过滤或 `recent_conversation_reference` 跳过 Trace。
 
 模型主动调用 `search_memory` 时也必须使用相同门槛，不能成为旁路。
 
@@ -3499,8 +3684,11 @@ tool_name=delegate_task and ok=true
 
 ### 45.3 当前评测边界
 
-- 保留的真实 single-Agent：8/10；
-- 三个 `delegation_suitable` 用例已定义；
+- 当前正式 single-Agent 基线是 [v2 DeepSeek V4 Flash 23/30](../benchmarks/results/20260827T181517Z-agent-single.md)（[JSON](../benchmarks/results/20260827T181517Z-agent-single.json)）：easy 7/10、medium 10/10、hard 6/10，工具成功率 77.53%，基础设施错误 0、系统错误 0；
+- 正式运行绑定干净候选源码 commit `1d637c5753e93c72989c3fdae2ab5edf50e078eb`，7 项失败全部保留；两次局部诊断复跑使用 dirty worktree 且不是 official run，不替代 23/30；
+- 旧 25/30、旧 Platform 10/10 与旧 v1 8/10 只作历史证据，不代表当前候选版本；v1 与 v2 的题集、断言和 evaluator 也不同；
+- `hard.cancel_replan.partial_workspace` 评估的是模型对部分 Workspace 的重新规划，不执行真实 Stop/Cancel 协议；lease、cancel tombstone、runner fencing 和 UI 输入锁由确定性测试证明，不计入模型成功率；
+- 六个 `delegation_suitable` 用例已定义；
 - single/multi 对照尚未完成；
 - 不宣称 Multi 提高成功率或效率。
 
@@ -3568,12 +3756,14 @@ uv run python -m benchmarks.run --backend platform --mode single --no-artifacts
 
 | Backend/套件 | 是否调用聊天模型 | 当前结果 | 正确解释 |
 |---|---:|---:|---|
-| Platform | 否 | 10/10 | 工具、策略、状态、评测器 |
+| Platform | 否 | 30/30 | 工具成功率 89.39%；确定性工具、策略、状态和评测器，不是模型能力 |
 | Memory | 否 | 6/6 | 小型检索与过滤 |
-| Agent single | 是 | 8/10 | 一次 DeepSeek 自主执行 |
+| Agent single v2 | 是 | 23/30 | DeepSeek V4 Flash；easy 7/10、medium 10/10、hard 6/10；工具成功率 77.53%；0 infrastructure/system errors |
 | Agent multi | 是 | 待测 | 尚无收益结论 |
 
-`benchmarks/v1/cases.json` 每个用例包含：
+当前权威产物包括 [Agent Markdown 正式报告](../benchmarks/results/20260827T181517Z-agent-single.md)与[机器可读 JSON](../benchmarks/results/20260827T181517Z-agent-single.json)、[Platform 30/30](../benchmarks/results/20260827T182126Z-platform-single.md)和[Memory 6/6](../benchmarks/results/20260827T182146Z-memory-recall.md)；完整验证链见[求职展示版 v1.0 证据清单](release-evidence/portfolio-v1.0.md)。7 项正式失败不能由后续局部诊断复跑追溯改分。模型基线不覆盖真实 Stop/Cancel 控制面；`hard.cancel_replan.partial_workspace` 只验证取消后部分 Workspace 场景中的模型重新规划，控制协议由 `tests/core/execution/test_interrupt_control.py`、`tests/api/test_chat_task_security.py`、`tests/api/test_cancelled_turn_regression.py` 和 `frontend/tests/ChatPanel.spec.js` 等确定性测试证明。
+
+`benchmarks/v2/cases.json` 每个用例包含：
 
 - category；
 - fixtures；
@@ -3818,13 +4008,17 @@ uv run python scripts/smoke_test.py
 
 - `tests/README.md`
 - `benchmarks/README.md`
-- `benchmarks/v1/cases.json`
+- `benchmarks/v2/cases.json`
+- `benchmarks/results/20260827T181517Z-agent-single.md`
+- `docs/release-evidence/portfolio-v1.0.md`
 - `docs/portfolio-guide.md`
 
 需要回答：
 
-- Platform 10/10 为什么不是 Agent 10/10？
-- single 8/10 的两个失败说明什么？
+- Platform 30/30 为什么不能与 Agent v2 23/30 当作同一种分数？
+- v2 single 的 7 个正式失败说明什么？
+- 为什么旧 25/30、局部诊断复跑与当前正式 23/30 不能互相替代？
+- 为什么 Stop/Cancel 控制面不计入模型成功率？
 - 为什么 Multi 目前没有收益结论？
 
 练习：
@@ -3862,7 +4056,8 @@ uv run python -m benchmarks.run --backend platform --mode single --no-artifacts
 | Idempotent | 重复执行仍不会产生额外副作用 |
 | Trace | 一趟任务从请求到终态的结构化执行证据 |
 | microcompact | 不调用总结模型的轻量上下文清理 |
-| transcript | 压缩前保存的当前任务原始上下文 |
+| artifact | 工具输出在模型预览/微压缩前落盘的受限、脱敏、带校验和证据 |
+| transcript | 完整/手动压缩前原子保存的可恢复上下文；保留可见内容与工具协议，不持久化 Provider 私有 reasoning block |
 | Active Memory | 允许参与召回的高质量长期记忆 |
 | Legacy Memory | 可查看/删除，但不能自动注入的旧记录 |
 
@@ -3873,7 +4068,7 @@ uv run python -m benchmarks.run --backend platform --mode single --no-artifacts
 第 2 分钟：FastAPI → AgentState → LangGraph 主循环
 第 3 分钟：ToolContract → 权限 → 风险 → HITL → 执行器
 第 4 分钟：验证门、Checkpoint、Trace 和记忆治理
-第 5 分钟：真实 8/10、Platform 10/10、当前安全/Multi 边界
+第 5 分钟：v2 DeepSeek V4 Flash 23/30、Platform 30/30、当前安全/Multi 边界
 ```
 
 ## C. 最容易讲错的十件事
@@ -3895,6 +4090,7 @@ uv run python -m benchmarks.run --backend platform --mode single --no-artifacts
 - [工具与能力矩阵](capability-matrix.md)
 - [长期记忆治理](memory-governance.md)
 - [Benchmark 设计](../benchmarks/README.md)
+- [求职展示版 v1.0 证据清单](release-evidence/portfolio-v1.0.md)
 - [作品集与面试指南](portfolio-guide.md)
 - [管理员控制台](admin-console.md)
 

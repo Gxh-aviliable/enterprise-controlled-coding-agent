@@ -43,6 +43,15 @@ SENSITIVE_AGENT_FILENAMES = {
     "id_ed25519",
 }
 SENSITIVE_AGENT_SUFFIXES = {".pem", ".key", ".p12", ".pfx"}
+OPERATIONAL_AGENT_PATH_PARTS = {
+    ".agent",
+    ".agent_internal",
+    ".agent_tmp",
+    ".tasks",
+    ".team",
+    ".transcripts",
+    ".vscode",
+}
 
 
 def _ensure_vscode_settings(workspace: Path) -> None:
@@ -144,6 +153,20 @@ def is_sensitive_agent_path(path: str) -> bool:
     if name in SENSITIVE_AGENT_FILENAMES or name.startswith(".env."):
         return True
     return Path(name).suffix.lower() in SENSITIVE_AGENT_SUFFIXES
+
+
+def is_operational_agent_path(path: str) -> bool:
+    """Return whether a path belongs to Agent-owned operational storage.
+
+    These directories have dedicated tools that enforce ownership, integrity,
+    and bounded reads. Generic file or shell tools must not silently bypass
+    those contracts.
+    """
+    normalized = str(path or "").replace("\\", "/").strip()
+    return any(
+        part.lower() in OPERATIONAL_AGENT_PATH_PARTS
+        for part in Path(normalized).parts
+    )
 
 
 def get_user_workspace(user_id: int = None) -> Path:

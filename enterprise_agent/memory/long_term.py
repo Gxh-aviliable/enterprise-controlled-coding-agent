@@ -26,8 +26,18 @@ from enterprise_agent.memory.policy import (
 )
 
 _CJK_RE = re.compile(r"[\u4e00-\u9fff]")
+_CJK_SEQUENCE_RE = re.compile(r"[\u4e00-\u9fff]+")
 _ASCII_TERM_RE = re.compile(r"[a-z0-9_+#.-]{2,}")
 _PATTERN_PROVENANCE_VERSION = 1
+
+# A single conversational bigram must not make an unrelated durable memory
+# relevant.  These terms are common in questions and pronoun phrases but carry
+# almost no topic signal (the production false positive was solely ``你的``).
+_CJK_GENERIC_BIGRAMS = frozenset({
+    "你的", "我的", "他的", "她的", "它的", "我们", "你们", "他们",
+    "这个", "那个", "一个", "什么", "怎么", "如何", "是否", "可以",
+    "问题", "现在", "当前", "刚才", "刚刚", "上一", "下一", "前面",
+})
 
 
 def _json_string_list(value: Any) -> list[str]:
@@ -58,16 +68,34 @@ def pattern_quality_status(metadata: dict[str, Any] | None) -> tuple[str, str]:
 def _lexical_tokens(text: str) -> set[str]:
     normalized = str(text or "").lower()
     tokens = set(_ASCII_TERM_RE.findall(normalized))
-    cjk = "".join(_CJK_RE.findall(normalized))
-    tokens.update(cjk[index:index + 2] for index in range(max(0, len(cjk) - 1)))
+    # Build bigrams inside each contiguous CJK span. Joining every CJK
+    # character first would invent tokens across punctuation, XML and English
+    # text boundaries in structured task summaries.
+    for cjk in _CJK_SEQUENCE_RE.findall(normalized):
+        tokens.update(cjk[index:index + 2] for index in range(max(0, len(cjk) - 1)))
     return tokens
 
 
-def _cjk_lexical_score(query: str, document: str) -> float:
-    query_tokens = _lexical_tokens(query)
+def _meaningful_lexical_tokens(text: str) -> set[str]:
+    return _lexical_tokens(text) - _CJK_GENERIC_BIGRAMS
+
+
+def _is_cjk_bigram(token: str) -> bool:
+    return len(token) == 2 and all(_CJK_RE.fullmatch(character) for character in token)
+
+
+def _cjk_lexical_evidence(query: str, document: str) -> tuple[float, int, bool]:
+    """Return score, overlap count and whether an exact identifier matched."""
+    query_tokens = _meaningful_lexical_tokens(query)
     if not query_tokens:
-        return 0.0
-    return len(query_tokens & _lexical_tokens(document)) / len(query_tokens)
+        return 0.0, 0, False
+    overlap = query_tokens & _meaningful_lexical_tokens(document)
+    has_identifier_match = any(not _is_cjk_bigram(token) for token in overlap)
+    return len(overlap) / len(query_tokens), len(overlap), has_identifier_match
+
+
+def _cjk_lexical_score(query: str, document: str) -> float:
+    return _cjk_lexical_evidence(query, document)[0]
 
 
 def rank_memory_candidates(
@@ -88,12 +116,27 @@ def rank_memory_candidates(
     is_cjk_query = bool(_CJK_RE.search(query or ""))
     for candidate in candidates:
         candidate["semantic_rank"] = candidate.get("rank")
-        candidate["lexical_score"] = round(
-            _cjk_lexical_score(query, candidate.get("_search_text", "")),
-            6,
+        lexical_score, lexical_match_count, has_identifier_match = (
+            _cjk_lexical_evidence(query, candidate.get("_search_text", ""))
         )
+        candidate["lexical_score"] = round(lexical_score, 6)
+        candidate["lexical_match_count"] = lexical_match_count
+        candidate["_has_identifier_match"] = has_identifier_match
 
     if is_cjk_query:
+        # Chinese lexical reranking complements the multilingual embedding; it
+        # must not bypass the configured semantic safety gate.
+        for candidate in candidates:
+            reasons = candidate["_rejection_reasons"]
+            distance = candidate.get("distance")
+            if (
+                not reasons
+                and max_distance is not None
+                and distance is not None
+                and distance > max_distance
+            ):
+                reasons.append("distance_above_threshold")
+
         base_eligible = [
             candidate
             for candidate in candidates
@@ -111,6 +154,15 @@ def rank_memory_candidates(
             reasons = candidate["_rejection_reasons"]
             if not reasons and candidate["lexical_score"] < cutoff:
                 reasons.append("cjk_lexical_below_threshold")
+            elif (
+                not reasons
+                and candidate["lexical_match_count"] < 2
+                and not candidate["_has_identifier_match"]
+            ):
+                # One Chinese bigram is too weak to identify a reusable memory.
+                # Exact engineering identifiers such as uv/pytest/Python remain
+                # sufficient when the semantic distance also passes.
+                reasons.append("cjk_insufficient_overlap")
             candidate["retrieval_strategy"] = "cjk_lexical_rerank"
         candidates.sort(
             key=lambda item: (
@@ -136,6 +188,7 @@ def rank_memory_candidates(
         candidate["rank"] = rank
         reasons = candidate.pop("_rejection_reasons")
         candidate.pop("_search_text", None)
+        candidate.pop("_has_identifier_match", None)
         candidate["eligible"] = not reasons
         candidate["filter_reason"] = (
             "eligible" if not reasons else ",".join(reasons)
