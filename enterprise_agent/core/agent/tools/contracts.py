@@ -26,6 +26,14 @@ class ToolResultStatus(str, Enum):
     REJECTED = "rejected"
 
 
+class ArtifactPolicy(str, Enum):
+    """Decide whether one tool result belongs in recoverable artifact storage."""
+
+    NEVER = "never"
+    RECOVERABLE = "recoverable"
+    ALWAYS = "always"
+
+
 @dataclass(frozen=True)
 class ToolContract:
     name: str
@@ -35,6 +43,7 @@ class ToolContract:
     idempotent: bool = False
     requires_confirmation: bool = False
     side_effect: str = "none"
+    artifact_policy: ArtifactPolicy = ArtifactPolicy.RECOVERABLE
 
 
 @dataclass(frozen=True)
@@ -73,6 +82,7 @@ def _contract(
     idempotent: bool = True,
     confirmation: bool = False,
     side_effect: str = "none",
+    artifact_policy: ArtifactPolicy = ArtifactPolicy.RECOVERABLE,
 ) -> ToolContract:
     return ToolContract(
         name=name,
@@ -82,6 +92,7 @@ def _contract(
         idempotent=idempotent,
         requires_confirmation=confirmation,
         side_effect=side_effect,
+        artifact_policy=artifact_policy,
     )
 
 
@@ -166,9 +177,25 @@ TOOL_CONTRACTS = {
     "compress": _contract("compress", idempotent=False, side_effect="agent_state"),
     "list_transcripts": _contract("list_transcripts"),
     "get_transcript": _contract("get_transcript"),
-    "read_tool_artifact": _contract("read_tool_artifact"),
+    # Recovery reads must never create another recovery artifact. Otherwise
+    # every read returns a fresh receipt that can induce an artifact-of-artifact
+    # loop in the next model round.
+    "read_tool_artifact": _contract(
+        "read_tool_artifact",
+        artifact_policy=ArtifactPolicy.NEVER,
+    ),
     "context_status": _contract("context_status"),
-    "search_memory": _contract("search_memory"),
+    # ``search_memory`` already returns a bounded, redacted view. Persisting
+    # that view cannot recover omitted Chroma rows and only duplicates user
+    # memory inside the workspace artifact store.
+    "search_memory": _contract(
+        "search_memory",
+        artifact_policy=ArtifactPolicy.NEVER,
+    ),
+    "list_memories": _contract(
+        "list_memories",
+        artifact_policy=ArtifactPolicy.NEVER,
+    ),
 }
 
 
@@ -191,6 +218,24 @@ def get_tool_contract(tool_name: str) -> ToolContract:
         return TOOL_CONTRACTS[tool_name]
     except KeyError as exc:
         raise KeyError(f"No tool contract registered for {tool_name!r}") from exc
+
+
+def should_persist_artifact(
+    contract: ToolContract,
+    *,
+    raw_chars: int,
+    source_truncated: bool = False,
+) -> bool:
+    """Apply the same artifact policy in every tool-execution runtime."""
+    if contract.artifact_policy is ArtifactPolicy.NEVER:
+        return False
+    if contract.artifact_policy is ArtifactPolicy.ALWAYS:
+        return raw_chars > 0
+    return bool(
+        source_truncated
+        or raw_chars > settings.MICROCOMPACT_MIN_CHARS
+        or raw_chars > settings.TOOL_OUTPUT_MAX_CHARS
+    )
 
 
 def validate_tool_contracts(tools: Iterable[Any]) -> None:

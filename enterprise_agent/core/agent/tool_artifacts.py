@@ -336,8 +336,16 @@ def format_tool_output(
     error_code: str | None = None,
     exit_code: int | None = None,
     artifact_error: str | None = None,
+    expose_receipt: bool | None = None,
 ) -> tuple[str, bool]:
-    """Create a bounded model/UI preview while retaining explicit evidence status."""
+    """Create a bounded model preview while retaining evidence out of band.
+
+    A stored receipt belongs in ``ToolMessage.artifact`` and Trace regardless
+    of whether the model needs to see it. The textual receipt is exposed only
+    when the source or model preview is incomplete, unless a caller explicitly
+    overrides that decision. Microcompact later creates its own visible handle
+    when it replaces an old tool body.
+    """
     from enterprise_agent.observability.trace_store import redact_text
 
     source = redact_text(str(raw_output), limit=None)
@@ -348,7 +356,17 @@ def format_tool_output(
         status_bits.append(f"exit_code={exit_code}")
     header = "[tool-result " + " ".join(status_bits) + "]"
 
-    if receipt is not None:
+    receipt_required_for_recovery = bool(
+        receipt is not None
+        and (
+            receipt.source_truncated
+            or len(source) + len(header) + 1 > settings.TOOL_OUTPUT_MAX_CHARS
+        )
+    )
+    if expose_receipt is None:
+        expose_receipt = receipt_required_for_recovery
+
+    if receipt is not None and expose_receipt:
         footer = (
             f'[artifact path="{receipt.path}" sha256="{receipt.sha256}" '
             f"original_chars={receipt.original_chars} stored_chars={receipt.stored_chars} "

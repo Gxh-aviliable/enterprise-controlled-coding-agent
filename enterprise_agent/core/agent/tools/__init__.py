@@ -12,7 +12,7 @@ Tools are organized by module:
         broadcast, shutdown_request, plan_approval, idle
 - context_tools: compress, list_transcripts, get_transcript, read_tool_artifact,
                  context_status
-- memory: search_memory
+- memory: search_memory, list_memories
 """
 
 from enterprise_agent.config.settings import settings
@@ -47,7 +47,7 @@ from enterprise_agent.core.agent.tools.file_ops import (
 )
 
 # Memory query
-from enterprise_agent.core.agent.tools.memory import search_memory
+from enterprise_agent.core.agent.tools.memory import list_memories, search_memory
 
 # Shell execution
 from enterprise_agent.core.agent.tools.shell import bash
@@ -227,6 +227,7 @@ ALL_TOOLS = [
 
     # Memory
     search_memory,
+    list_memories,
 ]
 
 # Fail at import/startup when executable tools and their safety metadata drift.
@@ -243,6 +244,7 @@ def get_tools_for_permissions(
     user_permissions: list,
     *,
     enable_multi_agent: bool | None = None,
+    memory_query_mode: str | None = None,
 ) -> list:
     """Filter tools based on user permissions.
 
@@ -261,7 +263,7 @@ def get_tools_for_permissions(
             todo_update, task_create, task_get, task_update, task_list, claim_task,
             load_skill, list_skills,
             compress, list_transcripts, get_transcript, read_tool_artifact, context_status,
-            search_memory,
+            search_memory, list_memories,
         ],
         "tools:shell": [bash, background_run, check_background],
         "tools:advanced": [
@@ -282,7 +284,7 @@ def get_tools_for_permissions(
         "tools:context": [
             compress, list_transcripts, get_transcript, read_tool_artifact, context_status,
         ],
-        "tools:memory": [search_memory],
+        "tools:memory": [search_memory, list_memories],
         "tools:all": ALL_TOOLS,
     }
 
@@ -313,6 +315,13 @@ def get_tools_for_permissions(
         enable_multi_agent = settings.ENABLE_MULTI_AGENT
     if not enable_multi_agent:
         unique_tools = [tool for tool in unique_tools if tool.name not in MULTI_AGENT_TOOL_NAMES]
+
+    # A meta-memory inventory request must have one deterministic retrieval
+    # route. Normal work gets semantic recall, never the broad listing tool.
+    if memory_query_mode == "listing":
+        unique_tools = [tool for tool in unique_tools if tool.name != "search_memory"]
+    elif memory_query_mode == "semantic":
+        unique_tools = [tool for tool in unique_tools if tool.name != "list_memories"]
 
     return unique_tools
 

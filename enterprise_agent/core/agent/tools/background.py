@@ -19,6 +19,10 @@ from langchain_core.tools import tool
 
 from enterprise_agent.config.settings import settings
 from enterprise_agent.core.agent.tool_artifacts import ToolArtifactStore, format_tool_output
+from enterprise_agent.core.agent.tools.contracts import (
+    get_tool_contract,
+    should_persist_artifact,
+)
 from enterprise_agent.core.agent.tools.shell import (
     _read_captured_stream,
     _safe_subprocess_environment,
@@ -178,7 +182,11 @@ class BackgroundManager:
                 status = "success" if process.returncode == 0 else "error"
                 receipt = None
                 artifact_error = None
-                if len(output) > 100:
+                if should_persist_artifact(
+                    get_tool_contract("check_background"),
+                    raw_chars=len(output),
+                    source_truncated=source_truncated,
+                ):
                     try:
                         receipt = ToolArtifactStore(workdir=workdir).save(
                             output,

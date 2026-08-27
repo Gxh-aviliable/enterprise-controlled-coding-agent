@@ -70,6 +70,7 @@ from enterprise_agent.core.agent.tools.contracts import (
     get_tool_contract,
     normalize_tool_result,
     resolve_tool_risk,
+    should_persist_artifact,
 )
 from enterprise_agent.core.execution.state_machine import (
     ExecutionPhase,
@@ -138,8 +139,8 @@ the current request. Load a relevant Skill before applying its guidance.
 - Compacted tool evidence is bounded and may be redacted/source-truncated. Re-read
   verified ranges with `read_tool_artifact(path, sha256, ...)` when needed.
 - Transcript handles are operational recovery backups, not immutable audit evidence or durable memory.
-- For durable-memory questions, use recalled memory first and `search_memory` when
-  incomplete. `.tasks`, `.team`, transcripts, and artifacts are not durable memory.
+- Memory: use recalled context; `search_memory` only for a missing topic;
+  `list_memories` once for inventories and page only as needed. Operational stores are not memory.
 - For "what did I just ask/say", use current chat history, not durable memory. Be concise and direct."""
 
 FRAMEWORK_CONTEXT_CONTINUATION_PROMPT = """## Framework Context Continuation Active
@@ -166,6 +167,20 @@ _RECENT_CONVERSATION_REFERENCE_PATTERNS = (
     ),
 )
 
+_META_MEMORY_INVENTORY_PATTERNS = (
+    re.compile(
+        r"(?:我的|你的)?(?:长期)?记忆(?:里|里面|中)?(?:现在)?"
+        r".{0,10}(?:有啥|有什么|有哪些|内容|列出|查看|保存了|存了)"
+    ),
+    re.compile(r"(?:给我看|列出|显示).{0,8}(?:长期)?记忆"),
+    re.compile(
+        r"\b(?:what(?:'s| is) in|list|show|browse) (?:my |the )?"
+        r"(?:long[- ]term )?memor(?:y|ies)\b",
+        re.IGNORECASE,
+    ),
+    re.compile(r"\bwhat do you remember about me\b", re.IGNORECASE),
+)
+
 
 def _automatic_memory_skip_reason(request: str) -> str | None:
     """Keep immediate-turn references bound to the current conversation."""
@@ -173,6 +188,11 @@ def _automatic_memory_skip_reason(request: str) -> str | None:
     if any(pattern.search(normalized) for pattern in _RECENT_CONVERSATION_REFERENCE_PATTERNS):
         return "recent_conversation_reference"
     return None
+
+
+def _is_meta_memory_inventory_request(request: str) -> bool:
+    normalized = " ".join(str(request or "").strip().split())
+    return any(pattern.search(normalized) for pattern in _META_MEMORY_INVENTORY_PATTERNS)
 
 
 def _build_environment_info() -> str:
@@ -473,6 +493,7 @@ def _estimate_next_llm_context(
             state.get("execution_mode") == "multi_agent"
             and settings.ENABLE_MULTI_AGENT
         ),
+        memory_query_mode=state.get("memory_query_mode", "semantic"),
     )
     tool_definitions = []
     for tool in allowed_tools:
@@ -504,6 +525,7 @@ def _continuation_growth_headroom(token_threshold: int) -> int:
 def get_llm_with_tools(
     permissions: List[str] | None = None,
     execution_mode: str = "single_agent",
+    memory_query_mode: str = "semantic",
 ):
     """Get the LLM bound only to tools allowed for this task."""
     global _llm
@@ -515,6 +537,7 @@ def get_llm_with_tools(
         enable_multi_agent=(
             execution_mode == "multi_agent" and settings.ENABLE_MULTI_AGENT
         ),
+        memory_query_mode=memory_query_mode,
     )
     cache_key = tuple(tool.name for tool in allowed_tools)
     if cache_key not in _llm_with_tools_cache:
@@ -1030,11 +1053,13 @@ async def init_context_node(state: AgentState) -> Dict[str, Any]:
         "tool_call_stats": {},
         "tool_execution_records": [],
         "tool_call_count": 0,
+        "artifact_read_state": {},
         "created_task_ids": [],
         "round_count": 0,
         "should_compress": False,
         "context_continuation_active": False,
         "project_context_snapshot": "",
+        "artifact_manifest_path": None,
         "context_overflow_recovery_attempts": 0,
         "last_model_stop_reason": None,
         "incomplete_response_recovery_attempts": 0,
@@ -1051,6 +1076,7 @@ async def init_context_node(state: AgentState) -> Dict[str, Any]:
         "verification_attempts": 0,
         "confirmation_deadline": None,
         "retrieved_memory_context": "",
+        "memory_query_mode": "semantic",
         # Accumulation is trace-scoped. A cancelled task must not leak its
         # unfinished memory payload into the next trace in the same session.
         "memory_accumulator": {},
@@ -1063,6 +1089,28 @@ async def init_context_node(state: AgentState) -> Dict[str, Any]:
     # ephemeral field for each model round in the current task only.
     user_id = state.get("user_id")
     current_request = state.get("current_user_request") or _last_user_request(messages)
+
+    if current_request and _is_meta_memory_inventory_request(current_request):
+        result["memory_query_mode"] = "listing"
+        _record_trace(
+            state,
+            event_type="memory",
+            name="memory_retrieval",
+            status="skipped",
+            data={
+                "source": "automatic_context",
+                "query_summary": current_request[:500],
+                "strategy": "paginated_listing",
+                "skip_reason": "explicit_inventory_uses_list_memories_tool",
+                "candidates": [],
+                "injected_ids": [],
+                "injected_count": 0,
+                "injected_characters": 0,
+                "injected_tokens": 0,
+                "application_status": "not_applicable",
+            },
+        )
+        return result
 
     if settings.ENABLE_LONG_TERM_MEMORY and user_id and current_request:
         skip_reason = _automatic_memory_skip_reason(current_request)
@@ -1096,72 +1144,29 @@ async def init_context_node(state: AgentState) -> Dict[str, Any]:
             from enterprise_agent.memory.long_term import get_long_term_memory
 
             memory = get_long_term_memory(user_id)
-            meta_memory_keywords = [
-                "长期记忆", "记忆里", "记得什么", "记住什么", "我的记忆",
-                "我的偏好", "我的信息", "关于我", "存储了什么", "有什么记忆",
-                "你的记忆", "保存了什么", "记了什么",
-                "my memory", "remember me", "what do you know about me",
-                "my preferences", "my info", "stored about me",
-                "what do you remember", "any memories",
-            ]
-            is_meta_memory_question = any(
-                keyword in current_request.lower()
-                for keyword in meta_memory_keywords
+            pattern_candidates = await memory.search_patterns(
+                query=current_request,
+                n_results=3,
+                active_only=True,
+                max_distance=settings.MEMORY_RELEVANCE_MAX_DISTANCE,
+                retrieval_enabled_only=True,
+                include_rejected=True,
             )
-
-            if is_meta_memory_question:
-                user_patterns = await memory.get_all_patterns(active_only=True)
-                past_conversations = await memory.list_conversations(
-                    limit=50,
-                    role="task_summary",
-                    active_only=True,
-                )
-                pattern_candidates = [
-                    {
-                        **item,
-                        "rank": index + 1,
-                        "eligible": True,
-                        "filter_reason": "eligible",
-                    }
-                    for index, item in enumerate(user_patterns)
-                ]
-                conversation_candidates = [
-                    {
-                        **item,
-                        "rank": index + 1,
-                        "eligible": True,
-                        "filter_reason": "eligible",
-                    }
-                    for index, item in enumerate(past_conversations)
-                ]
-                logging.info(
-                    "[init_context] Meta-memory question detected; "
-                    "listing active schema-v2 memories"
-                )
-            else:
-                pattern_candidates = await memory.search_patterns(
-                    query=current_request,
-                    n_results=3,
-                    active_only=True,
-                    max_distance=settings.MEMORY_RELEVANCE_MAX_DISTANCE,
-                    retrieval_enabled_only=True,
-                    include_rejected=True,
-                )
-                conversation_candidates = await memory.search_conversations(
-                    query=current_request,
-                    n_results=3,
-                    role="task_summary",
-                    active_only=True,
-                    max_distance=settings.MEMORY_RELEVANCE_MAX_DISTANCE,
-                    retrieval_enabled_only=True,
-                    include_rejected=True,
-                )
-                user_patterns = [
-                    item for item in pattern_candidates if item.get("eligible")
-                ][:3]
-                past_conversations = [
-                    item for item in conversation_candidates if item.get("eligible")
-                ][:3]
+            conversation_candidates = await memory.search_conversations(
+                query=current_request,
+                n_results=3,
+                role="task_summary",
+                active_only=True,
+                max_distance=settings.MEMORY_RELEVANCE_MAX_DISTANCE,
+                retrieval_enabled_only=True,
+                include_rejected=True,
+            )
+            user_patterns = [
+                item for item in pattern_candidates if item.get("eligible")
+            ][:3]
+            past_conversations = [
+                item for item in conversation_candidates if item.get("eligible")
+            ][:3]
 
             for pattern in user_patterns:
                 if pattern.get("id"):
@@ -1271,20 +1276,16 @@ async def init_context_node(state: AgentState) -> Dict[str, Any]:
                 duration_ms=int((time.perf_counter() - retrieval_started) * 1000),
                 data={
                     "query_summary": current_request[:500],
-                    "strategy": (
-                        "complete_listing"
-                        if is_meta_memory_question
-                        else next(
-                            (
-                                item.get("retrieval_strategy")
-                                for item in [
-                                    *pattern_candidates,
-                                    *conversation_candidates,
-                                ]
-                                if item.get("retrieval_strategy")
-                            ),
-                            "semantic_top_k",
-                        )
+                    "strategy": next(
+                        (
+                            item.get("retrieval_strategy")
+                            for item in [
+                                *pattern_candidates,
+                                *conversation_candidates,
+                            ]
+                            if item.get("retrieval_strategy")
+                        ),
+                        "semantic_top_k",
                     ),
                     "threshold": settings.MEMORY_RELEVANCE_MAX_DISTANCE,
                     "top_k_per_collection": 3,
@@ -1497,10 +1498,21 @@ async def llm_call_node(state: AgentState) -> Dict[str, Any]:
         if cancel_request:
             return cancelled_update(cancel_request)
         try:
-            response = await get_llm_with_tools(
-                state.get("permissions", []),
-                state.get("execution_mode", "single_agent"),
-            ).ainvoke(lc_messages)
+            permissions = state.get("permissions", [])
+            execution_mode = state.get("execution_mode", "single_agent")
+            memory_query_mode = state.get("memory_query_mode", "semantic")
+            # Preserve the long-standing two-argument call shape for normal
+            # work and test/provider adapters. Inventory mode opts into the
+            # third routing argument explicitly.
+            if memory_query_mode == "semantic":
+                bound_llm = get_llm_with_tools(permissions, execution_mode)
+            else:
+                bound_llm = get_llm_with_tools(
+                    permissions,
+                    execution_mode,
+                    memory_query_mode,
+                )
+            response = await bound_llm.ainvoke(lc_messages)
             cancel_request = await _tool_cancel_request(state)
             if cancel_request:
                 return cancelled_update(cancel_request)
@@ -1810,6 +1822,34 @@ def _tool_result_source_truncated(result: Any, serialized: str) -> bool:
     return "source_truncated=true" in serialized or "[source capture clipped " in serialized
 
 
+def _artifact_reference_is_model_visible(
+    state: Dict[str, Any],
+    *,
+    path: str,
+    sha256: str,
+) -> bool:
+    """Allow recovery only for a handle the current model context can cite."""
+    for message in state.get("messages", []):
+        raw_content = (
+            message.get("content", "")
+            if isinstance(message, dict)
+            else getattr(message, "content", "")
+        )
+        content = _extract_text(raw_content)
+        if path in content and sha256 in content:
+            return True
+
+    # A clipped current result may carry the receipt in its visible ToolMessage
+    # only after this state snapshot was assembled. The authoritative execution
+    # record is the fallback for resumed/legacy checkpoints.
+    return any(
+        record.get("artifact_path") == path
+        and record.get("artifact_sha256") == sha256
+        and (record.get("model_truncated") or record.get("source_truncated"))
+        for record in state.get("tool_execution_records", [])
+    )
+
+
 async def _tool_cancel_request(state: AgentState) -> dict | None:
     """Read the exact trace's authoritative Redis cancellation tombstone."""
     user_id = state.get("user_id")
@@ -1871,6 +1911,7 @@ async def tool_executor_node(state: AgentState) -> Dict[str, Any]:
             state.get("execution_mode") == "multi_agent"
             and settings.ENABLE_MULTI_AGENT
         ),
+        memory_query_mode=state.get("memory_query_mode", "semantic"),
     )
     tool_map = {tool.name: tool for tool in allowed_tools}
     compress_requested = False
@@ -1884,6 +1925,16 @@ async def tool_executor_node(state: AgentState) -> Dict[str, Any]:
     changed_files = set(state.get("changed_files", []))
     validation_results = list(state.get("validation_results", []))
     created_task_ids = set(state.get("created_task_ids", []))
+    artifact_read_state = {
+        str(key): {
+            "offsets": list(value.get("offsets", [])),
+            "next_offset_bytes": value.get("next_offset_bytes"),
+            "eof": bool(value.get("eof", False)),
+            "eof_offset_bytes": value.get("eof_offset_bytes"),
+        }
+        for key, value in state.get("artifact_read_state", {}).items()
+        if isinstance(value, dict)
+    }
     tool_call_count = state.get("tool_call_count", 0)
     failure_reason = state.get("failure_reason")
     task_status = state.get("task_status", TaskStatus.RUNNING.value)
@@ -2025,6 +2076,63 @@ async def tool_executor_node(state: AgentState) -> Dict[str, Any]:
 
         tool = tool_map[tool_name]
         contract = get_tool_contract(tool_name)
+
+        if tool_name == "read_tool_artifact":
+            artifact_path = str(tool_input.get("path") or "")
+            artifact_sha256 = str(tool_input.get("sha256") or "")
+            try:
+                artifact_offset = int(tool_input.get("offset_bytes", 0))
+            except (TypeError, ValueError):
+                artifact_offset = -1
+            read_key = json.dumps(
+                [artifact_path, artifact_sha256],
+                ensure_ascii=False,
+                separators=(",", ":"),
+            )
+            progress = artifact_read_state.get(read_key, {})
+            offsets = progress.get("offsets", [])
+            eof_offset = progress.get("eof_offset_bytes")
+            error_code = None
+            error_text = None
+            if not artifact_path or not artifact_sha256 or artifact_offset < 0:
+                error_code = "artifact_read_invalid"
+                error_text = "Artifact recovery arguments are invalid."
+            elif not _artifact_reference_is_model_visible(
+                state,
+                path=artifact_path,
+                sha256=artifact_sha256,
+            ):
+                error_code = "artifact_read_not_needed"
+                error_text = (
+                    "Artifact recovery is not available because this handle is not "
+                    "present in compacted or truncated model-visible evidence."
+                )
+            elif artifact_offset in offsets:
+                error_code = "artifact_duplicate_read"
+                error_text = "This exact artifact range has already been requested."
+            elif (
+                progress.get("eof")
+                and isinstance(eof_offset, int)
+                and artifact_offset >= eof_offset
+            ):
+                error_code = "artifact_eof_reached"
+                error_text = "Artifact EOF was already reached; no later range exists."
+
+            if error_code:
+                record = ToolExecutionRecord(
+                    tool_name=tool_name,
+                    tool_call_id=tool_id,
+                    status=ToolResultStatus.BLOCKED,
+                    ok=False,
+                    output=f"Blocked: {error_text}",
+                    duration_ms=0,
+                    attempt_count=1,
+                    error_code=error_code,
+                )
+                results[tool_id] = record.output
+                execution_records.append(record.to_dict())
+                _record_tool_trace(state, record, tool_input)
+                continue
         if (
             state.get("execution_mode") == "multi_agent"
             and not delegation_succeeded
@@ -2062,7 +2170,7 @@ async def tool_executor_node(state: AgentState) -> Dict[str, Any]:
 
         started = time.perf_counter()
         final_record = None
-        if tool_name == "search_memory":
+        if tool_name in {"search_memory", "list_memories"}:
             # ``asyncio.wait_for`` executes the tool in a child task with a
             # copied Context. Seed a shared mutable audit slot in the parent so
             # retrieval evidence can be consumed after the tool returns.
@@ -2163,9 +2271,14 @@ async def tool_executor_node(state: AgentState) -> Dict[str, Any]:
 
                 receipt = None
                 artifact_error = None
-                # Any payload large enough to be eligible for later
-                # microcompaction must have recoverable evidence first.
-                if len(raw_result_str) > 100:
+                # Persist only according to the tool contract. Evidence remains
+                # in ToolMessage metadata/Trace; a textual receipt is exposed
+                # only when the model preview or source is incomplete.
+                if should_persist_artifact(
+                    contract,
+                    raw_chars=len(raw_result_str),
+                    source_truncated=source_already_truncated,
+                ):
                     try:
                         receipt = ToolArtifactStore(user_id=user_id).save(
                             raw_result_str,
@@ -2287,10 +2400,9 @@ async def tool_executor_node(state: AgentState) -> Dict[str, Any]:
             )
         execution_records.append(final_record.to_dict())
         _record_tool_trace(state, final_record, tool_input)
-        if tool_name == "search_memory":
-            # ``search_memory`` is a second retrieval entry point in addition
-            # to init-context injection. Record it with the same event shape so
-            # the Memory Ledger and Trace metrics cannot silently disagree.
+        if tool_name in {"search_memory", "list_memories"}:
+            # Explicit semantic recall and deterministic inventory share one
+            # trace schema so Memory Ledger and Trace cannot silently disagree.
             from enterprise_agent.core.agent.tools.memory import (
                 consume_memory_search_audit,
             )
@@ -2308,6 +2420,41 @@ async def tool_executor_node(state: AgentState) -> Dict[str, Any]:
 
         if final_record.ok and tool_name == "delegate_task":
             delegation_succeeded = True
+
+        if final_record.ok and tool_name == "read_tool_artifact":
+            try:
+                page = json.loads(raw_results.get(tool_id, ""))
+            except (TypeError, json.JSONDecodeError):
+                page = None
+            if isinstance(page, dict):
+                artifact_path = str(tool_input.get("path") or "")
+                artifact_sha256 = str(tool_input.get("sha256") or "")
+                artifact_offset = int(tool_input.get("offset_bytes", 0) or 0)
+                read_key = json.dumps(
+                    [artifact_path, artifact_sha256],
+                    ensure_ascii=False,
+                    separators=(",", ":"),
+                )
+                progress = artifact_read_state.setdefault(
+                    read_key,
+                    {
+                        "offsets": [],
+                        "next_offset_bytes": None,
+                        "eof": False,
+                        "eof_offset_bytes": None,
+                    },
+                )
+                progress["offsets"] = [
+                    *progress.get("offsets", []),
+                    artifact_offset,
+                ][-100:]
+                progress["next_offset_bytes"] = page.get("next_offset_bytes")
+                progress["eof"] = bool(page.get("eof", False))
+                if progress["eof"]:
+                    progress["eof_offset_bytes"] = page.get(
+                        "next_offset_bytes",
+                        artifact_offset,
+                    )
 
         if final_record.ok and tool_name == "task_create":
             try:
@@ -2387,6 +2534,7 @@ async def tool_executor_node(state: AgentState) -> Dict[str, Any]:
         "tool_call_stats": tool_call_stats,  # Framework auto-counted stats
         "tool_execution_records": execution_records,
         "tool_call_count": tool_call_count,
+        "artifact_read_state": artifact_read_state,
         "token_count": context_token_estimate,
         "created_task_ids": sorted(created_task_ids),
         "changed_files": sorted(changed_files),
@@ -2702,6 +2850,7 @@ async def compress_context_node(state: AgentState) -> Dict[str, Any]:
                 "message_count_before": len(messages),
                 "message_count_after": len(compressed_msgs),
                 "transcript_path": compression_result["transcript_path"],
+                "artifact_manifest_path": compression_result["artifact_manifest_path"],
                 "summary_schema_version": compression_result["summary_schema_version"],
                 "summary_usage_tokens": compression_result["summary_usage_tokens"],
                 "continuation_budget": continuation_budget,
@@ -2712,10 +2861,13 @@ async def compress_context_node(state: AgentState) -> Dict[str, Any]:
             },
         )
 
+        from enterprise_agent.memory.accumulator import MemoryAccumulator
+
         return {
             "messages": [RemoveMessage(id=REMOVE_ALL_MESSAGES), *compressed_msgs],
             "context_summary": summary,
             "transcript_path": compression_result["transcript_path"],
+            "artifact_manifest_path": compression_result["artifact_manifest_path"],
             "token_count": compressed_token_count,
             "context_continuation_active": True,
             "project_context_snapshot": project_context_snapshot,
@@ -2728,15 +2880,12 @@ async def compress_context_node(state: AgentState) -> Dict[str, Any]:
                 + compression_result["summary_usage_tokens"]
             ),
             "should_compress": False,
-            # Reset accumulator but preserve pre-compression summary for future flush
-            "memory_accumulator": {
-                "user_request": "",
-                "assistant_responses": [],
-                "tool_actions": [],
-                "round_count": 0,
-                "start_timestamp": "",
-                "context_summary_pre": _extract_text(summary) if summary else "",
-            },
+            # Continue the same task with a valid timestamp so the next round
+            # cannot reinitialize and discard this compression summary.
+            "memory_accumulator": MemoryAccumulator().from_compression_summary(
+                _extract_text(summary) if summary else "",
+                user_request=state.get("current_user_request", ""),
+            ),
         }
 
     return {"should_compress": False}
@@ -2832,6 +2981,7 @@ async def manual_compress_node(state: AgentState) -> Dict[str, Any]:
             "token_count_after": compressed_token_count,
             "transcript_path": compression_result["transcript_path"],
             "summary_schema_version": compression_result["summary_schema_version"],
+            "artifact_manifest_path": compression_result["artifact_manifest_path"],
             "summary_usage_tokens": compression_result["summary_usage_tokens"],
             "continuation_budget": continuation_budget,
             "continuation_headroom": continuation_headroom,
@@ -2841,6 +2991,8 @@ async def manual_compress_node(state: AgentState) -> Dict[str, Any]:
         },
     )
 
+    from enterprise_agent.memory.accumulator import MemoryAccumulator
+
     return {
         "messages": [
             RemoveMessage(id=REMOVE_ALL_MESSAGES),
@@ -2848,6 +3000,7 @@ async def manual_compress_node(state: AgentState) -> Dict[str, Any]:
         ],
         "context_summary": summary,
         "transcript_path": compression_result["transcript_path"],
+        "artifact_manifest_path": compression_result["artifact_manifest_path"],
         "token_count": compressed_token_count,
         "context_continuation_active": True,
         "project_context_snapshot": project_context_snapshot,
@@ -2862,16 +3015,12 @@ async def manual_compress_node(state: AgentState) -> Dict[str, Any]:
         "should_compress": False,
         "should_end": False,
         "should_end_after_save": False,
-        # Reset the accumulator, then continue the same invocation from the
-        # schema-v2 continuation packet.
-        "memory_accumulator": {
-            "user_request": "",
-            "assistant_responses": [],
-            "tool_actions": [],
-            "round_count": 0,
-            "start_timestamp": "",
-            "context_summary_pre": _extract_text(summary) if summary else "",
-        },
+        # Continue the same invocation from the schema-v2 packet without
+        # losing the summary on the next accumulator update.
+        "memory_accumulator": MemoryAccumulator().from_compression_summary(
+            _extract_text(summary) if summary else "",
+            user_request=state.get("current_user_request", ""),
+        ),
     }
 
 

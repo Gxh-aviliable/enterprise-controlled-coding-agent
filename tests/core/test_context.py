@@ -62,6 +62,19 @@ def test_effective_threshold_is_derived_from_one_million_model_window(
     assert manager.token_threshold == 800_000
 
 
+def test_context_threshold_rejects_window_for_a_different_model(monkeypatch, tmp_path):
+    monkeypatch.setattr(settings, "MODEL_CONTEXT_WINDOW_TOKENS", 100_000)
+    monkeypatch.setattr(settings, "MODEL_ID", "selected-model")
+    monkeypatch.setattr(settings, "MODEL_CONTEXT_WINDOW_MODEL_ID", "other-model")
+    manager = ContextManager(
+        llm=FakeSummaryLLM(),
+        transcript_manager=TranscriptManager(tmp_path),
+    )
+
+    with pytest.raises(RuntimeError, match="different MODEL_ID"):
+        _ = manager.token_threshold
+
+
 def test_cjk_estimate_matches_documented_weight(tmp_path):
     manager = ContextManager(
         llm=FakeSummaryLLM(),
@@ -496,6 +509,47 @@ def test_transcript_round_trip_is_unique_atomic_and_path_safe(tmp_path):
 
     with pytest.raises(ValueError):
         manager.load(tmp_path / "outside.jsonl")
+
+
+def test_transcript_manifest_retains_shared_artifacts_until_last_delete(tmp_path):
+    manager = TranscriptManager(tmp_path)
+    receipt = ToolArtifactStore(workdir=tmp_path).save(
+        "evidence required after compression",
+        trace_id="manifest-trace",
+        tool_call_id="manifest-call",
+    )
+    messages = [
+        ToolMessage(
+            content="[tool output compacted]",
+            tool_call_id="manifest-call",
+            artifact=receipt.to_dict(),
+        )
+    ]
+    first = manager.save(messages, "manifest-session")
+    second = manager.save(messages, "manifest-session")
+
+    manifest = manager.load_artifact_manifest(first.name)
+    assert manifest["retention_policy"] == "artifact_lifetime_at_least_transcript_lifetime"
+    assert manifest["artifacts"] == [{
+        "path": receipt.path,
+        "sha256": receipt.sha256,
+        "stored_bytes": receipt.stored_bytes,
+        "original_chars": receipt.original_chars,
+        "source_truncated": receipt.source_truncated,
+        "redacted": receipt.redacted,
+        "storage_status": "stored",
+    }]
+    listed = {item["filename"]: item for item in manager.list_transcripts()}
+    assert listed[first.name]["artifact_count"] == 1
+
+    first_delete = manager.delete(first.name, cleanup_artifacts=True)
+    artifact_path = tmp_path / receipt.path
+    assert first_delete["removed_artifacts"] == []
+    assert artifact_path.is_file()
+
+    second_delete = manager.delete(second.name, cleanup_artifacts=True)
+    assert second_delete["removed_artifacts"] == [receipt.path]
+    assert not artifact_path.exists()
 
 
 async def test_summary_failure_preserves_original_messages_and_reports_transcript(

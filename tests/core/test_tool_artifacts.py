@@ -313,6 +313,28 @@ def test_artifact_capture_and_model_preview_have_independent_caps(monkeypatch, t
     assert receipt.path in preview
 
 
+def test_complete_model_preview_keeps_artifact_receipt_out_of_band(monkeypatch, tmp_path):
+    monkeypatch.setenv("WORKSPACE_BASE", str(tmp_path))
+    monkeypatch.setattr(settings, "TOOL_OUTPUT_MAX_CHARS", 10_000)
+    raw = "recoverable but complete " + ("x" * 2_000)
+    receipt = ToolArtifactStore(user_id=31).save(
+        raw,
+        trace_id="trace-hidden-receipt",
+        tool_call_id="call-hidden-receipt",
+    )
+
+    preview, model_truncated = format_tool_output(
+        raw,
+        receipt=receipt,
+        status="success",
+    )
+
+    assert model_truncated is False
+    assert raw in preview
+    assert receipt.path not in preview
+    assert receipt.sha256 not in preview
+
+
 def test_symlinked_artifact_directory_is_rejected(monkeypatch, tmp_path):
     monkeypatch.setenv("WORKSPACE_BASE", str(tmp_path))
     workspace = tmp_path / "user_4"

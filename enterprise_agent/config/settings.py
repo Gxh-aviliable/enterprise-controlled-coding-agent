@@ -95,6 +95,9 @@ class Settings(BaseSettings):
     # The default model, deepseek-v4-flash, documents a 1M context window. This
     # hard model boundary is distinct from cumulative task/session spend budgets.
     MODEL_CONTEXT_WINDOW_TOKENS: int = 1_000_000
+    # Bind the numeric boundary to the model it was verified for. Startup fails
+    # if MODEL_ID changes without updating both context-window settings.
+    MODEL_CONTEXT_WINDOW_MODEL_ID: str = "deepseek-v4-flash"
     CONTEXT_COMPRESSION_RATIO: float = 0.8
 
     # Tool output limits
@@ -205,6 +208,11 @@ class Settings(BaseSettings):
             raise RuntimeError(
                 "MODEL_CONTEXT_WINDOW_TOKENS must be a positive value matching the "
                 "selected model; zero disables the safety boundary."
+            )
+        if self.MODEL_CONTEXT_WINDOW_MODEL_ID.strip() != self.get_effective_model_id():
+            raise RuntimeError(
+                "MODEL_CONTEXT_WINDOW_MODEL_ID must match MODEL_ID so compression "
+                "cannot silently use a boundary verified for another model."
             )
         if not 0.1 <= self.CONTEXT_COMPRESSION_RATIO <= 0.95:
             raise RuntimeError(

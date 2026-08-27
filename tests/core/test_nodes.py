@@ -384,6 +384,37 @@ def test_existing_session_retrieves_memory_for_current_task(monkeypatch):
     assert event["data"]["application_status"] == "not_attributed"
 
 
+def test_meta_memory_inventory_skips_automatic_retrieval(monkeypatch):
+    trace_events = []
+
+    def fail_if_memory_is_opened(_user_id):
+        raise AssertionError("meta-memory inventory must use list_memories later")
+
+    monkeypatch.setattr(
+        "enterprise_agent.memory.long_term.get_long_term_memory",
+        fail_if_memory_is_opened,
+    )
+    monkeypatch.setattr(
+        "enterprise_agent.core.agent.nodes._record_trace",
+        lambda state, **event: trace_events.append(event),
+    )
+
+    result = asyncio.run(init_context_node({
+        "session_id": "memory-inventory-session",
+        "user_id": 1,
+        "trace_id": "memory-inventory-trace",
+        "current_user_request": "我的长期记忆里面现在有啥内容？",
+        "messages": [{"role": "user", "content": "我的长期记忆里面现在有啥内容？"}],
+    }))
+
+    assert result["memory_query_mode"] == "listing"
+    assert result["retrieved_memory_context"] == ""
+    event = next(item for item in trace_events if item["event_type"] == "memory")
+    assert event["status"] == "skipped"
+    assert event["data"]["strategy"] == "paginated_listing"
+    assert event["data"]["skip_reason"] == "explicit_inventory_uses_list_memories_tool"
+
+
 def test_new_trace_clears_prior_todos_in_existing_session(monkeypatch):
     """A cancelled trace's plan must not become the next trace's active plan."""
     from enterprise_agent.core.agent.tools.task import (
