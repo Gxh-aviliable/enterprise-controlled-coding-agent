@@ -137,6 +137,27 @@ def test_accumulator_legacy_fallback_uses_latest_user_message():
     assert result["user_request"] == "第二项当前任务"
 
 
+def test_compression_continuation_preserves_summary_on_next_round():
+    accumulator = MemoryAccumulator()
+    continued = accumulator.from_compression_summary(
+        "Earlier tools found FACT_MUST_SURVIVE",
+        user_request="继续修复当前项目",
+    )
+
+    updated = accumulator.accumulate_round(
+        {
+            "current_user_request": "继续修复当前项目",
+            "pending_tool_calls": [],
+        },
+        [{"role": "assistant", "content": "已继续执行并保留历史证据"}],
+        continued,
+    )
+
+    assert updated["start_timestamp"]
+    assert updated["context_summary_pre"] == "Earlier tools found FACT_MUST_SURVIVE"
+    assert updated["user_request"] == "继续修复当前项目"
+
+
 @pytest.mark.asyncio
 async def test_accumulator_rejects_failed_task_before_model_calls():
     accumulator = MemoryAccumulator()

@@ -1,11 +1,11 @@
 """Memory query tool for Enterprise Agent.
 
-Provides active ChromaDB long-term memory access for the agent.
-Before this tool, the agent could only see memories pre-injected into
-the <long_term_memory> block on the first message. Now it can query
-ChromaDB at any time — listing all memories or searching by topic.
+Provides two deliberately separate ChromaDB access paths:
+- ``search_memory`` for semantic recall during normal work
+- ``list_memories`` for deterministic, paginated inventory requests
 """
 
+import json
 import logging
 from contextvars import ContextVar
 from typing import Any, Optional
@@ -42,6 +42,140 @@ def consume_memory_search_audit() -> dict[str, Any] | None:
     audit = slot.pop("audit", None) if slot is not None else None
     _memory_search_audit_slot.set(None)
     return audit
+
+
+def _memory_inventory_item(item: dict[str, Any], kind: str) -> dict[str, Any]:
+    """Return one bounded, provider-neutral inventory row."""
+    if kind == "pattern":
+        value = item.get("value") or item.get("text") or ""
+        return {
+            "id": item.get("id"),
+            "kind": "user_pattern",
+            "pattern_type": item.get("pattern_type") or "unknown",
+            "pattern_key": item.get("pattern_key") or "",
+            "confidence": item.get("confidence") or 0,
+            "updated_at": item.get("updated_at") or "",
+            "content": str(value)[:500],
+        }
+    metadata = item.get("metadata") or {}
+    return {
+        "id": item.get("id"),
+        "kind": "task_summary",
+        "importance": metadata.get("importance"),
+        "timestamp": metadata.get("timestamp") or "",
+        "content": str(item.get("content") or "")[:500],
+    }
+
+
+@tool
+async def list_memories(cursor: int = 0, limit: int = 10) -> str:
+    """List active durable memories with stable cursor pagination.
+
+    Use this tool only when the user explicitly asks what is stored in their
+    long-term memory, requests an inventory, or wants to browse saved memories.
+    Start with ``cursor=0``. Follow ``next_cursor`` only if the user asks for
+    more or the current answer genuinely requires another page. Do not use
+    ``read_tool_artifact`` for this bounded result.
+
+    Args:
+        cursor: Zero-based row offset returned by the previous page.
+        limit: Number of rows, from 1 through 20.
+    """
+    user_id = get_current_user_id()
+    if not user_id:
+        return "Error: No user context available. Cannot list memory without a user ID."
+    if cursor < 0:
+        return "Error: cursor must be zero or greater."
+    if limit < 1 or limit > 20:
+        return "Error: limit must be between 1 and 20."
+
+    _set_memory_search_audit(None)
+    try:
+        from enterprise_agent.memory.long_term import get_long_term_memory
+
+        memory = get_long_term_memory(user_id)
+        patterns = await memory.get_all_patterns(active_only=True)
+        patterns.sort(
+            key=lambda item: (item.get("updated_at") or "", item.get("id") or ""),
+            reverse=True,
+        )
+
+        # Fetch only enough task summaries to fill this page plus one lookahead
+        # row. Patterns form the first deterministic segment of the inventory.
+        conversation_limit = max(1, cursor + limit + 1 - len(patterns))
+        conversations = await memory.list_conversations(
+            limit=conversation_limit,
+            role="task_summary",
+            active_only=True,
+        )
+        inventory = [
+            *(_memory_inventory_item(item, "pattern") for item in patterns),
+            *(_memory_inventory_item(item, "conversation") for item in conversations),
+        ]
+        page = inventory[cursor:cursor + limit]
+        eof = len(inventory) <= cursor + limit
+        next_cursor = None if eof else cursor + len(page)
+
+        pattern_ids = [
+            item["id"] for item in page
+            if item.get("kind") == "user_pattern" and item.get("id")
+        ]
+        conversation_ids = [
+            item["id"] for item in page
+            if item.get("kind") == "task_summary" and item.get("id")
+        ]
+        for memory_id in pattern_ids:
+            await memory.update_pattern_access_count(memory_id)
+        for memory_id in conversation_ids:
+            await memory.update_access_count(memory_id)
+
+        payload = {
+            "cursor": cursor,
+            "limit": limit,
+            "returned": len(page),
+            "next_cursor": next_cursor,
+            "eof": eof,
+            "items": page,
+        }
+        result = json.dumps(
+            payload,
+            ensure_ascii=False,
+            sort_keys=True,
+        )
+        _set_memory_search_audit({
+            "query_summary": "active durable-memory inventory",
+            "strategy": "paginated_listing",
+            "cursor": cursor,
+            "limit": limit,
+            "candidates": [
+                {
+                    "memory_id": item.get("id") or "",
+                    "collection": item.get("kind") or "unknown",
+                    "rank": cursor + index + 1,
+                    "eligible": True,
+                    "filter_reason": "eligible",
+                }
+                for index, item in enumerate(page)
+            ],
+            "injected_ids": [item.get("id") for item in page if item.get("id")],
+            "injected_count": len(page),
+            "injected_characters": len(result),
+            "injected_tokens": max(1, len(result) // 4) if result else 0,
+            "application_status": "not_attributed",
+            "source": "list_memories_tool",
+        })
+        return result
+    except Exception as exc:
+        _set_memory_search_audit({
+            "query_summary": "active durable-memory inventory",
+            "strategy": "paginated_listing",
+            "cursor": cursor,
+            "limit": limit,
+            "error": str(exc)[:1000],
+            "source": "list_memories_tool",
+        })
+        logger.warning("list_memories tool failed: %s", exc, exc_info=True)
+        return f"Error listing long-term memory: {exc}"
 
 
 def _format_memory_results(
@@ -142,18 +276,16 @@ async def search_memory(query: Optional[str] = None) -> str:
     """Search the user's long-term memory stored in ChromaDB.
 
     Use this tool when:
-    - The user asks "what do you remember about me?", "what's in my memory?",
-      "show me my saved memories", "do you have any memories about...", etc.
     - You need to recall past technical decisions, preferences, or solutions
     - The <long_term_memory> block in the first message is empty or insufficient
-    - The user wants to know what information is stored about them
 
     This tool searches BOTH:
     1. Task summaries (structured records of past conversations — the main
        long-term memory store)
     2. User patterns (learned preferences, workflows, habits)
 
-    CRITICAL: This IS the ONLY tool for long-term memory. Do NOT use `task_list`
+    For an inventory such as "what is in my memory?", use ``list_memories``
+    instead. Do NOT use `task_list`
     (operational task tracking in .tasks/), `list_transcripts` (compression
     backup transcripts), or bash/dir/read_file on .tasks/, .transcripts/, .team/
     directories. Those are workspace operational artifacts — COMPLETELY UNRELATED
@@ -164,8 +296,7 @@ async def search_memory(query: Optional[str] = None) -> str:
         query: What to search for. Use descriptive English queries like:
                - "user preferences about Python environment management"
                - "past decisions about API design"
-               - "task summary user preference workflow" (to list ALL memories)
-               If empty or None, searches broadly for all stored task summaries.
+               Query must name the topic to retrieve.
 
     Returns:
         Formatted list of matching memories (task summaries and patterns).
@@ -175,8 +306,9 @@ async def search_memory(query: Optional[str] = None) -> str:
         return "Error: No user context available. Cannot search memory without a user ID."
 
     search_query = query.strip() if query and query.strip() else ""
-    broad_listing = not search_query or search_query == "task summary user preference workflow"
     _set_memory_search_audit(None)
+    if not search_query:
+        return "Error: query is required for semantic recall; use list_memories for an inventory."
 
     try:
         from enterprise_agent.config.settings import settings
@@ -184,70 +316,42 @@ async def search_memory(query: Optional[str] = None) -> str:
 
         memory = get_long_term_memory(user_id)
 
-        if broad_listing:
-            conversations = await memory.list_conversations(
-                limit=50,
-                role="task_summary",
-                active_only=True,
-            )
-            patterns = await memory.get_all_patterns(active_only=True)
-            conversation_candidates = [
-                {
-                    **item,
-                    "rank": index + 1,
-                    "eligible": True,
-                    "filter_reason": "eligible",
-                }
-                for index, item in enumerate(conversations)
-            ]
-            pattern_candidates = [
-                {
-                    **item,
-                    "rank": index + 1,
-                    "eligible": True,
-                    "filter_reason": "eligible",
-                }
-                for index, item in enumerate(patterns)
-            ]
-            display_query = "all active memories"
-            strategy = "complete_listing"
-        else:
-            conversation_candidates = await memory.search_conversations(
-                query=search_query,
-                n_results=5,
-                role="task_summary",
-                active_only=True,
-                max_distance=settings.MEMORY_RELEVANCE_MAX_DISTANCE,
-                retrieval_enabled_only=True,
-                include_rejected=True,
-            )
-            pattern_candidates = await memory.search_patterns(
-                query=search_query,
-                n_results=3,
-                active_only=True,
-                max_distance=settings.MEMORY_RELEVANCE_MAX_DISTANCE,
-                retrieval_enabled_only=True,
-                include_rejected=True,
-            )
-            conversations = [
-                item
-                for item in conversation_candidates
-                if item.get("eligible")
-            ][:5]
-            patterns = [
-                item
-                for item in pattern_candidates
-                if item.get("eligible")
-            ][:3]
-            display_query = search_query
-            strategy = next(
-                (
-                    item.get("retrieval_strategy")
-                    for item in [*pattern_candidates, *conversation_candidates]
-                    if item.get("retrieval_strategy")
-                ),
-                "semantic_top_k",
-            )
+        conversation_candidates = await memory.search_conversations(
+            query=search_query,
+            n_results=5,
+            role="task_summary",
+            active_only=True,
+            max_distance=settings.MEMORY_RELEVANCE_MAX_DISTANCE,
+            retrieval_enabled_only=True,
+            include_rejected=True,
+        )
+        pattern_candidates = await memory.search_patterns(
+            query=search_query,
+            n_results=3,
+            active_only=True,
+            max_distance=settings.MEMORY_RELEVANCE_MAX_DISTANCE,
+            retrieval_enabled_only=True,
+            include_rejected=True,
+        )
+        conversations = [
+            item
+            for item in conversation_candidates
+            if item.get("eligible")
+        ][:5]
+        patterns = [
+            item
+            for item in pattern_candidates
+            if item.get("eligible")
+        ][:3]
+        display_query = search_query
+        strategy = next(
+            (
+                item.get("retrieval_strategy")
+                for item in [*pattern_candidates, *conversation_candidates]
+                if item.get("retrieval_strategy")
+            ),
+            "semantic_top_k",
+        )
 
         for conversation in conversations:
             if conversation.get("id"):

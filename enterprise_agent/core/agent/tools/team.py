@@ -68,6 +68,7 @@ AUTONOMOUS_TEAM_TOOL_NAMES = {
     "read_tool_artifact",
     "context_status",
     "search_memory",
+    "list_memories",
     # These three are intercepted by TeammateRunner and never dispatched to
     # their lead-Agent wrappers.
     "claim_task",
@@ -591,7 +592,9 @@ class TeammateRunner:
                             format_tool_output,
                         )
                         from enterprise_agent.core.agent.tools.contracts import (
+                            get_tool_contract,
                             normalize_tool_result,
+                            should_persist_artifact,
                         )
                         from enterprise_agent.core.agent.tools.workspace import (
                             get_current_session_id,
@@ -607,7 +610,16 @@ class TeammateRunner:
                         )
                         receipt = None
                         artifact_error = None
-                        if len(raw_output) > 100:
+                        source_truncated = (
+                            bool(result.get("source_truncated"))
+                            if isinstance(result, dict)
+                            else "source_truncated=true" in raw_output
+                        )
+                        if should_persist_artifact(
+                            get_tool_contract(tool_name),
+                            raw_chars=len(raw_output),
+                            source_truncated=source_truncated,
+                        ):
                             try:
                                 receipt = ToolArtifactStore(
                                     user_id=get_current_user_id(),
@@ -617,6 +629,7 @@ class TeammateRunner:
                                         f"team-{get_current_session_id() or self.name}"
                                     ),
                                     tool_call_id=tool_id or tool_name,
+                                    source_already_truncated=source_truncated,
                                 )
                             except Exception:
                                 logging.exception("Teammate tool artifact persistence failed")

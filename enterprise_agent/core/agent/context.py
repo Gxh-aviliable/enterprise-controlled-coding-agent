@@ -149,6 +149,7 @@ class TranscriptManager:
         filename += ".jsonl"
 
         path = self.transcript_dir / filename
+        serialized_messages = [self._serialize_message(msg) for msg in messages]
         temporary_name: str | None = None
         try:
             with tempfile.NamedTemporaryFile(
@@ -159,8 +160,7 @@ class TranscriptManager:
                 suffix=".tmp",
                 delete=False,
             ) as handle:
-                for msg in messages:
-                    serialized = self._serialize_message(msg)
+                for serialized in serialized_messages:
                     handle.write(json.dumps(serialized, ensure_ascii=False, default=str) + "\n")
                 handle.flush()
                 os.fsync(handle.fileno())
@@ -174,11 +174,148 @@ class TranscriptManager:
                 os.chmod(path, 0o600)
             except OSError:
                 pass
+            self._save_artifact_manifest(path, serialized_messages)
         finally:
             if temporary_name and os.path.exists(temporary_name):
                 os.unlink(temporary_name)
 
         return path
+
+    @staticmethod
+    def _manifest_path(transcript_path: Path) -> Path:
+        return transcript_path.with_name(f"{transcript_path.name}.artifacts.json")
+
+    def _save_artifact_manifest(
+        self,
+        transcript_path: Path,
+        messages: List[Dict[str, Any]],
+    ) -> Path:
+        """Persist verifiable artifact dependencies beside one transcript."""
+        store = ToolArtifactStore(workdir=self.workdir)
+        references: list[dict[str, Any]] = []
+        seen: set[tuple[str, str]] = set()
+        for message in messages:
+            receipt = message.get("artifact")
+            if not isinstance(receipt, dict):
+                continue
+            valid, _ = store.validate_receipt(receipt)
+            key = (str(receipt.get("path") or ""), str(receipt.get("sha256") or ""))
+            if not valid or key in seen:
+                continue
+            seen.add(key)
+            references.append({
+                "path": key[0],
+                "sha256": key[1],
+                "stored_bytes": receipt.get("stored_bytes"),
+                "original_chars": receipt.get("original_chars"),
+                "source_truncated": bool(receipt.get("source_truncated")),
+                "redacted": bool(receipt.get("redacted")),
+                "storage_status": "stored",
+            })
+
+        manifest = {
+            "schema_version": 1,
+            "transcript": self.relative_path(transcript_path),
+            "created_at": datetime.now(timezone.utc).isoformat(),
+            "retention_policy": "artifact_lifetime_at_least_transcript_lifetime",
+            "artifacts": references,
+        }
+        manifest_path = self._manifest_path(transcript_path)
+        temporary_name: str | None = None
+        try:
+            with tempfile.NamedTemporaryFile(
+                mode="w",
+                encoding="utf-8",
+                dir=self.transcript_dir,
+                prefix=f".{manifest_path.name}.",
+                suffix=".tmp",
+                delete=False,
+            ) as handle:
+                json.dump(manifest, handle, ensure_ascii=False, sort_keys=True)
+                handle.flush()
+                os.fsync(handle.fileno())
+                temporary_name = handle.name
+            try:
+                os.chmod(temporary_name, 0o600)
+            except OSError:
+                pass
+            os.replace(temporary_name, manifest_path)
+            try:
+                os.chmod(manifest_path, 0o600)
+            except OSError:
+                pass
+        finally:
+            if temporary_name and os.path.exists(temporary_name):
+                os.unlink(temporary_name)
+        return manifest_path
+
+    def load_artifact_manifest(self, handle: str) -> Dict[str, Any]:
+        """Load the artifact dependency manifest for an existing transcript."""
+        transcript_path = self.resolve_handle(handle)
+        manifest_path = self._manifest_path(transcript_path)
+        if not manifest_path.is_file() or manifest_path.is_symlink():
+            return {
+                "schema_version": 1,
+                "transcript": self.relative_path(transcript_path),
+                "artifacts": [],
+            }
+        with manifest_path.open("r", encoding="utf-8") as handle_file:
+            manifest = json.load(handle_file)
+        if not isinstance(manifest, dict) or not isinstance(manifest.get("artifacts"), list):
+            raise ValueError("invalid_transcript_artifact_manifest")
+        return manifest
+
+    def delete(self, handle: str, *, cleanup_artifacts: bool = False) -> Dict[str, Any]:
+        """Delete one transcript and optionally its now-unreferenced artifacts.
+
+        Artifact cleanup is opt-in because active checkpoints may still hold a
+        receipt even after an operator deletes a transcript backup.
+        """
+        transcript_path = self.resolve_handle(handle)
+        manifest = self.load_artifact_manifest(handle)
+        manifest_path = self._manifest_path(transcript_path)
+        transcript_path.unlink()
+        if manifest_path.is_file() and not manifest_path.is_symlink():
+            manifest_path.unlink()
+
+        removed_artifacts: list[str] = []
+        if cleanup_artifacts:
+            remaining_references: set[tuple[str, str]] = set()
+            for candidate in self.transcript_dir.glob("transcript_*.jsonl.artifacts.json"):
+                if candidate.is_symlink():
+                    continue
+                try:
+                    data = json.loads(candidate.read_text(encoding="utf-8"))
+                except (OSError, json.JSONDecodeError):
+                    continue
+                for receipt in data.get("artifacts", []):
+                    if isinstance(receipt, dict):
+                        remaining_references.add((
+                            str(receipt.get("path") or ""),
+                            str(receipt.get("sha256") or ""),
+                        ))
+
+            store = ToolArtifactStore(workdir=self.workdir)
+            for receipt in manifest.get("artifacts", []):
+                if not isinstance(receipt, dict):
+                    continue
+                key = (
+                    str(receipt.get("path") or ""),
+                    str(receipt.get("sha256") or ""),
+                )
+                if key in remaining_references:
+                    continue
+                valid, _ = store.validate_receipt(receipt)
+                if not valid:
+                    continue
+                artifact_path = (self.workdir / key[0]).resolve()
+                artifact_path.unlink()
+                removed_artifacts.append(key[0])
+
+        return {
+            "deleted_transcript": self.relative_path(transcript_path),
+            "removed_artifacts": removed_artifacts,
+        }
 
     def relative_path(self, path: Path) -> str:
         """Return a workspace-relative handle without exposing server paths."""
@@ -273,6 +410,9 @@ class TranscriptManager:
                     "filename": f.name,
                     "size": stat.st_size,
                     "created": datetime.fromtimestamp(stat.st_mtime).isoformat(),
+                    "artifact_count": len(
+                        self.load_artifact_manifest(f.name).get("artifacts", [])
+                    ),
                 }
             )
         return sorted(transcripts, key=lambda x: x["created"], reverse=True)
@@ -298,6 +438,12 @@ class ContextManager:
     def token_threshold(self) -> int:
         configured_window = max(0, int(settings.MODEL_CONTEXT_WINDOW_TOKENS))
         if configured_window:
+            configured_for = str(settings.MODEL_CONTEXT_WINDOW_MODEL_ID or "").strip()
+            selected_model = settings.get_effective_model_id()
+            if configured_for and configured_for != selected_model:
+                raise RuntimeError(
+                    "Configured context window belongs to a different MODEL_ID."
+                )
             ratio = min(0.95, max(0.1, float(settings.CONTEXT_COMPRESSION_RATIO)))
             return max(1, int(configured_window * ratio))
         return settings.TOKEN_THRESHOLD
@@ -871,6 +1017,9 @@ class ContextManager:
             transcript_manager = TranscriptManager(get_user_workspace(user_id))
         transcript_file = transcript_manager.save(messages, session_id)
         transcript_path = transcript_manager.relative_path(transcript_file)
+        artifact_manifest_path = transcript_manager.relative_path(
+            transcript_manager._manifest_path(transcript_file)
+        )
         if continuation_token_budget is not None and int(continuation_token_budget) < 256:
             raise ContextCompressionError(
                 "Runtime prompt leaves no safe room for a continuation packet.",
@@ -1103,6 +1252,7 @@ class ContextManager:
             "compressed_messages": compressed_messages,
             "context_summary": encoded_packet,
             "transcript_path": transcript_path,
+            "artifact_manifest_path": artifact_manifest_path,
             "token_count_reset": self.estimate_tokens(compressed_messages),
             "summary_usage_tokens": summary_usage_tokens,
             "summary_input_tokens": summary_input_tokens,

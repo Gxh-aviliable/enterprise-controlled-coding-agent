@@ -144,6 +144,24 @@ class MemoryAccumulator:
             "context_summary_pre": "",  # Filled if compression happened mid-task
         }
 
+    def from_compression_summary(
+        self,
+        summary: str,
+        *,
+        user_request: str = "",
+    ) -> Dict[str, Any]:
+        """Start a valid continuation accumulator after context compression.
+
+        The timestamp must be populated immediately. Otherwise
+        ``accumulate_round`` treats this as an empty legacy accumulator and
+        silently replaces the preserved compression summary.
+        """
+        accumulator = self._new_accumulator()
+        if _is_substantive_user_message(user_request):
+            accumulator["user_request"] = user_request[:500]
+        accumulator["context_summary_pre"] = _extract_text_from_content(summary).strip()
+        return accumulator
+
     def accumulate_round(
         self,
         state: Dict[str, Any],

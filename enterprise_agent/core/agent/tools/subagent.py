@@ -121,7 +121,11 @@ def _execute_subagent_tool(
             ToolArtifactStore,
             format_tool_output,
         )
-        from enterprise_agent.core.agent.tools.contracts import normalize_tool_result
+        from enterprise_agent.core.agent.tools.contracts import (
+            get_tool_contract,
+            normalize_tool_result,
+            should_persist_artifact,
+        )
         from enterprise_agent.core.agent.tools.workspace import (
             get_current_session_id,
             get_current_user_id,
@@ -142,12 +146,22 @@ def _execute_subagent_tool(
         )
         receipt = None
         artifact_error = None
-        if len(raw_output) > 100:
+        source_truncated = (
+            bool(raw_result.get("source_truncated"))
+            if isinstance(raw_result, dict)
+            else "source_truncated=true" in raw_output
+        )
+        if should_persist_artifact(
+            get_tool_contract(tool_name),
+            raw_chars=len(raw_output),
+            source_truncated=source_truncated,
+        ):
             try:
                 receipt = ToolArtifactStore(user_id=get_current_user_id()).save(
                     raw_output,
                     trace_id=f"subagent-{get_current_session_id() or 'session'}",
                     tool_call_id=tool_call_id or tool_name,
+                    source_already_truncated=source_truncated,
                 )
             except Exception:
                 logging.exception("Subagent tool artifact persistence failed")

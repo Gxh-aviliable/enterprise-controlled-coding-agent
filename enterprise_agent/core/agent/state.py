@@ -40,6 +40,7 @@ class AgentState(TypedDict):
     token_count: int  # Current active-context estimate; never cumulative model spend
     session_token_count: int  # Cumulative model usage across requests in this chat session
     transcript_path: Optional[str]  # Path to saved transcript after compression
+    artifact_manifest_path: Optional[str]  # Transcript's artifact dependency manifest
 
     # 工具执行
     pending_tool_calls: List[Dict[str, Any]]
@@ -47,6 +48,7 @@ class AgentState(TypedDict):
     tool_call_stats: Dict[str, int]  # 框架自动统计工具调用次数，避免LLM幻觉
     tool_execution_records: List[Dict[str, Any]]
     tool_call_count: int
+    artifact_read_state: Dict[str, Dict[str, Any]]
 
     # 工作流控制
     round_count: int  # LLM调用轮次计数，防止无限循环
@@ -76,3 +78,4 @@ class AgentState(TypedDict):
     # Memory accumulator (task-level storage, not per-round fragments)
     memory_accumulator: Dict[str, Any]  # 当前 trace 内积累的任务内容
     retrieved_memory_context: str  # 本次任务临时注入；不写入聊天消息历史
+    memory_query_mode: str  # semantic 普通回忆；listing 显式分页清单

@@ -769,6 +769,8 @@ async def test_search_memory_tool_records_the_same_retrieval_trace(monkeypatch, 
     })
 
     assert result["tool_execution_records"][0]["ok"] is True
+    assert result["tool_execution_records"][0]["artifact_path"] is None
+    assert "artifact" not in result["messages"][0]
     assert accessed_patterns == ["pattern-uv"]
     memory_event = next(
         event
@@ -811,3 +813,74 @@ async def test_search_memory_tool_records_the_same_retrieval_trace(monkeypatch, 
     assert empty_event["data"]["injected_count"] == 0
     assert empty_event["data"]["injected_characters"] == 0
     assert empty_event["data"]["injected_tokens"] == 0
+
+
+async def test_artifact_recovery_is_non_recursive_and_blocks_duplicate_or_eof_reads(
+    monkeypatch,
+    tmp_path,
+):
+    monkeypatch.setenv("WORKSPACE_BASE", str(tmp_path))
+    receipt = ToolArtifactStore(user_id=109).save(
+        "RECOVERY_EVIDENCE=" + ("x" * 5_000),
+        trace_id="trace-artifact-source",
+        tool_call_id="source-call",
+    )
+    artifact_files_before = list((tmp_path / "user_109").rglob("*.txt"))
+    visible_handle = (
+        f"[tool output compacted; artifact: {receipt.path}; "
+        f"sha256={receipt.sha256}; original_chars={receipt.original_chars}]"
+    )
+
+    result = await tool_executor_node({
+        "session_id": "artifact-read-guards",
+        "trace_id": "trace-artifact-read-guards",
+        "user_id": 109,
+        "permissions": ["tools:context"],
+        "task_status": "running",
+        "messages": [{
+            "role": "tool",
+            "tool_call_id": "source-call",
+            "content": visible_handle,
+            "artifact": receipt.to_dict(),
+        }],
+        "pending_tool_calls": [
+            {
+                "id": "read-first",
+                "name": "read_tool_artifact",
+                "args": {
+                    "path": receipt.path,
+                    "sha256": receipt.sha256,
+                    "offset_bytes": 0,
+                },
+            },
+            {
+                "id": "read-duplicate",
+                "name": "read_tool_artifact",
+                "args": {
+                    "path": receipt.path,
+                    "sha256": receipt.sha256,
+                    "offset_bytes": 0,
+                },
+            },
+            {
+                "id": "read-after-eof",
+                "name": "read_tool_artifact",
+                "args": {
+                    "path": receipt.path,
+                    "sha256": receipt.sha256,
+                    "offset_bytes": receipt.stored_bytes,
+                },
+            },
+        ],
+    })
+
+    records = {
+        record["tool_call_id"]: record
+        for record in result["tool_execution_records"]
+    }
+    assert records["read-first"]["ok"] is True
+    assert records["read-first"]["artifact_path"] is None
+    assert records["read-duplicate"]["error_code"] == "artifact_duplicate_read"
+    assert records["read-after-eof"]["error_code"] == "artifact_eof_reached"
+    assert "artifact" not in result["messages"][0]
+    assert list((tmp_path / "user_109").rglob("*.txt")) == artifact_files_before
