@@ -381,7 +381,7 @@ uv run ruff check enterprise_agent migrations tests benchmarks scripts
 npm test --prefix frontend -- --run
 npm run build --prefix frontend
 docker compose -f docker/docker-compose.yml config --quiet
-uv run python -m benchmarks.run --backend platform --mode single --no-artifacts
+uv run python -m benchmarks.run --suite v2 --backend platform --mode single --no-artifacts
 ```
 
 当前发布证据在源码提交 `1d637c5` 上完成 `731 passed` 后端回归、`97 passed` 前端回归、Ruff 0 findings、前端生产构建、Docker Compose 配置和本地 smoke；当前 Platform v2 为 30/30。命令、环境、产物与边界统一记录在[发布证据清单](docs/release-evidence/portfolio-v1.0.md)。
