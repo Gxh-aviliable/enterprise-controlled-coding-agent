@@ -1,0 +1,57 @@
+{
+  "release": "20260916-workbench",
+  "source_sha256": "be68d5c881bc728c855275077bec954505f8ccfc4021d1527f805a349f8dbd3e",
+  "database_before": "20260914_0006\nusers\t5\nsessions\t10\nchat_messages\t42\nmanaged_shared_skills\t0",
+  "database_after": "20260914_0006\nusers\t5\nsessions\t10\nchat_messages\t42\nmanaged_shared_skills\t0",
+  "database_redis_containers_preserved": true,
+  "data_volumes_preserved": {
+    "/workspaces": "mini-claude_workspace_data",
+    "/data/chroma": "mini-claude_chroma_data",
+    "/data/shared-skills": "mini-claude_managed_shared_skills"
+  },
+  "backup_directory": "/home/ubuntu/mini-claude-backup-20260916-workbench",
+  "backups": [
+    {
+      "file": "database.sql",
+      "bytes": 151010,
+      "sha256": "261e007d37200ee6d034f2fa1fae4a1021d0126bc21c76b7b7f39337d7be009c"
+    },
+    {
+      "file": "redis.rdb",
+      "bytes": 13131,
+      "sha256": "5e677caf1f6b14fad0bef73d5257909e2e7e1243a39cd1c1279e03c258287b3c"
+    },
+    {
+      "file": "workspaces-and-memory.tar.gz",
+      "bytes": 150251,
+      "sha256": "76c8346aa64df0136f56804e959e230127af5d52e5292f45eccad4c0553626c3"
+    }
+  ],
+  "containers": {
+    "api": {
+      "image": "mini-claude-api:20260916-workbench",
+      "image_id": "sha256:982c420e882001439a78252692197b2d6ee214ae437dad2f19be4c47ee4ae36b",
+      "health": "healthy"
+    },
+    "frontend": {
+      "image": "mini-claude-frontend:20260916-workbench",
+      "image_id": "sha256:b4ab625cc37f016c8e04da3d608f35ead62757c10bc436f61fa8f49e35a917d5",
+      "health": "healthy"
+    },
+    "sandbox-reaper": {
+      "image": "mini-claude-sandbox-reaper:20260916-workbench",
+      "image_id": "sha256:e4d482fe44097b7cfd62c34337c6a19e8887c5cf144614d8a8c0fd2d98bfb9dc",
+      "health": "running"
+    },
+    "mysql": {
+      "image": "mysql:8.0",
+      "image_id": "sha256:7dcddc01f13bab2f15cde676d44d01f61fc9f99fe7785e86196dfc07d358ae2b",
+      "health": "healthy"
+    },
+    "redis": {
+      "image": "redis/redis-stack:latest",
+      "image_id": "sha256:5d5154123426693540ea6c1d9e638eae2bf2024879c839db6fcfdd7717e817c7",
+      "health": "healthy"
+    }
+  }
+}

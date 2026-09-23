@@ -131,3 +131,20 @@ def async_test_runner():
         return asyncio.run(coro)
 
     return run_async
+
+
+@pytest.fixture(autouse=True)
+def isolated_default_workspace(monkeypatch, tmp_path):
+    """Tests must not persist audit/cursor files in a developer's workspace."""
+    from enterprise_agent.core.agent.tools import workspace
+
+    monkeypatch.delenv("WORKSPACE_BASE", raising=False)
+    monkeypatch.setattr(workspace, "WORKSPACE_BASE", tmp_path / "workspaces")
+
+
+@pytest.fixture(autouse=True)
+def explicit_test_executor(monkeypatch, request):
+    """Legacy regression tests exercise opt-in local mode; Docker suite overrides it."""
+    if "docker_sandbox" not in request.keywords:
+        from enterprise_agent.config.settings import settings
+        monkeypatch.setattr(settings, "AGENT_EXECUTOR", "local")

@@ -6,6 +6,8 @@ import * as api from '../src/api/client.js'
 
 vi.mock('../src/api/client.js', () => ({
   getSessionMessages: vi.fn(),
+  listSkills: vi.fn().mockResolvedValue({ items: [] }),
+  getTaskEvents: vi.fn().mockResolvedValue({ cursor: 0, events: [], gap: false, history_required: true }),
   getAgentCapabilities: vi.fn(),
   streamMessage: vi.fn(),
   resumeStream: vi.fn(),
@@ -383,7 +385,7 @@ describe('ChatPanel session history restoration', () => {
 
     const entries = wrapper.findAll('[data-entry-role]')
     expect(entries.map(entry => entry.attributes('data-entry-role'))).toEqual([
-      'user', 'assistant', 'tool_call', 'assistant'
+      'user', 'assistant', 'tool_call', 'assistant', 'task_result'
     ])
     expect(entries[1].text()).toContain('先读取当前配置。')
     expect(entries[2].find('tool-call-card-stub').attributes('name')).toBe('read_file')
@@ -535,7 +537,7 @@ describe('ChatPanel session history restoration', () => {
 
     const entries = wrapper.findAll('[data-entry-role]')
     expect(entries.map(entry => entry.attributes('data-entry-role'))).toEqual([
-      'user', 'tool_call', 'assistant'
+      'user', 'tool_call', 'assistant', 'task_result'
     ])
     expect(entries[1].find('tool-call-card-stub').attributes('status')).toBe('error')
     expect(entries[2].text()).toContain('Generation stopped before any response was received')
@@ -605,19 +607,26 @@ describe('ChatPanel session history restoration', () => {
     await wrapper.find('.btn-send').trigger('click')
 
     const streamOptions = api.streamMessage.mock.calls[0][0]
+    streamOptions.onToolStart('read_file', 'read-automatic')
     streamOptions.onToolStart('delegate_task', 'delegate-1')
     streamOptions.onInterrupt({
       message: 'Confirm tool execution?',
-      tools: [{ id: 'delegate-1', name: 'delegate_task', description: 'Delegate' }]
+      tools: [{ id: 'delegate-1', name: 'delegate_task', description: 'Delegate' }],
+      batch_summary: { total_count: 2, approval_count: 1, automatic_count: 1 }
     })
     await flushPromises()
 
-    expect(wrapper.find('tool-call-card-stub').attributes('status')).toBe('waiting')
+    expect(wrapper.findAll('tool-call-card-stub').map(tool => tool.attributes('status'))).toEqual([
+      'running', 'waiting'
+    ])
 
     const rejectButton = document.body.querySelector('.btn-reject')
     expect(rejectButton).not.toBeNull()
-    expect(document.body.textContent).toContain('Approve Current Batch')
-    expect(document.body.textContent).toContain('Approval applies only to this current batch')
+    expect(document.body.textContent).toContain('Approve Listed Calls')
+    expect(document.body.textContent).toContain('2 total')
+    expect(document.body.textContent).toContain('1 awaiting approval')
+    expect(document.body.textContent).toContain('1 handled automatically')
+    expect(document.body.textContent).toContain('does not cover new calls created by the model in later turns')
     expect(document.body.textContent).toContain('review')
 
     const overlay = document.body.querySelector('[data-testid="tool-confirm-overlay"]')
@@ -627,7 +636,9 @@ describe('ChatPanel session history restoration', () => {
 
     expect(api.resumeStream).not.toHaveBeenCalled()
     expect(document.body.textContent).toContain('Confirm Tool Execution')
-    expect(wrapper.find('tool-call-card-stub').attributes('status')).toBe('waiting')
+    expect(wrapper.findAll('tool-call-card-stub').map(tool => tool.attributes('status'))).toEqual([
+      'running', 'waiting'
+    ])
 
     rejectButton.click()
     await flushPromises()
@@ -638,8 +649,10 @@ describe('ChatPanel session history restoration', () => {
       approved: false,
       approved_ids: []
     })
-    expect(wrapper.find('tool-call-card-stub').attributes('status')).toBe('rejected')
-    expect(wrapper.find('tool-call-card-stub').attributes('error')).toContain('not run')
+    const [automaticTool, rejectedTool] = wrapper.findAll('tool-call-card-stub')
+    expect(automaticTool.attributes('status')).toBe('running')
+    expect(rejectedTool.attributes('status')).toBe('rejected')
+    expect(rejectedTool.attributes('error')).toContain('not run')
 
     wrapper.unmount()
   })
@@ -1085,4 +1098,72 @@ describe('ChatPanel session history restoration', () => {
     expect(api.cancelStream).toHaveBeenCalledWith('session-other', 'trace-session-other')
     wrapper.unmount()
   })
+})
+
+it('keeps completed child cards terminal when a delayed start arrives', async () => {
+  api.getSessionMessages.mockResolvedValue(savedHistory)
+  api.getStreamStatus.mockResolvedValue({ status: 'terminal' })
+  api.streamMessage.mockClear()
+  const wrapper = mountChatPanel()
+  await flushPromises()
+  await wrapper.find('textarea').setValue('review in parallel')
+  await wrapper.find('.btn-send').trigger('click')
+  const handlers = api.streamMessage.mock.calls[0][0]
+  handlers.onToolStart('Agent · reviewer', 'child-a', { status: 'queued', parent_id: 'delegate-a' })
+  await flushPromises()
+  let card = wrapper.findComponent({ name: 'ToolCallCard' })
+  expect(card.props('status')).toBe('queued')
+  expect(card.props('parentId')).toBe('delegate-a')
+  handlers.onToolEnd('Agent · reviewer', { id: 'child-a', ok: true, status: 'success', duration_ms: 30, event_seq: 4 })
+  handlers.onToolStart('Agent · reviewer', 'child-a', { status: 'running', parent_id: 'delegate-a' })
+  await flushPromises()
+  handlers.onToolEnd('Agent · reviewer', { id: 'child-a', ok: false, status: 'error', event_seq: 3 })
+  await flushPromises()
+  card = wrapper.findComponent({ name: 'ToolCallCard' })
+  expect(card.props('status')).toBe('done')
+  wrapper.unmount()
+})
+
+it('polls a disconnected task to a terminal history without replaying execution', async () => {
+  vi.useFakeTimers()
+  api.getSessionMessages.mockResolvedValue({ messages: [{ role: 'user', content: 'read' }] })
+  api.getAgentCapabilities.mockResolvedValue({ available_modes: ['single_agent'], default_mode: 'single_agent' })
+  api.getStreamStatus.mockReset()
+  api.getStreamStatus.mockResolvedValueOnce({ status: 'running', trace_id: 'poll-task' })
+  api.getStreamStatus.mockResolvedValueOnce({ status: 'failed', trace_id: 'poll-task' })
+  api.getTaskEvents.mockResolvedValue({ cursor: 4, events: [{ seq: 4, event: 'done' }], history_required: true })
+  const initialCalls = api.streamMessage.mock.calls.length
+  const initialResumes = api.resumeStream.mock.calls.length
+  const wrapper = mountChatPanel()
+  try {
+    await flushPromises()
+    api.getSessionMessages.mockResolvedValue({ messages: [
+      { role: 'user', content: 'read' },
+      { role: 'assistant', content: 'Connection interrupted', trace_id: 'poll-task', status: 'failed' }
+    ] })
+    await vi.advanceTimersByTimeAsync(2000)
+    await flushPromises()
+    expect(wrapper.text()).toContain('Connection interrupted')
+    expect(wrapper.findAll('[data-entry-role="task_result"]')).toHaveLength(1)
+    expect(api.streamMessage.mock.calls.length).toBe(initialCalls)
+    expect(api.resumeStream.mock.calls.length).toBe(initialResumes)
+    expect(wrapper.find('textarea').attributes('disabled')).toBeUndefined()
+  } finally { wrapper.unmount(); vi.useRealTimers() }
+})
+
+
+it('keeps chat free of Skill settings while preserving text invocation', async () => {
+  api.getSessionMessages.mockResolvedValue(savedHistory)
+  api.getStreamStatus.mockResolvedValue({ status: 'terminal' })
+  const wrapper = mountChatPanel()
+  await flushPromises()
+  expect(wrapper.find('.chat-skills').exists()).toBe(false)
+  expect(wrapper.find('[aria-label="选择 Skills"]').exists()).toBe(false)
+  expect(api.listSkills).not.toHaveBeenCalled()
+  await wrapper.find('.input-wrapper textarea').setValue('$sample Review this code')
+  await wrapper.find('.input-wrapper textarea').trigger('keydown', { key: 'Enter' })
+  await flushPromises()
+  expect(api.streamMessage).toHaveBeenLastCalledWith(expect.objectContaining({ content: '$sample Review this code' }))
+  expect(api.streamMessage.mock.calls.at(-1)[0]).not.toHaveProperty('skill_ids')
+  wrapper.unmount()
 })

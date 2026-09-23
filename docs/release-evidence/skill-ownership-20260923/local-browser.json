@@ -1,0 +1,16 @@
+{
+  "database": "disposable MySQL 8",
+  "real_auth": true,
+  "real_admin_and_catalog_api": true,
+  "api_mocked": false,
+  "component_mounted_in_isolation": true,
+  "fresh_install_empty": true,
+  "upgrade_migrated_public_skills": 4,
+  "existing_body_editable": true,
+  "save_does_not_publish": true,
+  "publish_visible_to_user": true,
+  "retire_no_fallback": true,
+  "rollback_restores": true,
+  "normal_user_admin_status": 403,
+  "page_errors": []
+}

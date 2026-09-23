@@ -1,0 +1,82 @@
+[
+  {
+    "command": "python -B -m pytest -q",
+    "exit_code": 0,
+    "error_code": "sandbox_error",
+    "receipt": {
+      "execution_id": "966a565ca8ae4de9a16211d36d113ac1",
+      "trace_id": "goal-runtime",
+      "phase": "finished",
+      "recorded_at": 1789362151.8691761,
+      "executor": "docker",
+      "command": "python -B -m pytest -q",
+      "command_sha256": "2b429f6e4b9a9c65b6db30c8ba856f333c9b246dc1098ba8f1c539078509abe2",
+      "cwd": ".",
+      "input_version": "c7c67312a960c118c975a3d1bb436265f09e040d04ccd4389b0e7f9df193c21e",
+      "input_stamp": "ddd968499fe9cbb74020d3a7d82d4297e9c37fd990c829ae1603ac6606bf771d",
+      "output_version": "c7c67312a960c118c975a3d1bb436265f09e040d04ccd4389b0e7f9df193c21e",
+      "output_stamp": "ddd968499fe9cbb74020d3a7d82d4297e9c37fd990c829ae1603ac6606bf771d",
+      "changes": [],
+      "exit_code": 0,
+      "error_code": "sandbox_error",
+      "cancelled": false,
+      "timed_out": false,
+      "output_sha256": "533f9e9a48cb4db1d9ced6936d65c5ac7faaac7941ae668a2f59e556b2d4c1ec",
+      "validation": {
+        "kind": "test",
+        "argv": [
+          "python",
+          "-B",
+          "-m",
+          "pytest",
+          "-q"
+        ],
+        "cwd": "."
+      },
+      "fresh": true,
+      "ok": false,
+      "tool_call_id": null,
+      "seq": 2
+    },
+    "cleanup_confirmed": true
+  },
+  {
+    "command": "node --test sample.test.js",
+    "exit_code": 0,
+    "error_code": null,
+    "receipt": {
+      "execution_id": "099aac875349452a80c809be3b3ef738",
+      "trace_id": "goal-runtime",
+      "phase": "finished",
+      "recorded_at": 1789362152.041484,
+      "executor": "docker",
+      "command": "node --test sample.test.js",
+      "command_sha256": "6617c6e3114cde12d8b4ae3254a4fb22a1035477e4029fac97a0d6957a534144",
+      "cwd": ".",
+      "input_version": "c7c67312a960c118c975a3d1bb436265f09e040d04ccd4389b0e7f9df193c21e",
+      "input_stamp": "ddd968499fe9cbb74020d3a7d82d4297e9c37fd990c829ae1603ac6606bf771d",
+      "output_version": "c7c67312a960c118c975a3d1bb436265f09e040d04ccd4389b0e7f9df193c21e",
+      "output_stamp": "ddd968499fe9cbb74020d3a7d82d4297e9c37fd990c829ae1603ac6606bf771d",
+      "changes": [],
+      "exit_code": 0,
+      "error_code": null,
+      "cancelled": false,
+      "timed_out": false,
+      "output_sha256": "aa2fc5a1b9f4cd975acf83198b3f1e2584aa01d7fc6548d44ff0a1b77f9b9b35",
+      "validation": {
+        "kind": "test",
+        "argv": [
+          "node",
+          "--test",
+          "sample.test.js"
+        ],
+        "cwd": "."
+      },
+      "fresh": true,
+      "ok": true,
+      "tool_call_id": null,
+      "seq": 4
+    },
+    "cleanup_confirmed": true
+  }
+]

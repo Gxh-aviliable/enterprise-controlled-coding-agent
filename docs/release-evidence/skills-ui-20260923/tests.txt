@@ -1,0 +1,13 @@
+
+> enterprise-controlled-engineering-agent-frontend@0.1.0 test
+> vitest run
+
+
+ RUN  v4.1.10 /Users/gxh/学生时代/my_mini_claude_code/frontend
+
+
+ Test Files  12 passed (12)
+      Tests  116 passed (116)
+   Start at  03:32:12
+   Duration  3.40s (transform 7.65s, setup 0ms, import 11.32s, tests 3.86s, environment 8.65s)
+

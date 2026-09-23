@@ -1091,6 +1091,38 @@ async def test_cancel_terminal_update_preserves_human_and_closes_context(monkeyp
     assert graph.updates[0][1] == {"as_node": "persist_memory"}
 
 
+@pytest.mark.parametrize("status", ["running", "waiting_confirmation", "failed"])
+async def test_failed_terminal_update_closes_old_tool_calls_before_followup(monkeypatch, status):
+    graph = _ReducingCheckpointGraph({
+        "session_id": "failed-context", "user_id": 1, "trace_id": "failed-trace",
+        "task_status": status, "todos": [],
+        "messages": [
+            AIMessage(content="", id="request", tool_calls=[
+                {"id": "done", "name": "bash", "args": {}},
+                {"id": "unknown", "name": "bash", "args": {}},
+            ]),
+            ToolMessage(content="actual result", tool_call_id="done", id="actual"),
+            HumanMessage(content="continue", id="followup"),
+        ],
+        "pending_tool_calls": [{"id": "unknown", "name": "bash", "args": {}}],
+    })
+    _patch_control_layer(monkeypatch, active=None)
+    for _ in range(2):
+        assert await chat._safe_mark_task_terminal(
+            graph, {"configurable": {"thread_id": "failed-context"}},
+            TaskStatus.FAILED, "Stream disconnected", expected_trace_id="failed-trace",
+        )
+    messages = graph.values["messages"]
+    assert len(messages) == 4
+    assert messages[1].content == "actual result"
+    assert messages[2].tool_call_id == "unknown"
+    assert messages[2].status == "error"
+    assert messages[3].id == "followup"
+    assert graph.values["task_status"] == "failed"
+    assert graph.values["pending_tool_calls"] == []
+    assert all(kwargs == {"as_node": "persist_memory"} for _, kwargs in graph.updates)
+
+
 async def test_failed_confirmation_resume_persists_suffix_timeline_on_same_trace(
     monkeypatch,
 ):
@@ -1153,7 +1185,7 @@ async def test_failed_confirmation_resume_persists_suffix_timeline_on_same_trace
         trace_id,
         "lease-1",
         "runner-failed-resume",
-        ttl_seconds=chat.settings.ACTIVE_TRACE_LEASE_SECONDS,
+        ttl_seconds=chat.settings.STREAM_RUNNER_LEASE_SECONDS,
     )
     controls["release_resume"].assert_awaited_once_with(
         1,
@@ -1279,3 +1311,68 @@ async def test_mysql_cancel_tombstone_is_idempotent_and_late_stream_cannot_regre
     )
     assert message.content == f"partial\n\n{chat.CANCELLATION_TOMBSTONE}"
     assert message.status == "cancelled"
+
+
+async def test_child_custom_events_are_persisted_and_child_text_is_not_lead_text(monkeypatch):
+    trace_id = 'trace-child-stream'
+    graph = MagicMock()
+    async def stream(*_args, **_kwargs):
+        yield ('messages', (SimpleNamespace(content='CHILD_PRIVATE_DRAFT', tool_calls=[]), {'child_id': 'child-a'}))
+        yield ('custom', {'event': 'tool_start', 'id': 'child-a', 'child_id': 'child-a',
+                          'parent_id': 'delegate-a', 'name': 'Agent · reviewer', 'status': 'queued'})
+        yield ('custom', {'event': 'tool_end', 'id': 'child-a', 'child_id': 'child-a',
+                          'parent_id': 'delegate-a', 'name': 'Agent · reviewer', 'status': 'success', 'ok': True})
+        yield ('messages', (SimpleNamespace(content='Lead final', tool_calls=[]), {}))
+    graph.astream = stream
+    graph.aget_state = AsyncMock(return_value=_snapshot(session_id='child-session', user_id=1,
+                                                        trace_id=trace_id, status='succeeded'))
+    _patch_control_layer(monkeypatch, active=_lease(trace_id))
+    persist = AsyncMock(return_value=True)
+    monkeypatch.setattr(chat, '_persist_stream_segment', persist)
+    response = chat._stream_resumed_command(
+        graph=graph, config={'configurable': {'thread_id': 'child-session'}},
+        command=Command(resume={'approved': True, 'approved_ids': ['delegate-a']}),
+        session_id='child-session', trace_id=trace_id, user_id=1, assistant_message_id=31,
+        lease=_lease(trace_id, runner_token='runner-resumed'), log_context='child-stream',
+        resume_lock_token='resume-lock-token')
+    output = ''.join([c.decode() if isinstance(c, bytes) else c async for c in response.body_iterator])
+    assert 'CHILD_PRIVATE_DRAFT' not in output
+    assert 'child-a' in output and 'Lead final' in output
+    saved = persist.await_args.kwargs
+    assert saved['content'] == 'Lead final'
+    assert saved['timeline_entries'][0]['parentToolCallId'] == 'delegate-a'
+    assert saved['timeline_entries'][0]['toolStatus'] == 'done'
+
+
+async def test_expired_runner_is_fenced_and_terminalized_without_replay(monkeypatch):
+    snapshot = _snapshot(session_id='lost-session', user_id=1, trace_id='lost-trace', status='running')
+    graph = MagicMock()
+    graph.ainvoke = AsyncMock()
+    controls = _patch_control_layer(monkeypatch, active=None)
+    controls['claim'].return_value = _lease('lost-trace')
+    mark = AsyncMock(return_value=True)
+    save = AsyncMock(return_value=True)
+    monkeypatch.setattr(chat, '_safe_mark_task_terminal', mark)
+    monkeypatch.setattr(chat, 'find_assistant_message_id', AsyncMock(return_value=12))
+    monkeypatch.setattr(chat, 'update_assistant_message', save)
+    assert await chat._retire_orphaned_checkpoint(
+        graph, {'configurable': {'thread_id': 'lost-session'}}, snapshot,
+        user_id=1, session_id='lost-session',
+    )
+    graph.ainvoke.assert_not_awaited()
+    assert mark.await_args.args[2] == TaskStatus.FAILED
+    assert 'not replayed' in save.await_args.kwargs['content']
+    controls['release_lease'].assert_awaited_once()
+
+
+async def test_orphan_recovery_does_not_overwrite_a_concurrent_owner(monkeypatch):
+    snapshot = _snapshot(session_id='lost-session', user_id=1, trace_id='lost-trace', status='running')
+    graph = MagicMock()
+    controls = _patch_control_layer(monkeypatch, active=None)
+    controls['claim'].return_value = None
+    mark = AsyncMock()
+    monkeypatch.setattr(chat, '_safe_mark_task_terminal', mark)
+    assert not await chat._retire_orphaned_checkpoint(
+        graph, {}, snapshot, user_id=1, session_id='lost-session',
+    )
+    mark.assert_not_awaited()

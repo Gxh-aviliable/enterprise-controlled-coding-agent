@@ -64,3 +64,15 @@ describe('ToolCallCard', () => {
     wrapper.unmount()
   })
 })
+
+it('distinguishes queued subagents from approval and shows their parent call', async () => {
+  const wrapper = mount(ToolCallCard, {
+    props: { name: 'Agent · reviewer', parentId: 'delegate-a', status: 'queued' }
+  })
+  expect(wrapper.text()).toContain('Sub-agent')
+  expect(wrapper.text()).toContain('Queued')
+  expect(wrapper.text()).not.toContain('Approval needed')
+  await wrapper.get('button.tool-header').trigger('click')
+  expect(wrapper.text()).toContain('Parent call: delegate-a')
+  wrapper.unmount()
+})

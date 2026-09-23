@@ -87,11 +87,13 @@
         <ToolCallCard
           v-if="msg.role === 'tool_call'"
           :name="msg.toolName"
+          :parent-id="msg.parentToolCallId"
           :status="msg.toolStatus"
           :result="msg.toolResult"
           :error="msg.toolError"
           :duration="msg.toolDuration"
         />
+        <TaskChangesCard v-else-if="msg.role === 'task_result'" :trace-id="msg.traceId" />
         <div
           v-else
           :class="['message-wrapper', msg.role]"
@@ -182,30 +184,46 @@
             <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="var(--accent)" stroke-width="2"><circle cx="12" cy="12" r="10"/><path d="M12 6v6l4 2"/></svg>
             <h3 id="tool-confirm-title">Confirm Tool Execution</h3>
           </div>
-          <p class="modal-message">{{ pendingConfirm.message }}</p>
-          <p class="modal-scope-note">
-            Safe shell commands run automatically. Approval applies only to this current batch.
-            Stopping does not roll back completed file changes or external side effects.
-          </p>
-          <ul class="modal-tools">
-            <li v-for="(tool, idx) in pendingConfirm.tools" :key="tool.id || idx" class="modal-tool-item">
-              <label class="tool-label">
-                <input type="checkbox" v-model="tool.approved" />
-                <div class="tool-info">
-                  <div class="tool-title-row">
-                    <strong>{{ tool.name }}</strong>
-                    <span :class="['risk-badge', `risk-${tool.risk || 'review'}`]">
-                      {{ tool.risk || 'review' }}
-                    </span>
+          <div class="modal-content" tabindex="0" aria-label="Tool approval details">
+            <p class="modal-message">{{ pendingConfirm.message }}</p>
+            <p class="modal-batch-summary">
+              Execution batch:
+              <strong>{{ pendingConfirm.batchSummary.totalCount }}</strong> total
+              · <strong>{{ pendingConfirm.batchSummary.approvalCount }}</strong> awaiting approval
+              · <strong>{{ pendingConfirm.batchSummary.automaticCount }}</strong> handled automatically
+            </p>
+            <p class="modal-scope-note">
+              Only the calls listed below are awaiting approval. This decision does not cover
+              new calls created by the model in later turns. Other calls in this batch are handled
+              automatically under tool policy.
+            </p>
+            <ul class="modal-tools">
+              <li v-for="(tool, idx) in pendingConfirm.tools" :key="tool.id || idx" class="modal-tool-item">
+                <label class="tool-label">
+                  <input type="checkbox" v-model="tool.approved" />
+                  <div class="tool-info">
+                    <div class="tool-title-row">
+                      <strong>{{ tool.name }}</strong>
+                      <span :class="['risk-badge', `risk-${tool.risk || 'review'}`]">
+                        {{ tool.risk || 'review' }}
+                      </span>
+                    </div>
+                    <span>{{ tool.description }}</span>
+                    <pre v-if="tool.command" class="approval-command">{{ tool.command }}</pre>
+                    <p v-if="tool.paths?.length">Paths: {{ tool.paths.join(', ') }}</p>
+                    <p v-if="tool.risk_reason">{{ tool.risk_reason }}</p>
+                    <details v-if="tool.arguments_preview"><summary>Arguments</summary><pre>{{ JSON.stringify(tool.arguments_preview, null, 2) }}</pre></details>
+                    <p v-if="tool.valid_scope" class="modal-scope-note">{{ tool.valid_scope }}</p>
                   </div>
-                  <span>{{ tool.description }}</span>
-                </div>
-              </label>
-            </li>
-          </ul>
-          <p v-if="taskStatus !== 'waiting_confirmation'" class="modal-scope-note" role="status">
-            This task is being terminated. Completed file changes or external side effects are not rolled back.
-          </p>
+                </label>
+              </li>
+            </ul>
+            <p v-if="pendingConfirm.deadline" class="modal-scope-note">Approval expires {{ new Date(pendingConfirm.deadline).toLocaleString() }}.</p>
+            <p class="modal-scope-note">File recovery covers UTF-8 text up to 256 KB per file, 100 files / 4 MB per task for 7 days. Sensitive files, detected secrets, binary files and links are excluded. External effects cannot be restored.</p>
+            <p v-if="taskStatus !== 'waiting_confirmation'" class="modal-scope-note" role="status">
+              This task is being terminated. Completed file changes or external side effects are not rolled back.
+            </p>
+          </div>
           <div class="modal-actions">
             <button
               type="button"
@@ -216,8 +234,8 @@
             >
               {{ taskStatus === 'cancel_failed' ? 'Retry termination' : 'Terminate task' }}
             </button>
-            <button @click="rejectTools" class="btn-modal btn-reject" :disabled="!confirmationActionsEnabled">Reject All</button>
-            <button @click="approveAll" class="btn-modal btn-approve-all" :disabled="!confirmationActionsEnabled">Approve Current Batch</button>
+            <button @click="rejectTools" class="btn-modal btn-reject" :disabled="!confirmationActionsEnabled">Reject Listed</button>
+            <button @click="approveAll" class="btn-modal btn-approve-all" :disabled="!confirmationActionsEnabled">Approve Listed Calls</button>
             <button @click="approveTools" class="btn-modal btn-approve" :disabled="!confirmationActionsEnabled">Approve Selected</button>
           </div>
         </div>
@@ -229,8 +247,6 @@
       <div class="execution-mode-bar">
         <div class="execution-mode-copy">
           <strong>Execution mode</strong>
-          <span v-if="executionMode === 'multi_agent'">Real specialist delegation is required and traced.</span>
-          <span v-else>Reliable single-Agent baseline; collaboration is never simulated.</span>
         </div>
         <div class="execution-mode-actions">
           <div
@@ -322,6 +338,7 @@
 import { computed, ref, watch, nextTick, onMounted, onUnmounted } from 'vue'
 import * as api from '../api/client.js'
 import ToolCallCard from './ToolCallCard.vue'
+import TaskChangesCard from './TaskChangesCard.vue'
 
 import { marked } from 'marked'
 import DOMPurify from 'dompurify'
@@ -396,7 +413,7 @@ const showStreamPlaceholder = computed(() => {
   const lastEntry = messages.value.at(-1)
   const unresolvedToolAtTail = (
     lastEntry?.role === 'tool_call' &&
-    ['running', 'waiting'].includes(lastEntry.toolStatus)
+    ['running', 'waiting', 'queued'].includes(lastEntry.toolStatus)
   )
   return (
     streaming.value &&
@@ -448,6 +465,12 @@ function appendTimelineEntry(entry) {
   return timelineEntry
 }
 
+function appendTaskResult(traceId) {
+  if (traceId && !messages.value.some(msg => msg.role === 'task_result' && msg.traceId === traceId)) {
+    appendTimelineEntry({ role: 'task_result', traceId, streaming: false })
+  }
+}
+
 function historyTimelineId(sessionId, messageIndex, blockIndex, role) {
   return `history-${sessionId}-${messageIndex}-${blockIndex}-${role || 'entry'}`
 }
@@ -478,6 +501,8 @@ function normalizeHistoryTimeline(message, sessionId, messageIndex) {
       return [{
         role: 'tool_call',
         toolCallId: String(block.toolCallId || ''),
+        parentToolCallId: String(block.parentToolCallId || ''),
+        toolEventSeq: Number(block.toolEventSeq || 0),
         toolName: String(block.toolName || 'tool'),
         toolStatus: String(block.toolStatus || 'done'),
         toolResult: historyText(block.toolResult),
@@ -495,16 +520,19 @@ function normalizeHistoryTimeline(message, sessionId, messageIndex) {
 function normalizeHistoryMessages(rawMessages, sessionId) {
   return rawMessages.flatMap((message, messageIndex) => {
     const timeline = normalizeHistoryTimeline(message, sessionId, messageIndex)
-    if (timeline.length) return timeline
+    const result = message?.role === 'assistant' && message.trace_id && ['completed', 'succeeded', 'failed', 'cancelled'].includes(message.status)
+      ? [{ role: 'task_result', traceId: message.trace_id, timelineId: `result-${message.trace_id}`, streaming: false }]
+      : []
+    if (timeline.length) return [...timeline, ...result]
 
     const content = historyText(message?.content)
-    if (message?.role === 'assistant' && !content.trim()) return []
+    if (message?.role === 'assistant' && !content.trim()) return result
     return [{
       role: message?.role,
       content,
       streaming: false,
       timelineId: historyTimelineId(sessionId, messageIndex, 0, message?.role)
-    }]
+    }, ...result]
   })
 }
 
@@ -549,6 +577,20 @@ function traceValue(data) {
   return String(data?.trace_id || data?.active_trace_id || '')
 }
 
+function confirmationBatchSummary(data, tools) {
+  const approvalCount = tools.length
+  const reportedTotal = Number(data?.batch_summary?.total_count)
+  const totalCount = Number.isInteger(reportedTotal) && reportedTotal >= approvalCount
+    ? reportedTotal
+    : approvalCount
+
+  return {
+    totalCount,
+    approvalCount,
+    automaticCount: Math.max(0, totalCount - approvalCount)
+  }
+}
+
 function cancellationIsCurrent(sessionId, operationEpoch) {
   return activeId.value === sessionId && controlEpoch === operationEpoch
 }
@@ -578,6 +620,7 @@ function finalizeCancelledTask({ sessionId, traceId, toolScope, message = 'Stopp
     cancelStatusMessage(),
     { appendToOpen: true, noticeType: 'cancelled' }
   )
+  appendTaskResult(traceId)
   activeTraceId.value = ''
   pendingConfirm.value = null
   taskStatus.value = 'idle'
@@ -880,7 +923,7 @@ function findToolMessage(id, name, statuses = null) {
 function startToolCard(name, id, initialStatus = 'running') {
   const existing = id
     ? findToolMessage(id, name)
-    : findToolMessage('', name, ['running', 'waiting'])
+    : findToolMessage('', name, ['running', 'waiting', 'queued'])
   if (existing) return existing
 
   // A tool is a hard timeline boundary. Later deltas must create a new text
@@ -903,8 +946,17 @@ function ensureToolCard(name, id, initialStatus = 'running') {
   return findToolMessage(id, name) || startToolCard(name, id, initialStatus)
 }
 
+function acceptToolEvent(card, metadata = {}) {
+  const sequence = Number(metadata.event_seq || 0)
+  if (sequence && sequence < Number(card.toolEventSeq || 0)) return false
+  if (sequence) card.toolEventSeq = sequence
+  if (metadata.parent_id) card.parentToolCallId = metadata.parent_id
+  return true
+}
+
 function finishToolCard(name, metadata = {}) {
   const toolMsg = ensureToolCard(name || metadata.name, metadata.id)
+  if (!acceptToolEvent(toolMsg, metadata)) return
   toolMsg.toolDuration = metadata.duration_ms ?? (Date.now() - toolMsg._startTime)
   if (metadata.ok === true || metadata.status === 'success') {
     toolMsg.toolStatus = 'done'
@@ -929,6 +981,7 @@ function isRejectedToolOutcome(metadata = {}) {
 
 function applyToolResult(id, result, metadata = {}) {
   const toolMsg = ensureToolCard(metadata.name, id)
+  if (!acceptToolEvent(toolMsg, metadata)) return
   if (result !== undefined && result !== null) {
     toolMsg.toolResult = typeof result === 'string' ? result : JSON.stringify(result, null, 2)
   }
@@ -939,7 +992,7 @@ function failUnresolvedTools(reason, scope = currentToolScope()) {
     if (
       message.role === 'tool_call' &&
       message.toolScope === scope &&
-      ['running', 'waiting'].includes(message.toolStatus)
+      ['running', 'waiting', 'queued'].includes(message.toolStatus)
     ) {
       message.toolStatus = 'error'
       message.toolError = reason
@@ -1002,7 +1055,12 @@ function createStreamHandlers(sessionId, isNewSession, epoch) {
     onToolStart: (name, id, metadata) => {
       if (!isCurrentStream(metadata)) return
       currentTool.value = name
-      startToolCard(name, id)
+      const card = startToolCard(name, id, metadata?.status === 'queued' ? 'queued' : 'running')
+      if (!acceptToolEvent(card, metadata)) return
+      if (['running', 'queued'].includes(card.toolStatus) && metadata?.status === 'running') {
+        card.toolStatus = 'running'
+      }
+      if (metadata?.parent_id) card.parentToolCallId = metadata.parent_id
       scrollBottom()
     },
     onToolEnd: (name, metadata) => {
@@ -1031,7 +1089,9 @@ function createStreamHandlers(sessionId, isNewSession, epoch) {
         session_id: sessionId,
         trace_id: handlerTraceId || activeTraceId.value,
         message: data.message || 'Confirm tool execution?',
+        deadline: data.deadline,
         tools,
+        batchSummary: confirmationBatchSummary(data, tools),
         isNewSession
       }
       taskStatus.value = 'waiting_confirmation'
@@ -1103,6 +1163,7 @@ function createStreamHandlers(sessionId, isNewSession, epoch) {
       taskStatus.value = 'idle'
       failUnresolvedTools('Stream ended before an authoritative tool result was received')
       closeAssistantStreamSegment()
+      appendTaskResult(handlerTraceId || activeTraceId.value)
       activeTraceId.value = ''
       pendingConfirm.value = null
       cancellationContext = null
@@ -1164,12 +1225,13 @@ function resumeAfterConfirm(approvedIds, approved) {
     if (
       message.role !== 'tool_call' ||
       message.toolScope !== currentToolScope() ||
-      !['running', 'waiting'].includes(message.toolStatus)
+      !['running', 'waiting', 'queued'].includes(message.toolStatus)
     ) continue
-    if (!approved || (sensitiveIds.has(message.toolCallId) && !approvedSet.has(message.toolCallId))) {
+    const isListedSensitiveCall = sensitiveIds.has(message.toolCallId)
+    if (isListedSensitiveCall && (!approved || !approvedSet.has(message.toolCallId))) {
       message.toolStatus = 'rejected'
       message.toolError = 'Not approved — this tool was not run.'
-    } else if (approvedSet.has(message.toolCallId)) {
+    } else if (isListedSensitiveCall && approvedSet.has(message.toolCallId)) {
       message.toolStatus = 'running'
     }
   }
@@ -1206,7 +1268,43 @@ function resetTaskControlState() {
 const ACTIVE_STREAM_STATUSES = new Set(['active', 'running', 'pending'])
 const LEGACY_PAUSE_STATUSES = new Set(['paused', 'pause_requested', 'resuming'])
 const WAITING_STREAM_STATUSES = new Set(['waiting', 'waiting_confirmation'])
-const TERMINAL_STREAM_STATUSES = new Set(['idle', 'terminal', 'succeeded', 'failed', 'cancelled'])
+const TERMINAL_STREAM_STATUSES = new Set(['idle', 'terminal', 'completed', 'succeeded', 'failed', 'cancelled'])
+let statusPollTimer = null
+const replayCursors = new Map()
+
+async function recoverDurableTaskHistory(sessionId, traceId, operationEpoch) {
+  if (!traceId) return
+  const events = await api.getTaskEvents(traceId, replayCursors.get(traceId) || 0)
+  if (!cancellationIsCurrent(sessionId, operationEpoch)) return
+  replayCursors.set(traceId, events.cursor)
+  const history = await api.getSessionMessages(sessionId)
+  if (!cancellationIsCurrent(sessionId, operationEpoch)) return
+  // Replace the timeline from the durable source; never append duplicate text
+  // and never send Command(resume) while repairing a disconnected display.
+  messages.value = normalizeHistoryMessages(history.messages || [], sessionId)
+  appendTaskResult(traceId)
+}
+
+function pollDisconnectedTask(sessionId, operationEpoch, attempts = 45) {
+  clearTimeout(statusPollTimer)
+  statusPollTimer = setTimeout(async () => {
+    if (!cancellationIsCurrent(sessionId, operationEpoch) || streaming.value) return
+    try {
+      const data = await api.getStreamStatus(sessionId)
+      if (!cancellationIsCurrent(sessionId, operationEpoch)) return
+      applyAuthoritativeStreamStatus(data, { sessionId })
+      if (TERMINAL_STREAM_STATUSES.has(statusValue(data))) {
+        await recoverDurableTaskHistory(sessionId, traceValue(data), operationEpoch)
+        return
+      }
+      if (WAITING_STREAM_STATUSES.has(statusValue(data))) return
+    } catch (error) {
+      controlError.value = `Task status unavailable: ${error.message}. Retrying without replaying tools.`
+    }
+    if (attempts > 1) pollDisconnectedTask(sessionId, operationEpoch, attempts - 1)
+    else { taskStatus.value = 'status_unknown'; controlError.value = 'Task status did not converge. Check status again before starting another task.' }
+  }, 2000)
+}
 
 function restoreConfirmationFromStatus(data, sessionId, traceId) {
   const interrupt = data.interrupt || data.interrupt_data || data.data
@@ -1220,7 +1318,9 @@ function restoreConfirmationFromStatus(data, sessionId, traceId) {
     session_id: sessionId,
     trace_id: traceId,
     message: interrupt.message || 'Confirm tool execution?',
+    deadline: interrupt.deadline,
     tools,
+    batchSummary: confirmationBatchSummary(interrupt, tools),
     isNewSession: false
   }
 }
@@ -1317,12 +1417,16 @@ async function reconcileStreamStatusAfterError({ sessionId, operationEpoch, stre
     applyAuthoritativeStreamStatus(data, { sessionId })
     if (taskStatus.value === 'running' && !streaming.value) {
       controlError.value = `Task is still running, but live output was disconnected: ${streamError}. You can wait, reload this conversation, or stop the task.`
+      pollDisconnectedTask(sessionId, operationEpoch)
+    } else if (TERMINAL_STREAM_STATUSES.has(statusValue(data))) {
+      await recoverDurableTaskHistory(sessionId, traceValue(data), operationEpoch)
     }
   } catch (error) {
     if (!cancellationIsCurrent(sessionId, operationEpoch)) return
     console.warn('[stream-status] Failed to reconcile interrupted stream:', error)
     taskStatus.value = 'status_unknown'
     controlError.value = `Stream interrupted: ${streamError}. Task status check failed: ${error.message}`
+    pollDisconnectedTask(sessionId, operationEpoch)
   }
 }
 
@@ -1334,6 +1438,7 @@ async function restoreStreamStatus(sessionId, requestId, operationEpoch) {
       !cancellationIsCurrent(sessionId, operationEpoch)
     ) return
     applyAuthoritativeStreamStatus(data, { sessionId })
+    if (taskStatus.value === 'running' && !streaming.value) pollDisconnectedTask(sessionId, operationEpoch)
   } catch (error) {
     if (
       requestId !== historyLoadRequestId ||
@@ -1430,6 +1535,7 @@ onMounted(() => {
 })
 
 onUnmounted(() => {
+  clearTimeout(statusPollTimer)
   // Invalidate any history response that may still be in flight.
   historyLoadRequestId += 1
   controlEpoch += 1
@@ -1728,6 +1834,12 @@ onUnmounted(() => {
   padding: 4px 28px 4px 76px;
 }
 
+.timeline-entry-task_result {
+  max-width: 860px;
+  margin: 0 auto;
+  padding: 4px 28px 16px 76px;
+}
+
 .timeline-entry-tool_call::before {
   content: '';
   position: absolute;
@@ -2001,6 +2113,8 @@ onUnmounted(() => {
   align-items: center;
   justify-content: center;
   z-index: 1000;
+  padding: 12px;
+  overflow-y: auto;
 }
 
 .modal-card {
@@ -2011,9 +2125,23 @@ onUnmounted(() => {
   max-width: 460px;
   width: 92vw;
   box-shadow: var(--shadow-lg);
+  box-sizing: border-box;
+  max-height: calc(100dvh - 24px);
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+}
+
+.modal-content {
+  min-height: 0;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  overflow-wrap: anywhere;
+  padding-right: 6px;
 }
 
 .modal-header {
+  flex-shrink: 0;
   display: flex;
   align-items: center;
   gap: 10px;
@@ -2030,8 +2158,18 @@ onUnmounted(() => {
 .modal-message {
   color: var(--text-secondary);
   font-size: var(--text-base);
-  margin: 0 0 16px;
+  margin: 0 0 10px;
   padding-left: 30px;
+}
+
+.modal-batch-summary {
+  margin: 0 0 14px;
+  padding: 10px 12px;
+  border: 1px solid var(--border-light);
+  border-radius: var(--radius-sm);
+  background: var(--bg-secondary);
+  color: var(--text-secondary);
+  font-size: var(--text-sm);
 }
 
 .modal-tools {
@@ -2074,7 +2212,15 @@ onUnmounted(() => {
 }
 
 .tool-info {
+  min-width: 0;
   flex: 1;
+}
+
+.tool-info pre {
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  max-height: 240px;
+  overflow: auto;
 }
 
 .tool-title-row {
@@ -2118,6 +2264,9 @@ onUnmounted(() => {
 }
 
 .modal-actions {
+  flex-shrink: 0;
+  flex-wrap: wrap;
+  padding-top: 12px;
   display: flex;
   gap: 8px;
   justify-content: flex-end;
@@ -2209,13 +2358,6 @@ onUnmounted(() => {
   font-size: var(--text-sm);
 }
 
-.execution-mode-copy span {
-  color: var(--text-tertiary);
-  font-size: var(--text-xs);
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
 
 .mode-confirm-card {
   max-width: 520px;
@@ -2317,10 +2459,6 @@ onUnmounted(() => {
 
   .timeline-entry-tool_call::after {
     left: 28px;
-  }
-
-  .execution-mode-copy span {
-    display: none;
   }
 
   .input-area {

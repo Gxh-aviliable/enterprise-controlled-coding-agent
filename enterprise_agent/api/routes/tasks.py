@@ -1,6 +1,7 @@
 """Task-run detail, trace replay and aggregate metric endpoints."""
 
 from fastapi import APIRouter, Depends, HTTPException, Query
+from pydantic import BaseModel, Field
 
 from enterprise_agent.api.middleware.auth import get_current_user
 from enterprise_agent.observability.trace_store import get_trace_store
@@ -45,3 +46,41 @@ async def get_task_run(trace_id: str, user_id: int = Depends(get_current_user)):
 async def replay_task_trace(trace_id: str, user_id: int = Depends(get_current_user)):
     """Return the ordered, redacted event timeline for task replay."""
     return _read_trace(user_id, trace_id)
+
+
+@router.get("/{trace_id}/changes")
+def get_task_changes(trace_id: str, user_id: int = Depends(get_current_user)):
+    from enterprise_agent.core.agent.tools.workspace import get_user_workspace
+    from enterprise_agent.core.execution.changes import task_changes
+
+    _read_trace(user_id, trace_id)
+    return task_changes(get_user_workspace(user_id), user_id, trace_id)
+
+
+@router.get("/{trace_id}/events")
+def get_task_events(trace_id: str, after: int = Query(0, ge=0), user_id: int = Depends(get_current_user)):
+    from enterprise_agent.core.execution.events import read_stream_events
+
+    _read_trace(user_id, trace_id)
+    return read_stream_events(user_id, trace_id, after)
+
+
+class RestoreRequest(BaseModel):
+    paths: list[str] = Field(min_length=1, max_length=100)
+    expected_version: str = Field(pattern=r"^[0-9a-f]{64}$")
+
+
+@router.post("/{trace_id}/restore")
+def restore_task_files(trace_id: str, payload: RestoreRequest, user_id: int = Depends(get_current_user)):
+    from enterprise_agent.core.agent.tools.workspace import get_user_workspace
+    from enterprise_agent.core.execution.changes import RestoreConflictError, restore_changes
+
+    trace = _read_trace(user_id, trace_id)
+    if trace.get('storage_trust') == 'legacy_unverified':
+        raise HTTPException(status_code=409, detail='Legacy user-writable trace cannot authorize file restore')
+    if trace['status'] not in {'succeeded', 'failed', 'cancelled'}:
+        raise HTTPException(status_code=409, detail='Task must be terminal before restoring files')
+    try:
+        return restore_changes(get_user_workspace(user_id), user_id, trace_id, payload.paths, payload.expected_version)
+    except (RestoreConflictError, TimeoutError) as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc

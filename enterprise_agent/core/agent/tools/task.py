@@ -152,11 +152,16 @@ class TaskManager:
 
     def claim(self, tid: int, owner: str) -> str:
         """Claim a task for an owner."""
-        task = self._load(tid)
-        task["owner"] = owner
-        task["status"] = "in_progress"
-        self._save(task)
-        return f"Claimed task #{tid} for {owner}"
+        from filelock import FileLock
+        with FileLock(str(self.tasks_dir / ".claim.lock")):
+            task = self._load(tid)
+            if (task.get("owner") not in (None, owner)
+                    or task["status"] not in {"pending", "in_progress"} or task.get("blockedBy")):
+                return f"Error: Task #{tid} cannot be claimed by {owner}"
+            task["owner"] = owner
+            task["status"] = "in_progress"
+            self._save(task)
+            return f"Claimed task #{tid} for {owner}"
 
 
 class TodoManager:

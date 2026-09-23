@@ -1,0 +1,47 @@
+{
+  "health": {
+    "status": "healthy",
+    "version": "0.1.0",
+    "build": {
+      "source_sha256": "e1f33eb48dd008ff1517723f002abf8fc638432dc1cddb2021eba8a56858859c",
+      "qualification": "diagnostic-snapshot",
+      "git": {
+        "commit": "0648e72dad083e21a70eb8811e1e0dc890bd5714",
+        "branch": "feature/enterprise-skills",
+        "dirty": true
+      }
+    },
+    "name": "Enterprise Agent",
+    "checks": {
+      "mysql": "ok",
+      "redis": "ok"
+    }
+  },
+  "frontend_version": {
+    "build_id": "2026-09-22T19:16:08.159Z"
+  },
+  "images": {
+    "api": "sha256:66cf9e241f3168ea7a7464858bc1809e0652ebda65db9a08d6f08540052410be",
+    "frontend": "sha256:4fa10f3aacd4d397f232b9f7bdd99f2095ae1ed82810c43d4cd8d1f3b8a5504d"
+  },
+  "audit": {
+    "verified_runtime_files": 118,
+    "source_sha256": "e1f33eb48dd008ff1517723f002abf8fc638432dc1cddb2021eba8a56858859c",
+    "rows": {
+      "users": 5,
+      "sessions": 13,
+      "chat_messages": 62,
+      "managed_shared_skills": 0,
+      "managed_shared_skill_versions": 0,
+      "skill_installations": 0,
+      "skill_import_previews": 0
+    },
+    "database_revision": "20260923_0007",
+    "workspace_files": 117,
+    "workspace_sha256": "08d9a2eea7a3d3761a5f8886fb44283a6f120869efcfb18c92700250fbdb4330",
+    "cache_writable": true
+  },
+  "original_data_unchanged_after_test_cleanup": true,
+  "no_execution_containers": true,
+  "release": "/home/ubuntu/mini-claude-releases/20260923-skills"
+}

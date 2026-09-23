@@ -22,6 +22,9 @@ def run() -> dict:
     # Settings are constructed at import time. Supply a safe development value
     # when the caller has not created .env yet.
     os.environ.setdefault("JWT_SECRET_KEY", "smoke-test-only-secret")
+    # This command is explicitly the local development smoke entrypoint.
+    # It does not validate container isolation; scripts/sandbox_demo.py does.
+    os.environ["AGENT_EXECUTOR"] = "local"
 
     with tempfile.TemporaryDirectory(prefix="mini-claude-smoke-") as tmpdir:
         os.environ["WORKSPACE_BASE"] = tmpdir
@@ -92,6 +95,8 @@ def run() -> dict:
             "checks": checks,
             "external_services_tested": False,
             "model_call_tested": False,
+            "executor": "local",
+            "container_isolation_tested": False,
         }
 
 

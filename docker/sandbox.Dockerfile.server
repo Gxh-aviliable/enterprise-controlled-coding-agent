@@ -1,0 +1,7 @@
+# Build dependencies into an administrator-reviewed image; execution has no network.
+FROM python:3.12.13-slim-bookworm
+RUN pip install --no-cache-dir --timeout 120 -i https://pypi.tuna.tsinghua.edu.cn/simple pytest==8.4.2 && \
+    useradd --uid 10001 --create-home sandbox
+USER 10001:10001
+WORKDIR /workspace
+ENTRYPOINT ["/usr/bin/timeout"]

@@ -1,0 +1,208 @@
+{
+  "success": true,
+  "controller_uid": 10001,
+  "controller_gid": 10001,
+  "image": "mini-claude-executor:20260911",
+  "deployment": "mini-claude-175",
+  "staging": "/sandbox-staging",
+  "host_staging": "/srv/mini-claude/sandbox-staging",
+  "runs": [
+    {
+      "command": "python -m pytest -q",
+      "result": {
+        "stdout": "F                                                                        [100%]\n=================================== FAILURES ===================================\n___________________________________ test_add ___________________________________\n\n>   def test_add(): assert add(2,3)==5\n                    ^^^^^^^^^^^^^^^^^^\nE   assert -1 == 5\nE    +  where -1 = add(2, 3)\n\ntest_app.py:2: AssertionError\n=========================== short test summary info ============================\nFAILED test_app.py::test_add - assert -1 == 5\n1 failed in 0.02s",
+        "stderr": "",
+        "exit_code": 1,
+        "executor": "docker",
+        "execution_id": "agent-sandbox-722934bb81754d9b90aff3776fa5868f",
+        "trace_id": "release-9690d1f15f174c3c9e8700c1a86f96f3",
+        "source_truncated": false,
+        "container_id": "42304c3b9190c19763e466920f86f19f662c2b5ab8e93cf5d9cb3a18892ea54e",
+        "stdout_original_bytes": 545,
+        "stderr_original_bytes": 0,
+        "output_counts_scope": "complete_attached_stream",
+        "published_paths": [
+          ".pytest_cache/.gitignore",
+          ".pytest_cache/CACHEDIR.TAG",
+          ".pytest_cache/README.md",
+          ".pytest_cache/v/cache/lastfailed",
+          ".pytest_cache/v/cache/nodeids"
+        ],
+        "cleanup_confirmed": true
+      }
+    },
+    {
+      "command": "python repair.py",
+      "result": {
+        "stdout": "(no output)",
+        "stderr": "",
+        "exit_code": 0,
+        "executor": "docker",
+        "execution_id": "agent-sandbox-634ec9d745744d6d8d552705db6838e9",
+        "trace_id": "release-9690d1f15f174c3c9e8700c1a86f96f3",
+        "source_truncated": false,
+        "container_id": "a484d753fa08feee242832afcb6db8e0abb257db71df5f0d277f693b43652193",
+        "stdout_original_bytes": 0,
+        "stderr_original_bytes": 0,
+        "output_counts_scope": "complete_attached_stream",
+        "published_paths": [
+          "app.py"
+        ],
+        "cleanup_confirmed": true
+      }
+    },
+    {
+      "command": "python -m pytest -q",
+      "result": {
+        "stdout": ".                                                                        [100%]\n1 passed in 0.01s",
+        "stderr": "",
+        "exit_code": 0,
+        "executor": "docker",
+        "execution_id": "agent-sandbox-af879d4cd47d422c958cf4d61f907854",
+        "trace_id": "release-9690d1f15f174c3c9e8700c1a86f96f3",
+        "source_truncated": false,
+        "container_id": "e30d7723814732c89ab02ca1a3c752b958eb6f4fad8d62acac373eb58362d726",
+        "stdout_original_bytes": 98,
+        "stderr_original_bytes": 0,
+        "output_counts_scope": "complete_attached_stream",
+        "published_paths": [
+          ".pytest_cache/v/cache/lastfailed"
+        ],
+        "cleanup_confirmed": true
+      }
+    }
+  ],
+  "trace": {
+    "current_phase": "parsing",
+    "duration_ms": 1742,
+    "error": null,
+    "events": [
+      {
+        "data": {},
+        "duration_ms": 0,
+        "event_id": "5aa21b28-e785-4710-9995-262f8515ee76",
+        "name": "task_created",
+        "status": "pending",
+        "timestamp": "2026-09-10T17:59:24.901985+00:00",
+        "type": "task"
+      },
+      {
+        "data": {
+          "cleanup_confirmed": true,
+          "container_id": "42304c3b9190c19763e466920f86f19f662c2b5ab8e93cf5d9cb3a18892ea54e",
+          "execution_id": "agent-sandbox-722934bb81754d9b90aff3776fa5868f",
+          "executor": "docker",
+          "exit_code": 1,
+          "output_counts_scope": "complete_attached_stream",
+          "published_paths": [
+            ".pytest_cache/.gitignore",
+            ".pytest_cache/CACHEDIR.TAG",
+            ".pytest_cache/README.md",
+            ".pytest_cache/v/cache/lastfailed",
+            ".pytest_cache/v/cache/nodeids"
+          ],
+          "source_truncated": false,
+          "stderr_original_bytes": 0,
+          "stdout_original_bytes": 545,
+          "trace_id": "release-9690d1f15f174c3c9e8700c1a86f96f3"
+        },
+        "duration_ms": 773,
+        "event_id": "f3544f81-1574-4fad-ab35-266acca48aa9",
+        "name": "agent_executor",
+        "status": "error",
+        "timestamp": "2026-09-10T17:59:25.728109+00:00",
+        "type": "execution"
+      },
+      {
+        "data": {
+          "cleanup_confirmed": true,
+          "container_id": "a484d753fa08feee242832afcb6db8e0abb257db71df5f0d277f693b43652193",
+          "execution_id": "agent-sandbox-634ec9d745744d6d8d552705db6838e9",
+          "executor": "docker",
+          "exit_code": 0,
+          "output_counts_scope": "complete_attached_stream",
+          "published_paths": [
+            "app.py"
+          ],
+          "source_truncated": false,
+          "stderr_original_bytes": 0,
+          "stdout_original_bytes": 0,
+          "trace_id": "release-9690d1f15f174c3c9e8700c1a86f96f3"
+        },
+        "duration_ms": 277,
+        "event_id": "9101f816-4ef2-448b-898c-bcfb27e7b543",
+        "name": "agent_executor",
+        "status": "success",
+        "timestamp": "2026-09-10T17:59:26.010707+00:00",
+        "type": "execution"
+      },
+      {
+        "data": {
+          "cleanup_confirmed": true,
+          "container_id": "e30d7723814732c89ab02ca1a3c752b958eb6f4fad8d62acac373eb58362d726",
+          "execution_id": "agent-sandbox-af879d4cd47d422c958cf4d61f907854",
+          "executor": "docker",
+          "exit_code": 0,
+          "output_counts_scope": "complete_attached_stream",
+          "published_paths": [
+            ".pytest_cache/v/cache/lastfailed"
+          ],
+          "source_truncated": false,
+          "stderr_original_bytes": 0,
+          "stdout_original_bytes": 98,
+          "trace_id": "release-9690d1f15f174c3c9e8700c1a86f96f3"
+        },
+        "duration_ms": 631,
+        "event_id": "2e3c3b3f-f799-466e-978d-1822ca6561d3",
+        "name": "agent_executor",
+        "status": "success",
+        "timestamp": "2026-09-10T17:59:26.644112+00:00",
+        "type": "execution"
+      },
+      {
+        "data": {
+          "error": null
+        },
+        "duration_ms": 1742,
+        "event_id": "0f3667e4-5c44-458d-a2c3-33ee902e2785",
+        "name": "task_finished",
+        "status": "succeeded",
+        "timestamp": "2026-09-10T17:59:26.644834+00:00",
+        "type": "task"
+      }
+    ],
+    "finished_at": "2026-09-10T17:59:26.644834+00:00",
+    "metrics": {
+      "confirmation_count": 0,
+      "input_tokens": 0,
+      "memory_candidates": 0,
+      "memory_injected": 0,
+      "memory_injected_tokens": 0,
+      "memory_retrieval_queries": 0,
+      "model_calls": 0,
+      "model_duration_ms": 0,
+      "node_count": 0,
+      "node_duration_ms": 0,
+      "output_tokens": 0,
+      "pause_count": 0,
+      "paused_duration_ms": 0,
+      "resume_count": 0,
+      "retry_count": 0,
+      "safety_interceptions": 0,
+      "tool_calls": 0,
+      "tool_duration_ms": 0,
+      "tool_failures": 0,
+      "tool_successes": 0,
+      "total_tokens": 0
+    },
+    "mode": "single",
+    "request_summary": "Deployment sandbox verification",
+    "result_summary": "read, repair, pytest and cleanup passed",
+    "schema_version": 1,
+    "session_id": "release-probe",
+    "started_at": "2026-09-10T17:59:24.901985+00:00",
+    "status": "succeeded",
+    "trace_id": "release-9690d1f15f174c3c9e8700c1a86f96f3",
+    "user_id": 7001
+  }
+}

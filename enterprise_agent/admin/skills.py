@@ -9,8 +9,8 @@ from pathlib import Path
 from typing import Any
 
 from enterprise_agent.config.settings import settings
+from enterprise_agent.skills.packages import NAME_RE as SKILL_NAME_RE
 
-SKILL_NAME_RE = re.compile(r"^[a-z0-9][a-z0-9_-]{1,79}$")
 FRONTMATTER_RE = re.compile(r"^---\r?\n(.*?)\r?\n---\r?\n(.*)$", re.DOTALL)
 SENSITIVE_PATTERNS = (
     re.compile(r"sk-[A-Za-z0-9_-]{16,}"),
@@ -21,52 +21,39 @@ SENSITIVE_PATTERNS = (
 
 
 def validate_skill_content(expected_name: str, content: str) -> dict[str, Any]:
-    """Return deterministic validation evidence for one SKILL.md body."""
-    errors: list[str] = []
-    warnings: list[str] = []
-    normalized_name = expected_name.strip().lower()
+    """Compatibility response backed by the same parser as import and runtime."""
+    from enterprise_agent.skills.packages import SkillError, parse_markdown
 
-    if not SKILL_NAME_RE.fullmatch(normalized_name):
-        errors.append("Skill name must be a lowercase slug")
-    if len(content.encode("utf-8")) > 100_000:
-        errors.append("Skill content exceeds 100 KB")
-
-    match = FRONTMATTER_RE.match(content)
-    metadata: dict[str, str] = {}
-    body = content
-    if not match:
-        errors.append("SKILL.md must start with YAML frontmatter")
-    else:
-        for line in match.group(1).strip().splitlines():
-            if ":" in line:
-                key, value = line.split(":", 1)
-                metadata[key.strip()] = value.strip().strip('"\'')
-        body = match.group(2).strip()
-
-    declared_name = metadata.get("name", "")
-    if declared_name != normalized_name:
-        errors.append("Frontmatter name must match the registry name")
-    if not metadata.get("description"):
-        errors.append("Frontmatter description is required")
-    if len(body) < 20:
-        errors.append("Skill guidance body is too short")
-    if content.count("```") % 2:
-        warnings.append("Markdown contains an unclosed fenced code block")
+    errors = []
+    metadata = {}
+    warnings = []
+    normalized = content
+    try:
+        normalized, metadata, _, warnings = parse_markdown(content)
+        if metadata["name"] != expected_name:
+            errors.append("Frontmatter name must match the registry name")
+    except SkillError as exc:
+        errors.append(str(exc))
+        # Collect name mismatch as well when credential scanning rejected the body.
+        redacted = content
+        for pattern in SENSITIVE_PATTERNS:
+            redacted = pattern.sub("[REDACTED]", redacted)
+        try:
+            _, metadata, _, _ = parse_markdown(redacted)
+            if metadata["name"] != expected_name:
+                errors.append("Frontmatter name must match the registry name")
+        except SkillError:
+            pass
     if any(pattern.search(content) for pattern in SENSITIVE_PATTERNS):
         errors.append("Potential credential or private key detected")
-
-    estimated_tokens = max(1, len(content) // 4)
-    if estimated_tokens > 12_000:
-        warnings.append("Skill is large and may materially increase model cost")
-
     return {
         "valid": not errors,
         "errors": errors,
         "warnings": warnings,
         "metadata": metadata,
-        "bytes": len(content.encode("utf-8")),
-        "estimated_tokens": estimated_tokens,
-        "sha256": hashlib.sha256(content.encode("utf-8")).hexdigest(),
+        "bytes": len(normalized.encode()),
+        "estimated_tokens": max(1, len(normalized) // 4),
+        "sha256": hashlib.sha256(normalized.encode()).hexdigest(),
     }
 
 
@@ -78,6 +65,9 @@ def managed_skill_path(name: str) -> Path:
 
 def materialize_skill(name: str, content: str, version: int | None = None) -> Path:
     """Atomically publish one active managed Skill to the runtime directory."""
+    from enterprise_agent.skills.packages import parse_markdown
+
+    content, _, _, _ = parse_markdown(content)
     target = managed_skill_path(name)
     target.parent.mkdir(parents=True, exist_ok=True)
     fd, temp_name = tempfile.mkstemp(prefix=".skill-", suffix=".tmp", dir=target.parent)

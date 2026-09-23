@@ -1,0 +1,44 @@
+{
+  "qualification": "diagnostic synthetic browser/fault checks",
+  "source_sha256": "538003babd0e4ddea490a212eebd8d9dad9a192dafba7acce0612982b7e4d3c7",
+  "excludes": [
+    "fixture.json (temporary credentials)"
+  ],
+  "notes": [
+    "redis-evidence.json missed the fault window; retained as failed experiment. redis-evidence-2.json injected during running bash.",
+    "Screenshots precede later H and style changes; not final version evidence."
+  ],
+  "files": {
+    "e2e-dg.cjs": "c83a848056801b818d7b392d065e6ad639be4b221b0e057f4afa196b2443cd5f",
+    "modify-trace.json": "4fb9c3d0f56d465483319dc3e3fb5b6493fe2b2e8eb9ec4eaa414869214747ac",
+    "redis-before-2.png": "861b41db1148193b2486142189958eb21c87b4494856dabcfc9f70fc21b3a2ba",
+    "fault-redis-timed.cjs": "87c421c98ca897a88d9695333fa2a3d71c81e999f8d0792ecb554ad31caaeb02",
+    "login.png": "c3f6e3d91fc69988f7132cabb6e4c7a0cc801fad4e93b475d541f4a6762cb98d",
+    "restart-before.png": "885b1df84454f759843f8a1f466a0b1e764880d40e47822d7ce6720f5151fcaf",
+    "redis-evidence.json": "ed46f91848c2aa2433cf91934b65576d2714f9859057972e37a8b4b9cda8f68f",
+    "03-task-diff.png": "64b2945b812bb1aa28b6cf2006321ef763da72e86e09f77d38a56394df3f870a",
+    "fault-redis.cjs": "cba8c67aed2e195c39232d6c654c0cd9de9e13daba1ff04c5657ad3bb776b360",
+    "fault-restart.cjs": "2106502c717156d455f79f1b11825764b1c2844035f56c2459cd058eb5153c8f",
+    "task-changes-before.json": "88fdc2ac8d0045ed060dd1f12c550ec52a5c8a9e9b280500f45e585fbe4877eb",
+    "01-login.png": "fe5706d92364280473f60114f937555104e592b8aaf8d82c46327527d86a9c4a",
+    "logged-in.png": "48c738ac0d8fe7494e5d0343c1ec2ef28ecf425e87612391a40d0a2a9a9610c3",
+    "02-read.png": "e87321019519198dadeee0c51d3e87841c105355065b635db94a0626d28fce31",
+    "restart-evidence.json": "318f90a70b3727869da1c417aecef9cf3edc698dcbf6352ee5f5d91132a4c708",
+    "e2e.json": "6e3e8bee91eb6c5bb10c397637390807d2dce363b91b16e56a2c73738701095b",
+    "04-reject.png": "5022bf8dcf82ae9be702e735fed6536680037e37c4da3c7adcac3695ae864856",
+    "redis-after-2.png": "db80a7a8e30a3ca622bbc8b913184e6c17d1141bc16f9308dac3cc67cda8fefa",
+    "06-refresh-offline-failed.png": "1d44150d00c8b47ad87bd49347c08938bc6bd80dd9fda026e08a639053c67a8c",
+    "05-stop.png": "76329284bdc6ba266d93ac8dabbfc7f44b03df0842df99fdfbabc9fc8d1eac4f",
+    "seed.py": "253d5c3211d0eb70fe2f6deee8170fabcccb927145c02fcaf3b57f47a56edc64",
+    "restart-after.png": "fe5ffcdddbef58898bef3340b5caf274d588c592e6c68e3c7fa0db488e800e71",
+    "02-read-failed.png": "f8db28096cb3c01edf91966647ad80ae5bd3c1320ca6dfc0b1bd1515a2503598",
+    "03-restored.png": "5572cc65c7b26c9ca831b440ccb95657c3ac7a00720d5cf27d7889085cdb6123",
+    "redis-evidence-2.json": "5d008db4cd21ba5ed95346d81e48edb50688362d1d1a86462d417a03b1a8730d",
+    "redis-before.png": "72653155a69bfb2b2963f8d6422be22182a59107a920dc3d42624ee10e7dac72",
+    "03-modify-approve-verify-approval-0.png": "260cc6ba0b957d6724fe6df7cc618cf1306654aed1617eb125d096b92afd42e4",
+    "03-modify-approve-verify.png": "60299acae87ec0d3ed50f0236940a1dc06eb6c864baff1db2f07015e4d89ac96",
+    "04-reject-approval-0.png": "1bef42d8805b8ceb613b68a13e5cc35a75e00d985b0f3d3d16735fb35b7c60fc",
+    "06-refresh-offline.png": "7120a809c997b223eb2a088856bbfc6693becda6b64905204ee998f968b09e19",
+    "05-new-after-stop.png": "c771242a13ffe09609565d9033dada94299d144dcc441770e619e3dff44fa57f"
+  }
+}

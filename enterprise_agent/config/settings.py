@@ -46,12 +46,14 @@ class Settings(BaseSettings):
     WORKSPACE_BASE: str = "/workspaces"
 
     # Skills — shared global skills directory
-    SHARED_SKILLS_DIR: str = str(
-        Path(__file__).resolve().parent.parent.parent / "shared_skills"
-    )
     MANAGED_SHARED_SKILLS_DIR: str = str(
         Path(__file__).resolve().parent.parent.parent / "managed_shared_skills"
     )
+    SKILL_GIT_HOSTS: str = "github.com,gitlab.com"
+    # Exact hostname:port allowlist. Only these endpoints may resolve to private IPs.
+    SKILL_GIT_INTERNAL_HOSTS: str = ""
+    SKILL_GIT_TIMEOUT_SECONDS: int = 60
+    SKILL_GIT_CA_BUNDLE: str = ""
     CHROMA_COLLECTION_CONVERSATIONS: str = "conversations"
     CHROMA_COLLECTION_PATTERNS: str = "user_patterns"
 
@@ -115,14 +117,31 @@ class Settings(BaseSettings):
     CONTEXT_SUMMARY_OUTPUT_RESERVE_TOKENS: int = 4_096
 
     # Agent behavior
-    MICROCOMPACT_KEEP_LAST: int = 6  # Messages to keep during microcompact
-    MICROCOMPACT_MIN_CHARS: int = 1000  # Avoid receipts larger than small outputs
+    MICROCOMPACT_KEEP_LAST: int = 15  # Recent tool results kept verbatim
+    MICROCOMPACT_MIN_CHARS: int = 4_000  # Preserve small source/test outputs verbatim
     NAG_REMINDER_THRESHOLD: int = 3  # Rounds without TodoWrite before reminder
     COMMAND_TIMEOUT_SECONDS: int = 120  # Shell/background command timeout
+    # Fail closed by default. "local" is an explicit, unisolated development opt-in.
+    AGENT_EXECUTOR: str = "docker"
+    SANDBOX_DOCKER_SOCKET: str = "/var/run/docker.sock"
+    SANDBOX_IMAGE: str = "enterprise-agent-sandbox:1"
+    SANDBOX_NETWORK_ENABLED: bool = True  # Demo default: allow package installs and HTTP requests.
+    SANDBOX_DEPLOYMENT: str = "enterprise-agent"
+    SANDBOX_STAGING_BASE: str = "/tmp/enterprise-agent-sandbox"
+    SANDBOX_HOST_STAGING_BASE: str = ""
+    SANDBOX_UID: int = os.getuid() if hasattr(os, "getuid") else 10001
+    SANDBOX_GID: int = os.getgid() if hasattr(os, "getgid") else 10001
+    SANDBOX_CPUS: float = 1.0
+    SANDBOX_MEMORY_MB: int = 256
+    SANDBOX_PIDS: int = 64
+    SANDBOX_TMP_MB: int = 64
+    SANDBOX_WORKSPACE_MAX_BYTES: int = 100_000_000
+    SANDBOX_WORKSPACE_MAX_FILES: int = 10_000
     AGENT_INVOKE_TIMEOUT_SECONDS: int = 600  # Max seconds for a single graph invocation
     # Cross-worker execution ownership. Runners renew this Redis lease while
     # active; checkpoints still provide the durable fallback if a worker dies.
     ACTIVE_TRACE_LEASE_SECONDS: int = 1200
+    STREAM_RUNNER_LEASE_SECONDS: int = 30  # Renewed even while the provider is silent
     CANCEL_CONVERGENCE_WAIT_SECONDS: float = 5.0
     MAX_AGENT_ROUNDS: int = 20  # Fail fast instead of allowing long no-progress loops
     MAX_TOOL_CALLS_PER_TASK: int = 25  # Framework-enforced tool-call budget
@@ -134,6 +153,9 @@ class Settings(BaseSettings):
     # MySQL history is injected only when the Redis checkpoint is unavailable.
     # Bound both rows and characters before it reaches the model.
     DURABLE_HISTORY_MAX_CHARS: int = 120_000
+    CHILD_MAX_CONCURRENCY: int = 2
+    CHILD_TIMEOUT_SECONDS: int = 120
+    CHILD_TOKEN_BUDGET: int = 64000
     SUBAGENT_MAX_ROUNDS: int = 30  # Max rounds for subagent execution
     TODO_MAX_ITEMS: int = 20  # Max todo items per session
     TODO_MAX_IN_PROGRESS: int = 1  # Max concurrent in_progress todos
@@ -218,6 +240,8 @@ class Settings(BaseSettings):
             raise RuntimeError(
                 "CONTEXT_COMPRESSION_RATIO must be between 0.1 and 0.95."
             )
+        if not 1 <= self.CHILD_MAX_CONCURRENCY <= 8 or self.CHILD_TIMEOUT_SECONDS <= 0 or self.CHILD_TOKEN_BUDGET <= 0:
+            raise RuntimeError("Child concurrency must be 1..8; timeout and token budget must be positive")
         if self.TASK_TOKEN_BUDGET < 0 or self.SESSION_TOKEN_BUDGET < 0:
             raise RuntimeError(
                 "TASK_TOKEN_BUDGET and SESSION_TOKEN_BUDGET must be non-negative; "
@@ -233,6 +257,8 @@ class Settings(BaseSettings):
             )
         if self.CANCEL_CONVERGENCE_WAIT_SECONDS <= 0:
             raise RuntimeError("CANCEL_CONVERGENCE_WAIT_SECONDS must be positive.")
+        if not 10 <= self.STREAM_RUNNER_LEASE_SECONDS <= 120:
+            raise RuntimeError("STREAM_RUNNER_LEASE_SECONDS must be between 10 and 120.")
         if self.DURABLE_HISTORY_MAX_CHARS <= 0:
             raise RuntimeError("DURABLE_HISTORY_MAX_CHARS must be positive.")
 

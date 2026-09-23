@@ -11,6 +11,7 @@
     </div>
 
     <div class="sidebar-tabs">
+      <button :class="['tab-btn', { active: activeTab === 'skills' }]" @click="activeTab = 'skills'"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M4 4h6a3 3 0 013 3v14a4 4 0 00-4-3H4zM20 4h-4a3 3 0 00-3 3v14a4 4 0 014-3h3z" /></svg><span>Skills</span></button>
       <button
         :class="['tab-btn', { active: activeTab === 'sessions' }]"
         @click="activeTab = 'sessions'"
@@ -106,7 +107,7 @@
     </div>
 
     <!-- Main-area views still need to reserve sidebar height for the user footer. -->
-    <div class="tab-content" v-show="activeTab === 'trace' || activeTab === 'memory'"></div>
+    <div class="tab-content" v-show="activeTab === 'trace' || activeTab === 'memory' || activeTab === 'skills'"></div>
 
     <!-- User footer -->
     <div ref="footerRef" class="sidebar-footer" @click="showUserMenu = !showUserMenu">
@@ -238,15 +239,17 @@ defineExpose({ setActiveTab })
 
 /* Tabs */
 .sidebar-tabs {
-  display: flex;
+  display: grid;
+  grid-template-columns: repeat(5, minmax(0, 1fr));
   gap: 2px;
   padding: 0 12px 8px;
   flex-shrink: 0;
 }
 
 .tab-btn {
-  flex: 1;
+  min-width: 0;
   display: flex;
+  flex-direction: column;
   align-items: center;
   justify-content: center;
   gap: 4px;

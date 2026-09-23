@@ -1,0 +1,52 @@
+{
+  "health": {
+    "status": "healthy",
+    "version": "0.1.0",
+    "name": "Enterprise Agent",
+    "checks": {
+      "mysql": "ok",
+      "redis": "ok"
+    }
+  },
+  "free_user_github_denied": true,
+  "capabilities": {
+    "default_mode": "single_agent",
+    "available_modes": [
+      "single_agent",
+      "multi_agent"
+    ],
+    "multi_agent_enabled": true,
+    "multi_agent_permitted": true,
+    "multi_agent_reason": null
+  },
+  "github_settings_authenticated": true,
+  "file_edit_and_stale_write_rejection": true,
+  "real_shell": {
+    "executor": "docker",
+    "cleanup_confirmed": true,
+    "network_blocked": true,
+    "consecutive_calls_persist": true
+  },
+  "live_model": {
+    "single_agent": {
+      "http_status": 200,
+      "response_nonempty": true,
+      "elapsed_seconds": 1.99
+    },
+    "multi_agent": {
+      "http_status": 200,
+      "response_nonempty": true,
+      "elapsed_seconds": 0.82
+    }
+  },
+  "passed": true,
+  "temporary_account_removed": true,
+  "database_revision": "20260914_0005",
+  "alembic_check": "passed",
+  "running_source_files_verified": 100,
+  "deployment_worktree": "/Users/gxh/学生时代/my_mini_claude_code-github-mvp",
+  "local_only": true,
+  "github_live_transfer_verified": false,
+  "browser_interactive_verified": false,
+  "backup": "logs/db-backups/enterprise_agent-20260914-004907.sql"
+}

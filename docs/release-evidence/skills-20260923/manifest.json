@@ -1,0 +1,48 @@
+{
+  "branch": "feature/enterprise-skills",
+  "base": "develop (0648e72; same initial HEAD as feature/verified-agent-delivery)",
+  "committed": false,
+  "pushed": false,
+  "production_changed": false,
+  "migration": {
+    "database": "isolated disposable MySQL 8 container",
+    "upgrade": "base -> 20260923_0007 passed",
+    "alembic_check": "passed"
+  },
+  "real_git": {
+    "public_initial_import": "passed; main:skills/algorithmic-art",
+    "commit": "34040c9c568585f6929bedeaad110ad08f079624",
+    "public_late_rechecks": "HTTPS transport failure / timeout; API returned 422; no partial installation",
+    "intranet": "real local HTTPS git-http-backend, explicit host allowlist, private CA, tag, subdirectory, install, redirect rejection"
+  },
+  "docker": {
+    "initial": "18 passed, 1 skipped, 1 failed, 1 teardown error",
+    "initial_findings": [
+      "reaper requires daemon socket group 0 in Docker Desktop test",
+      "one transient PermissionError removing node_modules mount target; not reproduced in targeted/full reruns"
+    ],
+    "recheck": "19 passed, 1 skipped; sandbox Skill execution and read-only rejection passed",
+    "skipped": "online pip/npm dependency installation requires separate opt-in"
+  },
+  "browser": "real Chrome and Skills API/MySQL; identity and chat surroundings are test fixtures; no model call",
+  "limitations": [
+    "No production deployment or production migration",
+    "No paid/live model completion; prompt selection tested in Agent code and scripts run in actual Docker",
+    "Public Git network availability is intermittent; deterministic real intranet Git acceptance passed",
+    "Old package hashes are retained for running checkpoints; automatic garbage collection is deliberately not added"
+  ],
+  "backend": {
+    "command": "python3 -m uv run pytest -q",
+    "passed": 884,
+    "skipped": 28
+  },
+  "frontend": {
+    "command": "npm --prefix frontend test",
+    "passed": 113,
+    "build": "passed"
+  },
+  "lint": "python3 -m uv run ruff check enterprise_agent tests: passed",
+  "compose": "docker compose -f docker/docker-compose.yml config --quiet: passed",
+  "diff_check": "git diff --check: passed",
+  "temporary_environment": "Browser API stopped; disposable MySQL container/anonymous volume removed"
+}

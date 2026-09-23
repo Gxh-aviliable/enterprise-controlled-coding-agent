@@ -1,0 +1,33 @@
+{
+  "api_image": "mini-claude-api:20260923-tool-history",
+  "api_image_id": "sha256:830cbd70e8ba9905b4e739a486ce43c183ea8bbd099bb371ed3c53f1cca7ba62",
+  "health": {
+    "status": "healthy",
+    "version": "0.1.0",
+    "build": {
+      "source_sha256": "37f4369dad96f386d96bf80e7693dc133ab851111c0d44b8a803a98b14bc6275",
+      "qualification": "diagnostic-snapshot",
+      "git": {
+        "commit": "0648e72dad083e21a70eb8811e1e0dc890bd5714",
+        "branch": "feature/verified-agent-delivery",
+        "dirty": true
+      }
+    },
+    "name": "Enterprise Agent",
+    "checks": {
+      "mysql": "ok",
+      "redis": "ok"
+    }
+  },
+  "other_service_container_ids_unchanged": true,
+  "backup": "/home/ubuntu/mini-claude-backup-20260923-tool-history",
+  "repair": {
+    "session_id": "15ed7b75-3b0e-48d6-b852-01900f584ea0",
+    "owner_user_id": 5,
+    "missing_results_added": 2,
+    "tools_executed": 0,
+    "checkpoint_next": [],
+    "old_checkpoint_id": "1f1b6b11-5728-60a4-8020-c31b3f0b7e3c",
+    "new_checkpoint_id": "1f1b6b26-6720-67fe-8021-274738a9950a"
+  }
+}

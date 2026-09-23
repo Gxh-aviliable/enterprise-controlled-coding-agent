@@ -1,0 +1,537 @@
+{
+  "kind": "real-browser-redis-outage",
+  "source_sha256": "538003babd0e4ddea490a212eebd8d9dad9a192dafba7acce0612982b7e4d3c7",
+  "approvals": 2,
+  "trace_id": "f25f2e63-7b76-4f49-8e0e-e992047395ec",
+  "session_id": "627a5769-4fdc-4eaa-8ea9-84a5e42c5861",
+  "fault": {
+    "started_at": "2026-09-14T05:54:09.756Z",
+    "service": "goal-agent-20260914-redis-1",
+    "restored_at": "2026-09-14T05:54:17.129Z"
+  },
+  "last_error": "Expected values to be strictly equal:\n\n500 !== 200\n",
+  "last_status": {
+    "status": "failed",
+    "session_id": "627a5769-4fdc-4eaa-8ea9-84a5e42c5861",
+    "trace_id": "f25f2e63-7b76-4f49-8e0e-e992047395ec",
+    "execution_phase": "executing",
+    "runner_state": null,
+    "stream_fence": null,
+    "cancel_requested": false,
+    "interrupt_type": null,
+    "interrupt": null
+  },
+  "trace": {
+    "current_phase": "executing",
+    "duration_ms": 35670,
+    "error": "Runner lease expired or API restarted. Task was not replayed; inspect changes for unknown side effects.",
+    "events": [
+      {
+        "data": {},
+        "duration_ms": 0,
+        "event_id": "d77f4486-dce7-4bde-8671-8c634124c8b5",
+        "name": "task_created",
+        "status": "pending",
+        "timestamp": "2026-09-14T05:54:05.923241+00:00",
+        "type": "task"
+      },
+      {
+        "data": {
+          "phase": "parsing",
+          "round_count": 0,
+          "task_status": "running"
+        },
+        "duration_ms": 0,
+        "event_id": "7faa95a5-8511-425b-93a1-d1269a10ce23",
+        "name": "task_parse",
+        "status": "success",
+        "timestamp": "2026-09-14T05:54:05.940419+00:00",
+        "type": "node"
+      },
+      {
+        "data": {
+          "application_status": "not_attributed",
+          "candidates": [],
+          "injected_characters": 101,
+          "injected_count": 0,
+          "injected_ids": [],
+          "injected_tokens": 57,
+          "query_summary": "First use write_file to create redis-marker-2.txt with exactly once. Then run python sleeper.py using bash. Do not perform any other operations.",
+          "strategy": "semantic_top_k",
+          "threshold": 0.8,
+          "top_k_per_collection": 3
+        },
+        "duration_ms": 111,
+        "event_id": "76592cbf-43c3-4861-ba26-3f7a132f589a",
+        "name": "memory_retrieval",
+        "status": "success",
+        "timestamp": "2026-09-14T05:54:06.057454+00:00",
+        "type": "memory"
+      },
+      {
+        "data": {
+          "phase": "parsing",
+          "round_count": 0,
+          "task_status": "running"
+        },
+        "duration_ms": 113,
+        "event_id": "b726d7f1-5c50-47c1-b614-3a1729d14dd5",
+        "name": "init_context",
+        "status": "success",
+        "timestamp": "2026-09-14T05:54:06.058178+00:00",
+        "type": "node"
+      },
+      {
+        "data": {
+          "phase": "parsing",
+          "round_count": 0,
+          "task_status": "running"
+        },
+        "duration_ms": 0,
+        "event_id": "50538b96-5072-4ed0-a829-1536e1065db2",
+        "name": "check_background",
+        "status": "success",
+        "timestamp": "2026-09-14T05:54:06.063041+00:00",
+        "type": "node"
+      },
+      {
+        "data": {
+          "phase": "parsing",
+          "round_count": 0,
+          "task_status": "running"
+        },
+        "duration_ms": 0,
+        "event_id": "46c789bc-d423-417d-9423-bcac9feb8c55",
+        "name": "check_inbox",
+        "status": "success",
+        "timestamp": "2026-09-14T05:54:06.064649+00:00",
+        "type": "node"
+      },
+      {
+        "data": {
+          "phase": "planning",
+          "round_count": 0,
+          "task_status": "running"
+        },
+        "duration_ms": 9,
+        "event_id": "04009c6b-60d4-49e7-aca0-d1f169e669a8",
+        "name": "pre_microcompact",
+        "status": "success",
+        "timestamp": "2026-09-14T05:54:06.075504+00:00",
+        "type": "node"
+      },
+      {
+        "data": {
+          "completion_gate_blocker": null,
+          "completion_gate_recovery_attempts": 0,
+          "context_token_estimate": 5177,
+          "incomplete_response_recovery_attempts": 0,
+          "input_chars": 7388,
+          "input_summary": "First use write_file to create redis-marker-2.txt with exactly once. Then run python sleeper.py using bash. Do not perform any other operations.",
+          "input_tokens": 4940,
+          "message_count": 3,
+          "output_summary": "",
+          "output_tokens": 237,
+          "response_complete": true,
+          "retry_count": 0,
+          "stop_reason": "tool_use",
+          "tool_calls": [
+            "write_file"
+          ],
+          "total_tokens": 5177
+        },
+        "duration_ms": 1997,
+        "event_id": "62210952-bfae-412a-ad27-1651ed20db40",
+        "name": "llm_call",
+        "status": "success",
+        "timestamp": "2026-09-14T05:54:08.075890+00:00",
+        "type": "model"
+      },
+      {
+        "data": {
+          "phase": "executing",
+          "round_count": 1,
+          "task_status": "running"
+        },
+        "duration_ms": 1999,
+        "event_id": "2451534f-9f3d-467c-a0e4-513f08a14e41",
+        "name": "llm_call",
+        "status": "success",
+        "timestamp": "2026-09-14T05:54:08.077170+00:00",
+        "type": "node"
+      },
+      {
+        "data": {
+          "deadline": "2026-09-14T05:59:08.085266+00:00",
+          "tools": [
+            {
+              "name": "write_file",
+              "risk": "review"
+            }
+          ]
+        },
+        "duration_ms": 0,
+        "event_id": "b9047594-dc48-404c-8048-46d46b2df741",
+        "name": "confirmation_requested",
+        "status": "waiting",
+        "timestamp": "2026-09-14T05:54:08.085830+00:00",
+        "type": "confirmation"
+      },
+      {
+        "data": {
+          "phase": "executing",
+          "round_count": 1,
+          "task_status": "waiting_confirmation"
+        },
+        "duration_ms": 1,
+        "event_id": "27119347-e2f2-40c2-8cc4-d6aba4a21066",
+        "name": "prepare_tool_execution",
+        "status": "success",
+        "timestamp": "2026-09-14T05:54:08.087327+00:00",
+        "type": "node"
+      },
+      {
+        "data": {
+          "phase": "executing",
+          "task_status": "waiting_confirmation"
+        },
+        "duration_ms": 0,
+        "event_id": "328cbf82-fabe-4257-8d8a-efce3b4ae48c",
+        "name": "tool_confirm",
+        "status": "interrupted",
+        "timestamp": "2026-09-14T05:54:08.091976+00:00",
+        "type": "node"
+      },
+      {
+        "data": {
+          "approved": true,
+          "approved_ids": [
+            "call_00_XbQK1NVrGM8R4bhGC5EL1949"
+          ],
+          "reason": null
+        },
+        "duration_ms": 0,
+        "event_id": "ba03c11b-28d4-4c2c-803e-a0d17a603c91",
+        "name": "confirmation_approved",
+        "status": "success",
+        "timestamp": "2026-09-14T05:54:08.268740+00:00",
+        "type": "confirmation"
+      },
+      {
+        "data": {
+          "phase": "executing",
+          "round_count": 1,
+          "task_status": "running"
+        },
+        "duration_ms": 1,
+        "event_id": "165e6df2-3968-4f4a-aa97-818578ff51fb",
+        "name": "tool_confirm",
+        "status": "success",
+        "timestamp": "2026-09-14T05:54:08.269765+00:00",
+        "type": "node"
+      },
+      {
+        "data": {
+          "args_summary": {
+            "content": "once",
+            "path": "redis-marker-2.txt"
+          },
+          "artifact_bytes": null,
+          "artifact_error": null,
+          "artifact_path": null,
+          "artifact_redacted": false,
+          "artifact_sha256": null,
+          "attempt_count": 1,
+          "error_code": null,
+          "execution_ids": [
+            "c900585e3cac429d971c1f41342811bf"
+          ],
+          "exit_code": null,
+          "idempotent": false,
+          "model_chars": 59,
+          "model_truncated": false,
+          "original_chars": 59,
+          "output_summary": "Wrote 4 bytes to redis-marker-2.txt\n\nVerified preview:\nonce",
+          "risk": "review",
+          "source_truncated": false,
+          "timeout_seconds": 30,
+          "tool_call_id": "call_00_XbQK1NVrGM8R4bhGC5EL1949"
+        },
+        "duration_ms": 17,
+        "event_id": "ab9cd1c3-c210-4697-b49e-80b9ce9750f6",
+        "name": "write_file",
+        "status": "success",
+        "timestamp": "2026-09-14T05:54:08.290934+00:00",
+        "type": "tool"
+      },
+      {
+        "data": {
+          "phase": "executing",
+          "round_count": 1,
+          "task_status": "running"
+        },
+        "duration_ms": 19,
+        "event_id": "e59efb72-30a6-42a8-9a74-ec5dd399d478",
+        "name": "tool_executor",
+        "status": "success",
+        "timestamp": "2026-09-14T05:54:08.292578+00:00",
+        "type": "node"
+      },
+      {
+        "data": {
+          "phase": "checkpointing",
+          "round_count": 1,
+          "task_status": "running"
+        },
+        "duration_ms": 3,
+        "event_id": "cd5acbc2-fbe7-4306-a01f-71e4f35c945a",
+        "name": "checkpoint_task",
+        "status": "success",
+        "timestamp": "2026-09-14T05:54:08.300628+00:00",
+        "type": "node"
+      },
+      {
+        "data": {
+          "phase": "checkpointing",
+          "round_count": 1,
+          "task_status": "running"
+        },
+        "duration_ms": 0,
+        "event_id": "21c1ea8c-5055-46b5-9500-30010d2e732b",
+        "name": "save_memory",
+        "status": "success",
+        "timestamp": "2026-09-14T05:54:08.303819+00:00",
+        "type": "node"
+      },
+      {
+        "data": {
+          "phase": "planning",
+          "round_count": 1,
+          "task_status": "running"
+        },
+        "duration_ms": 6,
+        "event_id": "e7474c40-9cd7-402b-a7b4-aa5891417d85",
+        "name": "pre_microcompact",
+        "status": "success",
+        "timestamp": "2026-09-14T05:54:08.312726+00:00",
+        "type": "node"
+      },
+      {
+        "data": {
+          "completion_gate_blocker": null,
+          "completion_gate_recovery_attempts": 0,
+          "context_token_estimate": 5255,
+          "incomplete_response_recovery_attempts": 0,
+          "input_chars": 8542,
+          "input_summary": "First use write_file to create redis-marker-2.txt with exactly once. Then run python sleeper.py using bash. Do not perform any other operations.",
+          "input_tokens": 5206,
+          "message_count": 5,
+          "output_summary": "",
+          "output_tokens": 49,
+          "response_complete": true,
+          "retry_count": 0,
+          "stop_reason": "tool_use",
+          "tool_calls": [
+            "bash"
+          ],
+          "total_tokens": 5255
+        },
+        "duration_ms": 949,
+        "event_id": "92299d6e-652f-48bd-af6e-7fa40bd3337c",
+        "name": "llm_call",
+        "status": "success",
+        "timestamp": "2026-09-14T05:54:09.265210+00:00",
+        "type": "model"
+      },
+      {
+        "data": {
+          "phase": "executing",
+          "round_count": 2,
+          "task_status": "running"
+        },
+        "duration_ms": 952,
+        "event_id": "2cc2f169-5a54-4c67-821e-90c8b1bae79d",
+        "name": "llm_call",
+        "status": "success",
+        "timestamp": "2026-09-14T05:54:09.266788+00:00",
+        "type": "node"
+      },
+      {
+        "data": {
+          "deadline": "2026-09-14T05:59:09.276288+00:00",
+          "tools": [
+            {
+              "name": "bash",
+              "risk": "review"
+            }
+          ]
+        },
+        "duration_ms": 0,
+        "event_id": "26be6713-356d-4f18-b99d-0d1eaeb5bdd1",
+        "name": "confirmation_requested",
+        "status": "waiting",
+        "timestamp": "2026-09-14T05:54:09.276723+00:00",
+        "type": "confirmation"
+      },
+      {
+        "data": {
+          "phase": "executing",
+          "round_count": 2,
+          "task_status": "waiting_confirmation"
+        },
+        "duration_ms": 2,
+        "event_id": "03812d44-e198-4db6-9e6a-0301e13b324e",
+        "name": "prepare_tool_execution",
+        "status": "success",
+        "timestamp": "2026-09-14T05:54:09.278244+00:00",
+        "type": "node"
+      },
+      {
+        "data": {
+          "phase": "executing",
+          "task_status": "waiting_confirmation"
+        },
+        "duration_ms": 0,
+        "event_id": "27bf027a-b610-4fdc-8069-97295ebe8a52",
+        "name": "tool_confirm",
+        "status": "interrupted",
+        "timestamp": "2026-09-14T05:54:09.282226+00:00",
+        "type": "node"
+      },
+      {
+        "data": {
+          "approved": true,
+          "approved_ids": [
+            "call_00_lnUJKldCl34Y2ZblCOcM7340"
+          ],
+          "reason": null
+        },
+        "duration_ms": 0,
+        "event_id": "561308cc-c100-45f1-beef-2f54c09ca50d",
+        "name": "confirmation_approved",
+        "status": "success",
+        "timestamp": "2026-09-14T05:54:09.422644+00:00",
+        "type": "confirmation"
+      },
+      {
+        "data": {
+          "phase": "executing",
+          "round_count": 2,
+          "task_status": "running"
+        },
+        "duration_ms": 1,
+        "event_id": "796e73c1-aece-4a78-8893-0e9ed05a7169",
+        "name": "tool_confirm",
+        "status": "success",
+        "timestamp": "2026-09-14T05:54:09.423692+00:00",
+        "type": "node"
+      },
+      {
+        "data": {
+          "cancellation": "terminated",
+          "cleanup_confirmed": true,
+          "container_id": "c99d85cff2a1d6e474f1f36c558483de6e042d948e9d0fa91a29979fe0a9aeee",
+          "error_code": "task_cancelled",
+          "execution_id": "agent-sandbox-18b979730c40472f9b518fbc8d3d888f",
+          "executor": "docker",
+          "exit_code": 137,
+          "input_version": "73a02cac43f960fe4ddb9a0cd8c536ccb6f7e1446f29d4a5c7165b736c97025e",
+          "output_counts_scope": "complete_attached_stream",
+          "receipt": {
+            "cancelled": true,
+            "changes": [],
+            "command": "python sleeper.py",
+            "command_sha256": "b28e0b5cf2fdcd26a017be8d7bc97014f1c4bbaee583e47e7df6e12fa55a6598",
+            "cwd": ".",
+            "error_code": "task_cancelled",
+            "execution_id": "d84604abadda4593bc763e94fec6ec6d",
+            "executor": "docker",
+            "exit_code": 137,
+            "fresh": true,
+            "input_stamp": "04f5641fff4915966df36599584a64400b9ab540709aad4062901385404dcd03",
+            "input_version": "73a02cac43f960fe4ddb9a0cd8c536ccb6f7e1446f29d4a5c7165b736c97025e",
+            "ok": false,
+            "output_sha256": "02a713f76226c52a198adae80526740fc4d6057636326bc8dec49635db8ae7a7",
+            "output_stamp": "04f5641fff4915966df36599584a64400b9ab540709aad4062901385404dcd03",
+            "output_version": "73a02cac43f960fe4ddb9a0cd8c536ccb6f7e1446f29d4a5c7165b736c97025e",
+            "phase": "finished",
+            "recorded_at": 1789365260.85682,
+            "seq": 4,
+            "snapshot_status": "available",
+            "timed_out": false,
+            "tool_call_id": "call_00_lnUJKldCl34Y2ZblCOcM7340",
+            "trace_id": "f25f2e63-7b76-4f49-8e0e-e992047395ec",
+            "validation": null
+          },
+          "source_truncated": false,
+          "stderr_original_bytes": 0,
+          "stdout_original_bytes": 0,
+          "termination_mode": "container_force_remove",
+          "trace_id": "f25f2e63-7b76-4f49-8e0e-e992047395ec",
+          "validation_input_changed": false
+        },
+        "duration_ms": 11430,
+        "event_id": "e51e9d49-9e4f-4072-82db-a03b9befaee0",
+        "name": "agent_executor",
+        "status": "error",
+        "timestamp": "2026-09-14T05:54:20.858586+00:00",
+        "type": "execution"
+      },
+      {
+        "data": {
+          "error": "Runner lease expired or API restarted. Task was not replayed; inspect changes for unknown side effects."
+        },
+        "duration_ms": 35670,
+        "event_id": "002838f6-61a3-486c-96f4-20a5d00c59e2",
+        "name": "task_finished",
+        "status": "failed",
+        "timestamp": "2026-09-14T05:54:41.593407+00:00",
+        "type": "task"
+      }
+    ],
+    "finished_at": "2026-09-14T05:54:41.593407+00:00",
+    "metrics": {
+      "confirmation_count": 2,
+      "input_tokens": 10146,
+      "memory_candidates": 0,
+      "memory_injected": 0,
+      "memory_injected_tokens": 57,
+      "memory_retrieval_queries": 1,
+      "model_calls": 2,
+      "model_duration_ms": 2946,
+      "node_count": 17,
+      "node_duration_ms": 3106,
+      "output_tokens": 286,
+      "pause_count": 0,
+      "paused_duration_ms": 0,
+      "resume_count": 0,
+      "retry_count": 0,
+      "safety_interceptions": 0,
+      "tool_calls": 1,
+      "tool_duration_ms": 17,
+      "tool_failures": 0,
+      "tool_successes": 1,
+      "total_tokens": 10432
+    },
+    "mode": "single_agent",
+    "request_summary": "First use write_file to create redis-marker-2.txt with exactly once. Then run python sleeper.py using bash. Do not perform any other operations.",
+    "result_summary": null,
+    "schema_version": 1,
+    "session_id": "627a5769-4fdc-4eaa-8ea9-84a5e42c5861",
+    "started_at": "2026-09-14T05:54:05.923241+00:00",
+    "status": "failed",
+    "trace_id": "f25f2e63-7b76-4f49-8e0e-e992047395ec",
+    "user_id": 3
+  },
+  "marker": {
+    "path": "redis-marker-2.txt",
+    "content": "once",
+    "size": 4,
+    "lines": 1,
+    "offset": 0,
+    "limit": 500,
+    "binary": false,
+    "sha256": "200651a8b2d5912f692db89468a7d47d86a3ed6844f48f1b15f2be1d9c9a7e5e"
+  },
+  "result": "passed"
+}

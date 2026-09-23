@@ -1,0 +1,85 @@
+{
+  "release": "20260916-workbench-r2",
+  "source_sha256": "17a7741ddcf204a69d91fb73f58785c356d9aa652d21135d45f2e130cf579126",
+  "database_before": "20260914_0006\nusers\t5\nsessions\t10\nchat_messages\t42\nmanaged_shared_skills\t0",
+  "database_after": "20260914_0006\nusers\t5\nsessions\t10\nchat_messages\t42\nmanaged_shared_skills\t0",
+  "database_redis_containers_preserved": true,
+  "data_volumes_preserved": {
+    "/workspaces": "mini-claude_workspace_data",
+    "/data/chroma": "mini-claude_chroma_data",
+    "/data/shared-skills": "mini-claude_managed_shared_skills"
+  },
+  "backup_directory": "/home/ubuntu/mini-claude-backup-20260916-workbench-r2",
+  "backups": [
+    {
+      "file": "database.sql",
+      "bytes": 151010,
+      "sha256": "483acda385f88636b96368eaaf67c3c8c65ef4e6f4b5bc2e0dfa983f8c71b06c"
+    },
+    {
+      "file": "redis.rdb",
+      "bytes": 206489,
+      "sha256": "5ba603c44e9391d5b676ac40896813bb6bd994dba6b75f2e79171f864aa59fd6"
+    },
+    {
+      "file": "workspaces-and-memory.tar.gz",
+      "bytes": 151705,
+      "sha256": "6b8ec4c76490fdf99c350270ef0bd833c64e6778e4b1f4a522624e951791c357"
+    }
+  ],
+  "containers": {
+    "api": {
+      "image": "mini-claude-api:20260916-workbench-r2",
+      "image_id": "sha256:1a9b81d16a9bd6a7a33365be3ab1fa2f057fc227d961bb2a46b18b6d9d0cc3ae",
+      "health": "healthy"
+    },
+    "frontend": {
+      "image": "mini-claude-frontend:20260916-workbench-r2",
+      "image_id": "sha256:b4ab625cc37f016c8e04da3d608f35ead62757c10bc436f61fa8f49e35a917d5",
+      "health": "healthy"
+    },
+    "sandbox-reaper": {
+      "image": "mini-claude-sandbox-reaper:20260916-workbench-r2",
+      "image_id": "sha256:e4d482fe44097b7cfd62c34337c6a19e8887c5cf144614d8a8c0fd2d98bfb9dc",
+      "health": "running"
+    },
+    "mysql": {
+      "image": "mysql:8.0",
+      "image_id": "sha256:7dcddc01f13bab2f15cde676d44d01f61fc9f99fe7785e86196dfc07d358ae2b",
+      "health": "healthy"
+    },
+    "redis": {
+      "image": "redis/redis-stack:latest",
+      "image_id": "sha256:5d5154123426693540ea6c1d9e638eae2bf2024879c839db6fcfdd7717e817c7",
+      "health": "healthy"
+    }
+  },
+  "archive_sha256": "8cb44f9872b6e5296e5b8a38b1463e2f4dc413cc0f48dabc4c5c1522bf337e3d",
+  "executor_image_id": "sha256:d1f675216ab8f5a96dc0c482c152c482e7bdab6e0ad971c3c4fe399dc0a30b68",
+  "network_enabled": true,
+  "executor_versions": {
+    "python": "3.12.13",
+    "node": "22.23.2",
+    "npm": "10.9.8"
+  },
+  "reports": {
+    "server-20260916-r2-sandbox.xml": {
+      "sha256": "ab29897cac72b93cf431ac26451ef1ecf5e30a9b1cb21f2e561c4024aca505f6"
+    },
+    "server-20260916-docker-tests-r2.xml": {
+      "sha256": "f1d5ea2e44b0d0a60aefe722667e539d5edfb58861b59deab2aa04df067243fd"
+    },
+    "server-20260916-r2-smoke.json": {
+      "sha256": "ca6685a4ce8a17997b2537970be758e66e93ab6c741c1ee38bf11b4f6ed4a472"
+    },
+    "server-20260916-r2-runtime-source.json": {
+      "sha256": "8b1da301696e180af1a72d97f2228dc72e41cd8a67d60537986cc91c96baaa42"
+    },
+    "server-20260916-r2-browser.json": {
+      "sha256": "33f0d60da3d93764a593ee3066e9571b504bae68d9e53b4d08959bc5cf3c5da0"
+    },
+    "server-20260916-r2-public-health.json": {
+      "sha256": "c9c91377acccd0ef883c713216223ac04dd1ddf21fc3ba3ba110c7a346836fc8"
+    }
+  }
+}

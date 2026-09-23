@@ -1,0 +1,30 @@
+{
+  "initial": {
+    "passed": 16,
+    "failed": 8,
+    "expected_failure": true,
+    "failed_tests": [
+      "test_ineligible_goods_do_not_dilute_coupon",
+      "test_coupon_is_capped_by_eligible_amount",
+      "test_rounding_preserves_the_full_coupon",
+      "test_rounding_never_exceeds_coupon_budget",
+      "test_equal_fractions_follow_input_order_not_sku_sorting",
+      "test_shipping_uses_amount_after_coupon[105-10-8]",
+      "test_shipping_uses_amount_after_coupon[99-0.01-8]",
+      "test_mixed_order_summary_matches_line_items"
+    ]
+  },
+  "corrected_temporary_copy": {
+    "passed": 24,
+    "failed": 0,
+    "shipped": false
+  },
+  "files": {
+    "README.md": "e3fe28fe2ae144b435a0f7a1bb5e589260c7afb12c5be09cef440b780609a0f3",
+    "checkout.py": "3d1c646d54dc148ee646318a86d8f2d06c9613f54b235a4b050ed5add17242de",
+    "test_checkout.py": "e739ce88c651f08ccc3729dc570edee002e68de59a98bb1d9625cd482eefee34"
+  },
+  "practice_directory": "/Users/gxh/学生时代/秋招准备/练习代码/GXH",
+  "practice_copy_sha256_verified": true,
+  "server_workspace_updated": false
+}

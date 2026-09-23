@@ -1,0 +1,45 @@
+{
+  "synthetic": true,
+  "passed": true,
+  "checks": [
+    {
+      "path": "/tasks/2a026c3a-f870-46ec-b2a3-5356ee212a45",
+      "status": 404
+    },
+    {
+      "path": "/tasks/2a026c3a-f870-46ec-b2a3-5356ee212a45/trace",
+      "status": 404
+    },
+    {
+      "path": "/tasks/2a026c3a-f870-46ec-b2a3-5356ee212a45/changes",
+      "status": 404
+    },
+    {
+      "path": "/tasks/2a026c3a-f870-46ec-b2a3-5356ee212a45/events",
+      "status": 404
+    },
+    {
+      "path": "/workspace/read?path=calculator.py",
+      "status": 404
+    },
+    {
+      "operation": "cross-user restore",
+      "status": 404
+    },
+    {
+      "operation": "cross-user or operational path",
+      "path": "../user_9/calculator.py",
+      "status": 400
+    },
+    {
+      "operation": "cross-user or operational path",
+      "path": ".agent/artifacts/guessed.json",
+      "status": 404
+    },
+    {
+      "operation": "cross-user or operational path",
+      "path": ".workspace-locks/evidence/guessed.json",
+      "status": 404
+    }
+  ]
+}

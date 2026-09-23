@@ -1,5 +1,9 @@
 # Enterprise Controlled Coding Agent
 
+> 2026-09-15：按秋招演示需求，执行容器现默认直接联网，支持pip/npm安装并跨命令复用依赖。本文后续9月14日的禁网说明属于旧版行为，当前用法见[联网与依赖说明](docs/runtime-dependencies.md)。
+
+> 2026-09-14 Goal交付：主目录源码已更新原本地应用，真实变更/验证收据、Diff恢复、审批范围、断线收敛与可信Trace存储已验证。Single仍为默认；诊断模型25/30及全部失败保留。范围、证据与条件扩展见[逐项交付报告](docs/agent-improvement-delivery-20260914.md)。
+
 > 面向企业内网的受控 Coding Agent 平台
 
 `Mini Claude Code` 是一个能够进入真实代码仓库，自主完成**理解需求、检索代码、拆解任务、调用工具、修改文件、运行验证和失败修复**的 Coding Agent。它以 LangGraph 驱动多轮“决策—执行—观察”循环，并通过文件、Shell、Todo、后台任务、Skill、记忆和委派工具完成工程任务。
@@ -427,7 +431,6 @@ enterprise-controlled-coding-agent/
 ├── tests/                   # 后端自动化测试
 ├── migrations/              # Alembic 迁移
 ├── docker/                  # API、Nginx/Vue 与 Compose
-├── shared_skills/           # 内置共享 Skill
 └── docs/                    # 文档索引、理解指南、部署和开发记录
 ```
 
@@ -458,7 +461,7 @@ enterprise-controlled-coding-agent/
 
 ## 已知边界
 
-- **不是内核级沙箱**：当前 Shell 是用户态解析和策略控制，Workspace 脚本仍可能尝试访问宿主文件系统或网络。生产环境应使用临时 rootless 容器、seccomp/AppArmor、CPU/内存限制和出站网络策略。
+- **单机容器沙箱 MVP**：Shell/后台任务默认使用独立非 root Docker 容器，禁网、只读根文件系统、资源限制与取消回收已有真实测试；部署前需构建执行镜像并配置 staging/socket。API 与 reaper 仍拥有主机管理权限，容器共享内核，staging 尚无运行期磁盘硬配额。显式 `AGENT_EXECUTOR=local` 属于未隔离开发模式。详见[架构与部署](docs/agent-sandbox.md)、[演示](docs/sandbox-demo.md)和[验证证据](docs/release-evidence/sandbox-mvp.md)。
 - **Trace 仍是单进程基线**：当前使用用户 Workspace 下的原子 JSON；多副本部署应迁移到集中式数据库、ClickHouse 或 OpenTelemetry 后端。
 - **角色模型仍较简化**：当前运行时主要区分普通用户与管理员，尚未接入企业 SSO、组织/项目级 RBAC 和审批流。
 - **Multi-Agent 尚未形成收益证据**：已实现显式真实委派边界，但 6 个 delegation-suitable 用例的真实对照仍待运行。
@@ -496,3 +499,7 @@ enterprise-controlled-coding-agent/
 ## License
 
 MIT
+
+### 企业 Skill 管理
+
+工作台 Skills 支持公共/个人/项目目录、ZIP/Git/workspace 导入、模板创建及稳定 ID 聊天选择。管理员发布完整版本包；任务固定版本并通过只读沙箱资源访问。见 [安装、发布、迁移与演示说明](docs/skills-management.md)。

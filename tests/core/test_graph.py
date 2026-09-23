@@ -10,7 +10,6 @@ from enterprise_agent.core.agent.graph import build_agent_graph, build_simple_ag
 from enterprise_agent.core.agent.state import AgentState
 
 DIRECT_EXECUTION_EDGES = {
-    ("plan_task", "pre_microcompact"),
     ("llm_call", "prepare_tool_execution"),
     ("tool_confirm", "tool_executor"),
     ("checkpoint_task", "save_memory"),
@@ -42,18 +41,24 @@ def test_build_agent_graph_compiles_registered_nodes():
     node_names = set(graph.get_graph().nodes)
     assert {
         "task_parse",
-        "plan_task",
         "prepare_tool_execution",
         "checkpoint_task",
         "verification_gate",
         "finalize_task",
     }.issubset(node_names)
+    assert "plan_task" not in node_names
+    assert ("check_inbox", "pre_microcompact") in {
+        (edge.source, edge.target) for edge in graph.get_graph().edges
+    }
     _assert_user_pause_is_retired(graph)
 
 
 def test_simple_graph_connects_execution_boundaries_without_user_pause():
     graph = build_simple_agent_graph(checkpointer=InMemorySaver())
 
+    assert ("init_context", "pre_microcompact") in {
+        (edge.source, edge.target) for edge in graph.get_graph().edges
+    }
     _assert_user_pause_is_retired(graph)
 
 

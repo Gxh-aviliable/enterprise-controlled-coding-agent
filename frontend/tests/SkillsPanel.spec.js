@@ -1,0 +1,121 @@
+import { mount, flushPromises } from '@vue/test-utils'
+import { beforeEach, describe, expect, it, vi } from 'vitest'
+import SkillsPanel from '../src/components/SkillsPanel.vue'
+import * as api from '../src/api/client.js'
+
+vi.mock('../src/api/client.js', () => ({
+  listSkills: vi.fn(), getSkill: vi.fn(), previewSkillImport: vi.fn(), previewSkillZip: vi.fn(),
+  installSkill: vi.fn(), updateSkill: vi.fn(), uninstallSkill: vi.fn()
+}))
+const item = { id: 'installed:one', name: 'sample', description: 'Reusable guidance', source: 'personal',
+  scope: 'personal', version: 1, enabled: true, editable: true, implicit_allowed: true, files: [], content: 'Instructions' }
+const button = (wrapper, text) => wrapper.findAll('button').find(b => b.text() === text)
+async function openImport(wrapper) { await wrapper.find('.page-header .primary').trigger('click'); await flushPromises() }
+beforeEach(() => {
+  vi.resetAllMocks()
+  HTMLDialogElement.prototype.showModal = function () { this.open = true }
+  HTMLDialogElement.prototype.close = function () { this.open = false }
+  api.listSkills.mockResolvedValue({ items: [item], errors: [] })
+  api.getSkill.mockResolvedValue(item)
+  api.installSkill.mockResolvedValue({ id: item.id, version: 2 })
+  api.updateSkill.mockResolvedValue({ id: item.id, version: 2 })
+  api.uninstallSkill.mockResolvedValue({ uninstalled: true })
+})
+
+describe('Skill library', () => {
+  it('distinguishes same-name sources without exposing IDs on the library', async () => {
+    api.listSkills.mockResolvedValue({ items: [item, { ...item, id: 'managed:1', source: 'managed', editable: false }], errors: [] })
+    const w = mount(SkillsPanel, { attachTo: document.body }); await flushPromises()
+    expect(w.findAll('.skill-card')).toHaveLength(2)
+    expect(w.find('.skill-grid').text()).toContain('用户管理')
+    expect(w.find('.skill-grid').text()).toContain('管理员发布')
+    expect(w.text()).not.toContain('installed:one')
+    expect(w.text()).not.toContain('managed:1')
+    await w.findAll('.skill-card')[1].trigger('click'); await flushPromises()
+    expect(api.getSkill).toHaveBeenCalledWith('managed:1', '')
+    expect(w.find('dialog').element.open).toBe(true)
+    expect(w.find('.technical').attributes('open')).toBeUndefined()
+    await w.find('[aria-label="关闭详情"]').trigger('click')
+    expect(w.find('dialog').element.open).toBe(false)
+    await flushPromises()
+    expect(document.activeElement).toBe(w.findAll('.skill-card')[1].element)
+    w.unmount()
+  })
+  it('filters by readable source and search and exposes discovery errors on demand', async () => {
+    api.listSkills.mockResolvedValue({ items: [item, { ...item, id: 'managed:2', name: 'python', source: 'managed' }], errors: [{ name: 'broken', error: 'Invalid YAML' }] })
+    const w = mount(SkillsPanel); await flushPromises()
+    await button(w, '管理员发布').trigger('click')
+    expect(w.findAll('.skill-card')).toHaveLength(1)
+    expect(w.find('.skill-card').text()).toContain('python')
+    await w.find('[aria-label="搜索 Skills"]').setValue('missing')
+    expect(w.text()).toContain('没有找到相关技能')
+    await button(w, '清除搜索').trigger('click')
+    expect(w.findAll('.skill-card')).toHaveLength(1)
+    expect(w.find('.discovery-issues').attributes('open')).toBeUndefined()
+    expect(w.find('.discovery-issues').text()).toContain('Invalid YAML')
+  })
+  it('saves switches with the current version and refreshes the detail', async () => {
+    const w = mount(SkillsPanel); await flushPromises()
+    await w.find('.skill-card').trigger('click'); await flushPromises()
+    api.getSkill.mockResolvedValue({ ...item, enabled: false, version: 2 })
+    await w.find('[role="switch"][aria-label="使用此技能"]').trigger('click'); await flushPromises()
+    expect(api.updateSkill).toHaveBeenCalledWith(item.id, { expected_version: 1, enabled: false })
+    expect(w.find('[aria-label="使用此技能"]').attributes('aria-checked')).toBe('false')
+  })
+  it('previews a template, invalidates edited previews, and installs only after confirmation', async () => {
+    api.previewSkillImport.mockResolvedValue({ preview_id: 'preview', candidates: [{ valid: true, metadata: { name: 'sample' }, content: 'Preview', files: [] }] })
+    const w = mount(SkillsPanel); await flushPromises(); await openImport(w)
+    await button(w, '自己创建').trigger('click')
+    await w.find('.import-body input').setValue('sample')
+    const textareas = w.findAll('.import-body textarea')
+    await textareas[0].setValue('Review code'); await textareas[1].setValue('Check correctness')
+    await button(w, '预览 Skill').trigger('click'); await flushPromises()
+    expect(api.installSkill).not.toHaveBeenCalled()
+    await textareas[1].setValue('Check correctness and tests')
+    expect(button(w, '确认添加')).toBeUndefined()
+    await button(w, '预览 Skill').trigger('click'); await flushPromises()
+    await button(w, '确认添加').trigger('click'); await flushPromises()
+    expect(api.installSkill).toHaveBeenCalledWith(expect.objectContaining({ preview_id: 'preview', candidate: 0, project: '' }))
+    expect(w.find('dialog').element.open).toBe(false)
+    expect(w.text()).toContain('Skill 已添加')
+  })
+  it('keeps ZIP errors in the dialog and never installs a failed preview', async () => {
+    api.previewSkillZip.mockRejectedValue(new Error('ZIP contains traversal'))
+    const w = mount(SkillsPanel); await flushPromises(); await openImport(w)
+    const input = w.find('input[type=file]'), file = new File(['zip'], 'skill.zip')
+    Object.defineProperty(input.element, 'files', { value: [file] })
+    await input.trigger('change'); await button(w, '预览 Skill').trigger('click'); await flushPromises()
+    expect(api.previewSkillZip).toHaveBeenCalledWith(file)
+    expect(w.find('dialog [role=alert]').text()).toContain('ZIP contains traversal')
+    expect(api.installSkill).not.toHaveBeenCalled()
+  })
+  it('applies project scope and keeps the current version when updating a package', async () => {
+    const projectItem = { ...item, project: 'demo', scope: 'project', origin: { kind: 'template' } }
+    api.listSkills.mockResolvedValue({ items: [projectItem], errors: [] }); api.getSkill.mockResolvedValue(projectItem)
+    api.previewSkillImport.mockResolvedValue({ preview_id: 'p', candidates: [{ valid: true, metadata: { name: 'sample' }, files: [] }] })
+    const w = mount(SkillsPanel); await flushPromises()
+    await button(w, '用户管理').trigger('click'); await w.find('#skill-project').setValue('demo')
+    await w.find('.project-scope').trigger('submit'); await flushPromises()
+    expect(api.listSkills).toHaveBeenLastCalledWith('demo')
+    await w.find('.skill-card').trigger('click'); await flushPromises()
+    await button(w, '更新 Skill').trigger('click'); await flushPromises()
+    await button(w, '预览 Skill').trigger('click'); await flushPromises()
+    await button(w, '确认更新').trigger('click'); await flushPromises()
+    expect(api.installSkill).toHaveBeenCalledWith(expect.objectContaining({ project: 'demo', replace_id: item.id, expected_version: 1 }))
+  })
+  it('sanitizes instructions, removes frontmatter, and requires uninstall confirmation', async () => {
+    api.getSkill.mockResolvedValue({ ...item, content: '---\nname: sample\n---\n# Guide\n<img src="https://example.com/track" onerror="alert(1)"><script>alert(1)</script>' })
+    const confirm = vi.spyOn(window, 'confirm').mockReturnValue(false)
+    const w = mount(SkillsPanel); await flushPromises()
+    await w.find('.skill-card').trigger('click'); await flushPromises()
+    expect(w.find('.skill-prose h1').text()).toBe('Guide')
+    expect(w.find('.skill-prose').text()).not.toContain('name: sample')
+    expect(w.find('.skill-prose img').exists()).toBe(false)
+    expect(w.find('.skill-prose script').exists()).toBe(false)
+    await button(w, '卸载').trigger('click'); expect(api.uninstallSkill).not.toHaveBeenCalled()
+    confirm.mockReturnValue(true)
+    await button(w, '卸载').trigger('click'); await flushPromises()
+    expect(api.uninstallSkill).toHaveBeenCalledWith(item.id, 1)
+    confirm.mockRestore()
+  })
+})

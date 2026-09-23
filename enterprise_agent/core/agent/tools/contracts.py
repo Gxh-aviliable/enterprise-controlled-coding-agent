@@ -66,6 +66,8 @@ class ToolExecutionRecord:
     model_truncated: bool = False
     artifact_redacted: bool = False
     artifact_error: str | None = None
+    child_id: str | None = None
+    execution_ids: tuple[str, ...] = ()
 
     def to_dict(self) -> dict[str, Any]:
         data = asdict(self)
@@ -172,6 +174,7 @@ TOOL_CONTRACTS = {
     "idle": _contract("idle", idempotent=False, side_effect="agent_control"),
     # Skills, context and memory
     "load_skill": _contract("load_skill"),
+    "read_skill_resource": _contract("read_skill_resource"),
     "list_skills": _contract("list_skills"),
     "reload_skills": _contract("reload_skills"),
     "compress": _contract("compress", idempotent=False, side_effect="agent_state"),
@@ -209,9 +212,6 @@ REVIEW_SHELL_TOKENS = {
     "install", "uninstall", "add", "remove", "commit", "push", "pull", "checkout",
     "switch", "merge", "rebase", "reset", "clean", "mv", "cp", "mkdir", "touch",
 }
-
-SAFE_PYTHON_MODULES = {"compileall", "py_compile", "pytest", "unittest"}
-
 
 def get_tool_contract(tool_name: str) -> ToolContract:
     try:
@@ -275,7 +275,7 @@ def resolve_tool_risk(tool_name: str, tool_args: dict[str, Any]) -> RiskLevel:
 
     # Shell control operators make a command harder to reason about. Keep it in
     # review even when the first executable is read-only.
-    if any(operator in command for operator in (";", "&&", "||", "|", ">", "<")):
+    if any(operator in command for operator in ";&|<>$`\n\r(){}\\"):
         return RiskLevel.REVIEW
 
     try:
@@ -288,20 +288,32 @@ def resolve_tool_risk(tool_name: str, tool_args: dict[str, Any]) -> RiskLevel:
     binary = Path(parts[0]).name.lower()
     args = parts[1:]
     lowered_args = {part.lower() for part in args}
+    if settings.AGENT_EXECUTOR == "docker":
+        # Only simple read-only invocations can skip approval. Unknown syntax,
+        # project runners and dispatching/output-writing options require REVIEW.
+        if "/" in parts[0] and Path(parts[0]).parent not in {Path("/bin"), Path("/usr/bin")}:
+            return RiskLevel.REVIEW
+        if binary == "find" and lowered_args.intersection({
+            "-exec", "-execdir", "-ok", "-okdir", "-delete", "-fprint", "-fprint0", "-fprintf", "-fls",
+        }):
+            return RiskLevel.REVIEW
+        if binary == "rg" and any(arg.split("=", 1)[0] in {"--pre", "--hostname-bin"} for arg in args):
+            return RiskLevel.REVIEW
+        if binary in {"pwd", "ls", "dir", "echo", "cat", "head", "tail", "wc", "find", "rg"}:
+            return RiskLevel.SAFE
+        if binary in {"python", "python3", "node"} and args in (["--version"], ["-V"] if binary != "node" else ["-v"]):
+            return RiskLevel.SAFE
+        return RiskLevel.REVIEW
     if binary in {"python", "python3"}:
         if not args:
             return RiskLevel.REVIEW
         if args[0].lower() in {"--version", "-v"} and len(args) == 1:
             return RiskLevel.SAFE
-        if "-m" in args:
-            module_index = args.index("-m") + 1
-            module = args[module_index].lower() if module_index < len(args) else ""
-            if module not in SAFE_PYTHON_MODULES:
-                return RiskLevel.REVIEW
-        else:
-            # A workspace script can perform arbitrary filesystem operations;
-            # direct interpreter execution must never inherit the SAFE label.
-            return RiskLevel.REVIEW
+        # Even a familiar -m entrypoint can load a workspace-shadowed module,
+        # conftest or project hooks. It always needs a scoped approval.
+        return RiskLevel.REVIEW
+    if binary in {"pytest", "ruff", "mypy", "npm", "pnpm", "yarn", "go", "cargo", "make"}:
+        return RiskLevel.REVIEW
     if binary == "node" and lowered_args not in ({"--version"}, {"-v"}):
         return RiskLevel.REVIEW
     if binary in SAFE_SHELL_BINARIES and not lowered_args.intersection(REVIEW_SHELL_TOKENS):
@@ -337,14 +349,27 @@ def normalize_tool_result(
         except json.JSONDecodeError:
             parsed = None
 
-    if isinstance(parsed, dict) and isinstance(parsed.get("exit_code"), int):
+    child_id = None
+    if isinstance(parsed, dict) and parsed.get("kind") == "child_task_result":
+        from enterprise_agent.core.execution.children import succeeded
+        child_id = parsed.get("child_id")
+        if not succeeded(parsed):
+            error_code = str(parsed.get("error_code") or "child_failed")
+            status = ToolResultStatus.TIMEOUT if parsed.get("status") == "timed_out" else ToolResultStatus.ERROR
+    elif isinstance(parsed, dict) and isinstance(parsed.get("exit_code"), int):
         exit_code = parsed["exit_code"]
         stderr = str(parsed.get("stderr", ""))
-        if exit_code != 0:
-            if "blocked:" in stderr.lower():
+        explicit_error = parsed.get("error_code")
+        if explicit_error:
+            error_code = str(explicit_error)
+            status = (ToolResultStatus.TIMEOUT if error_code == "tool_timeout"
+                      else ToolResultStatus.BLOCKED if error_code == "policy_blocked"
+                      else ToolResultStatus.ERROR)
+        elif exit_code != 0:
+            if not parsed.get("executor") and "blocked:" in stderr.lower():
                 status = ToolResultStatus.BLOCKED
                 error_code = "policy_blocked"
-            elif "timed out" in stderr.lower() or exit_code == -1:
+            elif not parsed.get("executor") and ("timed out" in stderr.lower() or exit_code == -1):
                 status = ToolResultStatus.TIMEOUT
                 error_code = "tool_timeout"
             else:
@@ -352,7 +377,10 @@ def normalize_tool_result(
                 error_code = "nonzero_exit"
     else:
         lowered = raw_output.lstrip().lower()
-        if lowered.startswith("blocked:"):
+        if tool_name in {"task", "delegate_task"}:
+            status = ToolResultStatus.ERROR
+            error_code = "child_result_protocol_error"
+        elif lowered.startswith("blocked:"):
             status = ToolResultStatus.BLOCKED
             error_code = "policy_blocked"
         elif lowered.startswith("error:") or lowered.startswith("error executing"):
@@ -385,4 +413,5 @@ def normalize_tool_result(
         model_truncated=model_truncated,
         artifact_redacted=bool(artifact.get("redacted")) if artifact else False,
         artifact_error=artifact_error,
+        child_id=child_id,
     )

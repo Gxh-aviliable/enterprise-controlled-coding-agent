@@ -62,6 +62,12 @@
           <span>The timeline keeps model summaries and tool evidence, with secrets redacted.</span>
         </div>
         <template v-else>
+          <p v-if="selectedTrace.storage_trust === 'legacy_unverified'" class="trace-error" role="status">
+            Historical trace from a user-writable workspace. Its integrity is unverified; it cannot authorize recovery.
+          </p>
+          <p v-if="selectedTrace.events_truncated" class="trace-error" role="status">
+            Earlier events were removed by the storage limit. Aggregate counters include those events.
+          </p>
           <div class="detail-heading">
             <div>
               <div class="trace-id">TRACE / {{ selectedTrace.trace_id }}</div>
@@ -95,6 +101,8 @@
                 <div class="event-meta">
                   <span>{{ event.status }}</span>
                   <span v-if="event.duration_ms">{{ formatDuration(event.duration_ms) }}</span>
+                  <span v-if="event.data.child_id">child: {{ event.data.child_id }}</span>
+                  <span v-if="event.data.parent_tool_call_id">parent: {{ event.data.parent_tool_call_id }}</span>
                   <span v-if="event.data.phase">phase: {{ event.data.phase }}</span>
                   <span v-if="event.data.error_code">{{ event.data.error_code }}</span>
                 </div>

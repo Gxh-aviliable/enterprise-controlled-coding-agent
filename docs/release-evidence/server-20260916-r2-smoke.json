@@ -1,0 +1,76 @@
+{
+  "health": {
+    "status": "healthy",
+    "version": "0.1.0",
+    "build": {
+      "source_sha256": "17a7741ddcf204a69d91fb73f58785c356d9aa652d21135d45f2e130cf579126",
+      "qualification": "diagnostic-snapshot",
+      "git": {
+        "commit": "0648e72dad083e21a70eb8811e1e0dc890bd5714",
+        "branch": "feature/verified-agent-delivery",
+        "dirty": true
+      }
+    },
+    "name": "Enterprise Agent",
+    "checks": {
+      "mysql": "ok",
+      "redis": "ok"
+    }
+  },
+  "github_routes_removed_for_free_user": true,
+  "capabilities": {
+    "default_mode": "single_agent",
+    "available_modes": [
+      "single_agent",
+      "multi_agent"
+    ],
+    "multi_agent_enabled": true,
+    "multi_agent_permitted": true,
+    "multi_agent_reason": null
+  },
+  "github_routes_removed_for_admin": true,
+  "file_edit_and_stale_write_rejection": true,
+  "real_shell": {
+    "executor": "docker",
+    "cleanup_confirmed": true,
+    "network_enabled": true,
+    "consecutive_calls_persist": true
+  },
+  "online_package_commands": [
+    {
+      "command": "python -m pip install --no-deps cowsay==6.1",
+      "exit_code": 0,
+      "cleanup_confirmed": true
+    },
+    {
+      "command": "python installed_package.py",
+      "exit_code": 0,
+      "cleanup_confirmed": true
+    },
+    {
+      "command": "npm install --save-exact semver@7.7.2",
+      "exit_code": 0,
+      "cleanup_confirmed": true
+    },
+    {
+      "command": "node installed.js",
+      "exit_code": 0,
+      "cleanup_confirmed": true
+    }
+  ],
+  "live_model": {
+    "single_agent": {
+      "http_status": 200,
+      "response_nonempty": true,
+      "elapsed_seconds": 2.13
+    },
+    "multi_agent": {
+      "http_status": 200,
+      "response_nonempty": true,
+      "elapsed_seconds": 0.67
+    }
+  },
+  "snapshots_cleaned_after_online_commands": true,
+  "passed": true,
+  "temporary_account_removed": true
+}

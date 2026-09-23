@@ -1,0 +1,47 @@
+{
+  "release": "/home/ubuntu/mini-claude-releases/20260923-skills",
+  "previous_release": "/home/ubuntu/mini-claude-releases/20260923-tool-history",
+  "backup": "/home/ubuntu/mini-claude-backup-20260923-skills",
+  "health": {
+    "status": "healthy",
+    "version": "0.1.0",
+    "build": {
+      "source_sha256": "6a3f9d002a980e3164538f21fd5d4c732b42c72da425afe7542c1eb786009237",
+      "qualification": "diagnostic-snapshot",
+      "git": {
+        "commit": "0648e72dad083e21a70eb8811e1e0dc890bd5714",
+        "branch": "feature/enterprise-skills",
+        "dirty": true
+      }
+    },
+    "name": "Enterprise Agent",
+    "checks": {
+      "mysql": "ok",
+      "redis": "ok"
+    }
+  },
+  "data_before": {
+    "rows": {
+      "users": 5,
+      "sessions": 13,
+      "chat_messages": 62,
+      "managed_shared_skills": 0,
+      "managed_shared_skill_versions": 0
+    },
+    "workspace_files": 117,
+    "workspace_sha256": "08d9a2eea7a3d3761a5f8886fb44283a6f120869efcfb18c92700250fbdb4330"
+  },
+  "data_after": {
+    "rows": {
+      "users": 5,
+      "sessions": 13,
+      "chat_messages": 62,
+      "managed_shared_skills": 0,
+      "managed_shared_skill_versions": 0
+    },
+    "workspace_files": 117,
+    "workspace_sha256": "08d9a2eea7a3d3761a5f8886fb44283a6f120869efcfb18c92700250fbdb4330"
+  },
+  "database_revision": "20260923_0007",
+  "mysql_redis_reaper_unchanged": true
+}

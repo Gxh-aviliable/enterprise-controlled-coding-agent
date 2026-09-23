@@ -1,0 +1,22 @@
+{
+  "controller_uid": 10001,
+  "published_file_uid": 10001,
+  "daemon_path_mapping": "verified",
+  "result": {
+    "stdout": "(no output)",
+    "stderr": "",
+    "exit_code": 0,
+    "executor": "docker",
+    "execution_id": "agent-sandbox-481f944626d04487badf13556e84c1e0",
+    "trace_id": null,
+    "source_truncated": false,
+    "container_id": "a94b6fa36747cdb4da98775cbd111611096ff1e418550e71367e6cd708f3da3a",
+    "stdout_original_bytes": 0,
+    "stderr_original_bytes": 0,
+    "output_counts_scope": "complete_attached_stream",
+    "published_paths": [
+      "result.txt"
+    ],
+    "cleanup_confirmed": true
+  }
+}

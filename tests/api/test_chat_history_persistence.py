@@ -196,12 +196,14 @@ def test_timeline_without_tool_id_updates_most_recent_unresolved_same_name():
                 "toolStatus": "running",
             },
         ],
-        [{
-            "role": "tool_call",
-            "toolName": "bash",
-            "toolStatus": "done",
-            "toolResult": "ok",
-        }],
+        [
+            {
+                "role": "tool_call",
+                "toolName": "bash",
+                "toolStatus": "done",
+                "toolResult": "ok",
+            }
+        ],
     )
 
     tools = [block for block in timeline if block["role"] == "tool_call"]
@@ -212,19 +214,23 @@ def test_timeline_without_tool_id_updates_most_recent_unresolved_same_name():
 
 def test_terminal_tool_status_cannot_be_downgraded_by_duplicate_start():
     timeline = chat_history.merge_timeline(
-        [{
-            "role": "tool_call",
-            "toolCallId": "call-1",
-            "toolName": "bash",
-            "toolStatus": "done",
-            "toolResult": "complete",
-        }],
-        [{
-            "role": "tool_call",
-            "toolCallId": "call-1",
-            "toolName": "bash",
-            "toolStatus": "running",
-        }],
+        [
+            {
+                "role": "tool_call",
+                "toolCallId": "call-1",
+                "toolName": "bash",
+                "toolStatus": "done",
+                "toolResult": "complete",
+            }
+        ],
+        [
+            {
+                "role": "tool_call",
+                "toolCallId": "call-1",
+                "toolName": "bash",
+                "toolStatus": "running",
+            }
+        ],
     )
 
     assert len(timeline) == 1
@@ -234,19 +240,23 @@ def test_terminal_tool_status_cannot_be_downgraded_by_duplicate_start():
 
 def test_timeline_preserves_rejected_as_an_authoritative_terminal_status():
     timeline = chat_history.merge_timeline(
-        [{
-            "role": "tool_call",
-            "toolCallId": "call-rejected",
-            "toolName": "write_file",
-            "toolStatus": "waiting",
-        }],
-        [{
-            "role": "tool_call",
-            "toolCallId": "call-rejected",
-            "toolName": "write_file",
-            "toolStatus": "rejected",
-            "toolError": "Not approved — this tool was not run.",
-        }],
+        [
+            {
+                "role": "tool_call",
+                "toolCallId": "call-rejected",
+                "toolName": "write_file",
+                "toolStatus": "waiting",
+            }
+        ],
+        [
+            {
+                "role": "tool_call",
+                "toolCallId": "call-rejected",
+                "toolName": "write_file",
+                "toolStatus": "rejected",
+                "toolError": "Not approved — this tool was not run.",
+            }
+        ],
     )
 
     assert timeline[0]["toolStatus"] == "rejected"
@@ -287,13 +297,15 @@ async def test_update_assistant_message_builds_and_resumes_compact_timeline():
         user_id=7,
         content="",
         status="streaming",
-        timeline_entries=[{
-            "role": "tool_call",
-            "toolCallId": "call-1",
-            "toolName": "bash",
-            "toolStatus": "done",
-            "toolResult": "ok",
-        }],
+        timeline_entries=[
+            {
+                "role": "tool_call",
+                "toolCallId": "call-1",
+                "toolName": "bash",
+                "toolStatus": "done",
+                "toolResult": "ok",
+            }
+        ],
     )
     await chat_history.update_assistant_message(
         db,
@@ -436,3 +448,24 @@ def test_serialize_message_adds_timeline_only_for_new_assistant_rows():
         "content": "answer",
         "timeline": [{"role": "assistant", "content": "answer"}],
     }
+
+
+def test_child_history_preserves_parent_and_terminal_status_after_late_queue():
+    from enterprise_agent.api.routes.chat import _StreamTimelineRecorder
+
+    recorder = _StreamTimelineRecorder()
+    for event in [
+        {
+            "event": "tool_start",
+            "id": "child-a",
+            "parent_id": "delegate-a",
+            "name": "Agent · reviewer",
+            "status": "queued",
+        },
+        {"event": "tool_end", "id": "child-a", "parent_id": "delegate-a", "status": "success", "ok": True},
+        {"event": "tool_start", "id": "child-a", "parent_id": "delegate-a", "status": "queued"},
+    ]:
+        recorder.record_event(event)
+    assert len(recorder.entries) == 1
+    assert recorder.entries[0]["parentToolCallId"] == "delegate-a"
+    assert recorder.entries[0]["toolStatus"] == "done"

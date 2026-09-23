@@ -1,0 +1,38 @@
+{
+  "source_sha256": "6e791f36c9459a50e6135bed9f79a75951d646827b4d4232d1244a11c451305c",
+  "runtime_files_verified": 117,
+  "legacy_directory_absent": true,
+  "database_revision": "20260923_0008",
+  "public_skills": [
+    {
+      "name": "agent-interviewer",
+      "status": "published",
+      "version": 1,
+      "body_bytes": 2006,
+      "sha256": "8fa6905ef7393969902033ed89bddcf3c37793a07d1c2339fbb86fdc20cc9dbb"
+    },
+    {
+      "name": "fastapi",
+      "status": "published",
+      "version": 1,
+      "body_bytes": 1520,
+      "sha256": "152c59ceaddb4200838e75558ded73f9044d0f0ae081696bf3b52fecb8a24fce"
+    },
+    {
+      "name": "langgraph",
+      "status": "published",
+      "version": 1,
+      "body_bytes": 1302,
+      "sha256": "d1f9a442dd8689becdccb18fef94c309311f939cfd131800a9be6614c93375a1"
+    },
+    {
+      "name": "python",
+      "status": "published",
+      "version": 1,
+      "body_bytes": 901,
+      "sha256": "3633853ade0ec69d958809dca8672caf59ca20a21ccf2a6e09664689a917c418"
+    }
+  ],
+  "admin_detail_read_service": true,
+  "production_admin_write_tested": false
+}

@@ -1,0 +1,34 @@
+Traceback (most recent call last):
+  File "/app/enterprise_agent/skills/runtime.py", line 24, in cache_package
+    root.mkdir(parents=True, exist_ok=True, mode=0o700)
+  File "/usr/local/lib/python3.11/pathlib.py", line 1116, in mkdir
+    os.mkdir(self, mode)
+PermissionError: [Errno 13] Permission denied: '/data/shared-skills/.packages'
+
+The above exception was the direct cause of the following exception:
+
+Traceback (most recent call last):
+  File "<stdin>", line 29, in <module>
+  File "/usr/local/lib/python3.11/asyncio/runners.py", line 190, in run
+    return runner.run(main)
+           ^^^^^^^^^^^^^^^^
+  File "/usr/local/lib/python3.11/asyncio/runners.py", line 118, in run
+    return self._loop.run_until_complete(task)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/usr/local/lib/python3.11/asyncio/base_events.py", line 654, in run_until_complete
+    return future.result()
+           ^^^^^^^^^^^^^^^
+  File "<stdin>", line 16, in main
+  File "/app/enterprise_agent/skills/catalog.py", line 162, in task_snapshot
+    cache_package(evidence["package"])
+  File "/app/enterprise_agent/skills/runtime.py", line 40, in cache_package
+    raise SkillError("Skill cache unavailable; check the managed Skill persistent volume and retry") from exc
+enterprise_agent.skills.packages.SkillError: Skill cache unavailable; check the managed Skill persistent volume and retry
+Exception ignored in: <function Connection.__del__ at 0x7b5515a020c0>
+Traceback (most recent call last):
+  File "/app/.venv/lib/python3.11/site-packages/aiomysql/connection.py", line 1131, in __del__
+  File "/app/.venv/lib/python3.11/site-packages/aiomysql/connection.py", line 339, in close
+  File "/usr/local/lib/python3.11/asyncio/selector_events.py", line 864, in close
+  File "/usr/local/lib/python3.11/asyncio/base_events.py", line 762, in call_soon
+  File "/usr/local/lib/python3.11/asyncio/base_events.py", line 520, in _check_closed
+RuntimeError: Event loop is closed

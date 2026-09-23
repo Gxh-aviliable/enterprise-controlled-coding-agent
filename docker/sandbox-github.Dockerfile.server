@@ -1,0 +1,10 @@
+# Ordinary execution image: Git is installed, credentials/network are not granted.
+FROM python:3.12.13-slim-bookworm
+RUN sed -i 's|http://deb.debian.org/debian-security|https://mirrors.tuna.tsinghua.edu.cn/debian-security|g;s|http://deb.debian.org/debian|https://mirrors.tuna.tsinghua.edu.cn/debian|g' /etc/apt/sources.list.d/debian.sources \
+    && apt-get update && apt-get install -y --no-install-recommends git ca-certificates \
+    && rm -rf /var/lib/apt/lists/*
+RUN pip install --no-cache-dir --timeout 120 -i https://pypi.tuna.tsinghua.edu.cn/simple pytest==8.4.2 \
+    && useradd --uid 10001 --create-home sandbox
+USER 10001:10001
+WORKDIR /workspace
+ENTRYPOINT ["/usr/bin/timeout"]

@@ -1,0 +1,105 @@
+{
+  "approval_layout": [
+    {
+      "viewport": {
+        "width": 1280,
+        "height": 720
+      },
+      "card_in_view": true,
+      "scrollable": true,
+      "scrolled": true,
+      "footer_fixed": true,
+      "buttons": [
+        {
+          "text": "Terminate task",
+          "visible": true,
+          "hit": true
+        },
+        {
+          "text": "Reject Listed",
+          "visible": true,
+          "hit": true
+        },
+        {
+          "text": "Approve Listed Calls",
+          "visible": true,
+          "hit": true
+        },
+        {
+          "text": "Approve Selected",
+          "visible": true,
+          "hit": true
+        }
+      ]
+    },
+    {
+      "viewport": {
+        "width": 390,
+        "height": 620
+      },
+      "card_in_view": true,
+      "scrollable": true,
+      "scrolled": true,
+      "footer_fixed": true,
+      "buttons": [
+        {
+          "text": "Terminate task",
+          "visible": true,
+          "hit": true
+        },
+        {
+          "text": "Reject Listed",
+          "visible": true,
+          "hit": true
+        },
+        {
+          "text": "Approve Listed Calls",
+          "visible": true,
+          "hit": true
+        },
+        {
+          "text": "Approve Selected",
+          "visible": true,
+          "hit": true
+        }
+      ]
+    },
+    {
+      "viewport": {
+        "width": 740,
+        "height": 360
+      },
+      "card_in_view": true,
+      "scrollable": true,
+      "scrolled": true,
+      "footer_fixed": true,
+      "buttons": [
+        {
+          "text": "Terminate task",
+          "visible": true,
+          "hit": true
+        },
+        {
+          "text": "Reject Listed",
+          "visible": true,
+          "hit": true
+        },
+        {
+          "text": "Approve Listed Calls",
+          "visible": true,
+          "hit": true
+        },
+        {
+          "text": "Approve Selected",
+          "visible": true,
+          "hit": true
+        }
+      ]
+    }
+  ],
+  "upload_destinations": [
+    "GXH"
+  ],
+  "page_errors": [],
+  "backend": "mocked API; real Chrome rendering"
+}

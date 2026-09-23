@@ -99,3 +99,16 @@ describe('API client canonical chat stream', () => {
     expect(onError).toHaveBeenCalledWith(expect.stringContaining('transport closed'))
   })
 })
+
+it('deduplicates durable sequence IDs and accepts scoped terminal events', async () => {
+  vi.stubGlobal('fetch', vi.fn().mockResolvedValue(sseResponse([
+    { trace_id: 'cursor-fixture', seq: 1, delta: 'one' },
+    { trace_id: 'cursor-fixture', seq: 1, delta: 'one' },
+    { trace_id: 'cursor-fixture', seq: 2, event: 'done' }
+  ])))
+  const onDelta = vi.fn(), onDone = vi.fn()
+  await streamMessage({ session_id: 'cursor-session', content: 'read', onDelta, onDone })
+  expect(onDelta).toHaveBeenCalledTimes(1)
+  expect(onDone).toHaveBeenCalledTimes(1)
+  vi.unstubAllGlobals()
+})

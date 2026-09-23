@@ -73,7 +73,7 @@ pyproject.toml
   → api/routes/chat.py:chat_stream
   → api/routes/chat.py:_task_input
   → core/agent/graph.py:build_agent_graph
-  → task_parse / init_context / plan_task
+  → task_parse / init_context / pre_microcompact
   → llm_call
   → route_after_llm
   → prepare_tool_execution / tool_confirm
@@ -521,7 +521,6 @@ def add_node(name, node):
 
 add_node("task_parse", task_parse_node)
 add_node("init_context", init_context_node)
-add_node("plan_task", plan_task_node)
 add_node("pre_microcompact", pre_llm_microcompact_node)
 add_node("llm_call", llm_call_node)
 add_node("prepare_tool_execution", prepare_tool_execution_node)
@@ -541,8 +540,7 @@ graph.set_entry_point("task_parse")
 graph.add_edge("task_parse", "init_context")
 graph.add_edge("init_context", "check_background")
 graph.add_edge("check_background", "check_inbox")
-graph.add_edge("check_inbox", "plan_task")
-graph.add_edge("plan_task", "pre_microcompact")
+graph.add_edge("check_inbox", "pre_microcompact")
 graph.add_conditional_edges(
     "pre_microcompact",
     route_after_microcompact,
@@ -630,7 +628,6 @@ flowchart LR
 
 - `enterprise_agent/core/agent/nodes.py:task_parse_node`
 - `enterprise_agent/core/agent/nodes.py:init_context_node`
-- `enterprise_agent/core/agent/nodes.py:plan_task_node`
 
 ### 关键代码块一：解析任务
 
@@ -700,14 +697,18 @@ if settings.ENABLE_LONG_TERM_MEMORY and user_id and current_request:
 - 把通过的内容写进 `retrieved_memory_context`；
 - 召回失败时只记 Trace，不让主任务失败。
 
-### `plan_task_node` 容易被误解
+### planning 阶段如何标记
 
 ```python
-async def plan_task_node(state):
-    return {"execution_phase": ExecutionPhase.PLANNING.value}
+async def pre_llm_microcompact_node(state):
+    # 在整理好下一轮模型上下文后标记 planning
+    return {
+        "token_count": next_context_estimate,
+        "execution_phase": ExecutionPhase.PLANNING.value,
+    }
 ```
 
-它只是显式标记 planning 阶段。这里没有独立 Planner 模型，真正的计划仍由后面的主模型决定，并可通过 `todo_update` 持久化为工作清单。
+planning 只是下一轮模型决策前的执行阶段，不需要一个空的独立节点。这里没有独立 Planner 模型，真正的任务分析和工具计划由后面的首轮 `llm_call` 完成，并可通过 `todo_update` 持久化为工作清单。
 
 ---
 
@@ -1754,7 +1755,6 @@ enterprise-controlled-coding-agent/
 ├── benchmarks/                 # Platform / Memory / Agent 评测
 ├── migrations/                 # Alembic 迁移
 ├── docker/                     # Compose、API 与网关镜像
-├── shared_skills/              # 内置共享 Skill
 └── docs/                       # 当前文档和历史开发日志
 ```
 
@@ -2306,7 +2306,6 @@ flowchart TD
     IC["init_context"]
     BG["check_background"]
     IN["check_inbox"]
-    PL["plan_task"]
     MC["pre_microcompact"]
     LLM["llm_call"]
     PREP["prepare_tool_execution"]
@@ -2321,14 +2320,14 @@ flowchart TD
     PERSIST["persist_memory"]
     ENDNODE(["END"])
 
-    TP --> IC --> BG --> IN --> PL --> MC --> LLM
+    TP --> IC --> BG --> IN --> MC --> LLM
     LLM -->|"有工具调用"| PREP --> HITL --> TOOL --> CP --> SAVE
     LLM -->|"纯文本"| SAVE
     LLM -->|"超过上下文阈值"| COMP
     SAVE -->|"继续循环"| MC
     SAVE -->|"代码未验证"| VERIFY --> MC
     SAVE -->|"自动压缩"| COMP
-    SAVE -->|"手动压缩"| MCOMP --> FINAL
+    SAVE -->|"手动压缩"| MCOMP --> LLM
     SAVE -->|"结束"| FINAL --> PERSIST --> ENDNODE
     COMP --> LLM
 ```
@@ -2343,8 +2342,7 @@ flowchart TD
 | `init_context` | 历史消息、用户、旧 state | 重置本任务瞬态字段、恢复 Todo、召回长期记忆 | token、工具/预算初值、memory context |
 | `check_background` | session | 取走完成的后台结果 | 注入控制消息或空更新 |
 | `check_inbox` | lead inbox | 取走 teammate 消息 | 注入 inbox 控制消息 |
-| `plan_task` | 当前 state | 标记 planning 阶段 | phase=planning |
-| `pre_microcompact` | messages | 清理旧工具大结果 | 压缩后的 messages/token |
+| `pre_microcompact` | messages | 清理旧工具大结果并标记 planning 阶段 | 压缩后的 messages/token |
 | `llm_call` | messages、权限、memory、预算 | 绑定工具并调用模型 | 文本或 pending tool calls |
 | `prepare_tool_execution` | pending calls | 预计算确认需求和 deadline | running/waiting_confirmation |
 | `tool_confirm` | pending calls、resume data | interrupt 或筛选批准工具 | 可执行/拒绝后的 calls/results |
@@ -2398,21 +2396,20 @@ flowchart TD
 
 召回块不会写入 messages，因此不会被 Redis 永久反复 replay。
 
-### 16.3 `plan_task_node`
+### 16.3 planning 阶段与首轮 `llm_call`
 
-它的名字容易造成误解。
-
-当前实现只做：
+当前不再保留只修改 phase 的空 `plan_task` 节点。`pre_llm_microcompact`
+在准备好下一轮上下文时设置：
 
 ```python
 {"execution_phase": "planning"}
 ```
 
-它不是一个独立 Planner LLM，也不在这里生成详细计划。真正的任务分析和 Todo 规划发生在后续主模型调用中。
+真正的任务分析和 Todo 规划发生在后续主模型调用中。
 
 面试时应诚实表达：
 
-> 项目有显式 planning 阶段和可观察状态，但没有为了形式再调用一个独立 Planner 模型。
+> 项目有可观察的 planning 阶段，但不为了形式增加空节点或额外 Planner 模型调用。
 
 ### 16.4 `check_background_node` 与 `check_inbox_node`
 
@@ -2609,7 +2606,7 @@ return "pre_microcompact"  # 先做 artifact-backed 清理，再判断是否完�
 
 ### 17.4 学完后你应该能回答
 
-- 为什么 `plan_task_node` 不等于一个 Planner Agent？
+- 为什么 planning 阶段不需要一个空节点或额外 Planner Agent？
 - `save_memory` 为什么不代表已经写入 Chroma？
 - `checkpoint_task_node` 本身没写 Redis，checkpoint 从哪里来？
 - 为什么 route 函数不能修改 state？
@@ -3200,8 +3197,8 @@ Stop 只保证不再启动后续 Agent 工作，不承诺回滚已经完成的�
 workspace 真实状态以及 receipt 自主重新规划。
 
 Redis checkpoint 已经过期时，API 从 MySQL 恢复模型上下文，避免 UI 看得到
-历史，Agent 却只看到一句“继续”。`plan_task_node` 只标记 planning phase，它不是
-一个真实规划器；真正的新计划发生在新 Trace 的 LLM 调用中。
+历史，Agent 却只看到一句“继续”。新 Trace 会在 `pre_microcompact` 后由首轮
+`llm_call` 根据当前对话、workspace 和 receipt 真正重新规划。
 
 ### 34.4 旧 paused 数据如何迁移
 
@@ -3911,7 +3908,7 @@ uv run python scripts/smoke_test.py
 
 - 文本响应和工具调用分别走哪条边？
 - checkpoint_task 与 RedisSaver 的关系是什么？
-- plan_task 是否调用独立模型？
+- planning 阶段由谁标记，真正规划发生在哪里？
 
 练习：
 
@@ -4073,7 +4070,7 @@ uv run python -m benchmarks.run --backend platform --mode single --no-artifacts
 
 ## C. 最容易讲错的十件事
 
-1. 不要说 `plan_task_node` 是独立 Planner Agent。
+1. 不要说项目有独立 `plan_task` 或 Planner Agent；规划发生在首轮 `llm_call`。
 2. 不要说 `checkpoint_task_node` 自己把数据写进 Redis。
 3. 不要说 `save_memory_node` 已经把内容写入 Chroma。
 4. 不要说 SSE `[DONE]` 自动证明任务 succeeded。

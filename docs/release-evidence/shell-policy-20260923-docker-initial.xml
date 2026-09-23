@@ -1,0 +1,49 @@
+<?xml version="1.0" encoding="utf-8"?><testsuites name="pytest tests"><testsuite name="pytest" errors="1" failures="1" skipped="0" tests="23" time="26.946" timestamp="2026-09-23T13:59:29.868971+08:00" hostname="GXHdeMacBook-Air.local"><testcase classname="tests.sandbox.test_docker" name="test_demo_file_tools_modify_test_result" time="1.160" /><testcase classname="tests.sandbox.test_docker" name="test_validation_receipts_bind_real_container_input" time="1.888" /><testcase classname="tests.sandbox.test_docker" name="test_secrets_other_users_host_socket_network_and_readonly" time="0.198" /><testcase classname="tests.sandbox.test_docker" name="test_limits_timeout_output_and_oom" time="1.397" /><testcase classname="tests.sandbox.test_docker" name="test_foreground_cancel_descendants_and_parallel_independence" time="0.262" /><testcase classname="tests.sandbox.test_docker" name="test_background_cancel_and_normal_completion" time="0.299" /><testcase classname="tests.sandbox.test_docker" name="test_unavailable_never_runs_on_host" time="0.020" /><testcase classname="tests.sandbox.test_docker" name="test_reaper_recovers_expired_container_only" time="0.289" /><testcase classname="tests.sandbox.test_docker" name="test_pid_limit_tmpfs_and_large_output" time="0.479" /><testcase classname="tests.sandbox.test_docker" name="test_python_file_writer_conflicts_with_running_shell" time="1.219" /><testcase classname="tests.sandbox.test_docker" name="test_container_link_is_never_published_and_cancel_drops_mutations" time="0.875" /><testcase classname="tests.sandbox.test_docker" name="test_default_configuration_is_docker_and_unauthorized_workspace_rejected" time="0.021" /><testcase classname="tests.sandbox.test_docker" name="test_async_cancellation_reaches_real_sync_executor_and_trace" time="0.230" /><testcase classname="tests.sandbox.test_docker" name="test_independent_reaper_service_recovers_orphan" time="0.568" /><testcase classname="tests.sandbox.test_docker" name="test_early_exit_137_is_not_misreported_as_timeout" time="0.201" /><testcase classname="tests.sandbox.test_docker" name="test_real_shell_diff_and_safe_restore" time="0.183" /><testcase classname="tests.sandbox.test_docker" name="test_runtime_preflight_detects_missing_node_without_executing_project" time="0.196" /><testcase classname="tests.sandbox.test_docker" name="test_runtime_preflight_mixed_image_has_python_and_node" time="0.701" /><testcase classname="tests.sandbox.test_docker" name="test_online_pip_npm_install_persist_between_containers" time="6.342" /><testcase classname="tests.sandbox.test_docker" name="test_new_shell_syntax_through_real_tools[False]" time="3.993" /><testcase classname="tests.sandbox.test_docker" name="test_new_shell_syntax_through_real_tools[True]" time="4.708"><error message="failed on teardown with &quot;AssertionError: Execution snapshots were not cleaned up&#10;assert not [PosixPath('/private/var/folders/c9/bkb9zzzn5pn251gl0w1bpmqc0000gn/T/pytest-of-gxh/pytest-244/test_new_shell_syntax_through_1/stage/agent-sandbox-d792f1d02db74683a33b8876fca48aec')]&#10; +  where [PosixPath('/private/var/folders/c9/bkb9zzzn5pn251gl0w1bpmqc0000gn/T/pytest-of-gxh/pytest-244/test_new_shell_syntax_through_1/stage/agent-sandbox-d792f1d02db74683a33b8876fca48aec')] = list(&lt;generator object Path.glob at 0x10cb57010&gt;)&#10; +    where &lt;generator object Path.glob at 0x10cb57010&gt; = glob('agent-sandbox-*')&#10; +      where glob = (PosixPath('/private/var/folders/c9/bkb9zzzn5pn251gl0w1bpmqc0000gn/T/pytest-of-gxh/pytest-244/test_new_shell_syntax_through_1') / 'stage').glob&quot;">tmp_path = PosixPath('/private/var/folders/c9/bkb9zzzn5pn251gl0w1bpmqc0000gn/T/pytest-of-gxh/pytest-244/test_new_shell_syntax_through_1')
+monkeypatch = &lt;_pytest.monkeypatch.MonkeyPatch object at 0x11e073500&gt;
+
+    @pytest.fixture
+    def sandbox(tmp_path, monkeypatch):
+        if os.getenv("RUN_DOCKER_SANDBOX_TESTS") != "1":
+            pytest.skip("Explicit real Docker opt-in required")
+        monkeypatch.setattr(settings, "AGENT_EXECUTOR", "docker")
+        monkeypatch.setattr(settings, "SANDBOX_NETWORK_ENABLED", False)
+        monkeypatch.setattr(settings, "SANDBOX_UID", os.getuid())
+        monkeypatch.setattr(settings, "SANDBOX_GID", os.getgid())
+        monkeypatch.setattr(settings, "SANDBOX_STAGING_BASE", str(tmp_path / "stage"))
+        monkeypatch.setattr(settings, "SANDBOX_HOST_STAGING_BASE", str(tmp_path / "stage"))
+        monkeypatch.setattr(settings, "SANDBOX_DEPLOYMENT", "test-" + tmp_path.name[:35])
+        monkeypatch.setenv("WORKSPACE_BASE", str(tmp_path / "workspaces"))
+        set_current_user_id(901)
+        workspace = get_user_workspace()
+        executor = DockerExecutor()
+        # Fail, not skip, if opt-in is set but daemon/image unavailable.
+        executor.engine.request("GET", "/images/" + settings.SANDBOX_IMAGE + "/json")
+        yield executor, workspace
+        for container in executor.engine.containers(settings.SANDBOX_DEPLOYMENT):
+            executor.engine.remove(container["Id"])
+&gt;       assert not list((tmp_path / "stage").glob("agent-sandbox-*")), "Execution snapshots were not cleaned up"
+E       AssertionError: Execution snapshots were not cleaned up
+E       assert not [PosixPath('/private/var/folders/c9/bkb9zzzn5pn251gl0w1bpmqc0000gn/T/pytest-of-gxh/pytest-244/test_new_shell_syntax_through_1/stage/agent-sandbox-d792f1d02db74683a33b8876fca48aec')]
+E        +  where [PosixPath('/private/var/folders/c9/bkb9zzzn5pn251gl0w1bpmqc0000gn/T/pytest-of-gxh/pytest-244/test_new_shell_syntax_through_1/stage/agent-sandbox-d792f1d02db74683a33b8876fca48aec')] = list(&lt;generator object Path.glob at 0x10cb57010&gt;)
+E        +    where &lt;generator object Path.glob at 0x10cb57010&gt; = glob('agent-sandbox-*')
+E        +      where glob = (PosixPath('/private/var/folders/c9/bkb9zzzn5pn251gl0w1bpmqc0000gn/T/pytest-of-gxh/pytest-244/test_new_shell_syntax_through_1') / 'stage').glob
+
+tests/sandbox/test_docker.py:45: AssertionError</error></testcase><testcase classname="tests.sandbox.test_docker" name="test_curl_network_and_missing_binary_are_runtime_results" time="0.224"><failure message="KeyError: 'IPAddress'">sandbox = (&lt;enterprise_agent.sandbox.executor.DockerExecutor object at 0x11e0719a0&gt;, PosixPath('/private/var/folders/c9/bkb9zzzn5pn251gl0w1bpmqc0000gn/T/pytest-of-gxh/pytest-244/test_curl_network_and_missing_0/workspaces/user_901'))
+monkeypatch = &lt;_pytest.monkeypatch.MonkeyPatch object at 0x11e072e40&gt;
+
+    def test_curl_network_and_missing_binary_are_runtime_results(sandbox, monkeypatch):
+        """Use an isolated, labelled HTTP endpoint; never send workspace data."""
+        executor, workspace = sandbox
+        server = "shell-policy-http-" + settings.SANDBOX_DEPLOYMENT
+        spec = executor.spec(ExecutionRequest("unused", workspace, 901), workspace, server, 60)
+        spec.update(Entrypoint=["python"], Cmd=["-m", "http.server", "8080", "--bind", "0.0.0.0"],
+                    WorkingDir="/tmp", NetworkDisabled=False)
+        spec["HostConfig"].update(NetworkMode="bridge", Mounts=[])
+        try:
+            executor.engine.request("POST", f"/containers/create?name={server}", spec)
+            executor.engine.request("POST", f"/containers/{server}/start")
+&gt;           ip = executor.engine.request("GET", f"/containers/{server}/json")["NetworkSettings"]["IPAddress"]
+                 ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+E           KeyError: 'IPAddress'
+
+tests/sandbox/test_docker.py:650: KeyError</failure></testcase></testsuite></testsuites>

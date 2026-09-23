@@ -812,6 +812,7 @@ class TeammateManager:
         self.bus = AsyncMessageBus(self.team_dir)
         self.config = TeammateConfig(self.team_dir)
         self.runners: Dict[str, TeammateRunner] = {}
+        self.spawn_lock = asyncio.Lock()
 
     async def spawn(self, name: str, role: str, prompt: str) -> str:
         """Spawn a teammate agent.
@@ -825,12 +826,15 @@ class TeammateManager:
             Spawn confirmation
         """
         name = _validate_agent_name(name)
-        # Create runner
-        runner = TeammateRunner(name, role, self.bus, self.config)
-        self.runners[name] = runner
-
-        # Start
-        return await runner.start(prompt)
+        async with self.spawn_lock:
+            current = self.runners.get(name)
+            if current and current.task and not current.task.done():
+                return f"Error: '{name}' is already running"
+            runner = TeammateRunner(name, role, self.bus, self.config)
+            result = await runner.start(prompt)
+            if runner.task is not None:
+                self.runners[name] = runner
+            return result
 
     async def shutdown(self, name: str) -> str:
         """Shutdown a teammate.
@@ -945,30 +949,45 @@ _teammate_managers: Dict[int, TeammateManager] = {}
 _plan_managers: Dict[int, PlanApprovalManager] = {}
 
 
+def _legacy_team_workspace():
+    import hashlib
+
+    from enterprise_agent.core.agent.tools.workspace import get_current_session_id
+    from enterprise_agent.core.execution.interrupt_control import get_current_task_control_identity
+    key = repr((get_current_session_id(), get_current_task_control_identity()))
+    return get_user_workspace() / ".agent_internal" / "legacy-teams" / hashlib.sha256(key.encode()).hexdigest()
+
+
 def get_message_bus() -> AsyncMessageBus:
     """Get or create AsyncMessageBus instance for current user."""
-    from enterprise_agent.core.agent.tools.workspace import get_current_user_id
-    user_id = get_current_user_id()
+    from enterprise_agent.core.agent.tools.workspace import get_current_session_id, get_current_user_id
+    from enterprise_agent.core.execution.interrupt_control import get_current_task_control_identity
+    identity = get_current_task_control_identity()
+    user_id = (get_current_user_id(), get_current_session_id(), identity[2] if identity else "offline")
 
     if user_id not in _message_buses:
-        _message_buses[user_id] = AsyncMessageBus(get_user_workspace() / TEAM_DIR_NAME)
+        _message_buses[user_id] = AsyncMessageBus(_legacy_team_workspace() / TEAM_DIR_NAME)
     return _message_buses[user_id]
 
 
 def get_teammate_manager() -> TeammateManager:
     """Get or create TeammateManager instance for current user."""
-    from enterprise_agent.core.agent.tools.workspace import get_current_user_id
-    user_id = get_current_user_id()
+    from enterprise_agent.core.agent.tools.workspace import get_current_session_id, get_current_user_id
+    from enterprise_agent.core.execution.interrupt_control import get_current_task_control_identity
+    identity = get_current_task_control_identity()
+    user_id = (get_current_user_id(), get_current_session_id(), identity[2] if identity else "offline")
 
     if user_id not in _teammate_managers:
-        _teammate_managers[user_id] = TeammateManager()
+        _teammate_managers[user_id] = TeammateManager(_legacy_team_workspace())
     return _teammate_managers[user_id]
 
 
 def get_plan_manager() -> PlanApprovalManager:
     """Get or create PlanApprovalManager instance for current user."""
-    from enterprise_agent.core.agent.tools.workspace import get_current_user_id
-    user_id = get_current_user_id()
+    from enterprise_agent.core.agent.tools.workspace import get_current_session_id, get_current_user_id
+    from enterprise_agent.core.execution.interrupt_control import get_current_task_control_identity
+    identity = get_current_task_control_identity()
+    user_id = (get_current_user_id(), get_current_session_id(), identity[2] if identity else "offline")
 
     if user_id not in _plan_managers:
         _plan_managers[user_id] = PlanApprovalManager(get_message_bus())

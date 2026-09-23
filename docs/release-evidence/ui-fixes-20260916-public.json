@@ -1,0 +1,13 @@
+{
+  "nested_upload": {
+    "path": "GXH/nested/upload-probe.txt",
+    "http_status": 200,
+    "read_back_matches": true
+  },
+  "page_errors": [],
+  "root_reset": true,
+  "frontend_version": {
+    "build_id": "2026-09-15T22:23:25.627Z"
+  },
+  "temporary_account_and_workspace_removed": true
+}

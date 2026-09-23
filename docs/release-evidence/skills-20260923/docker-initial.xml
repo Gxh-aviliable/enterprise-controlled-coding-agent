@@ -1,0 +1,87 @@
+<?xml version="1.0" encoding="utf-8"?><testsuites name="pytest tests"><testsuite name="pytest" errors="1" failures="1" skipped="1" tests="21" time="31.631" timestamp="2026-09-23T02:46:39.748401+08:00" hostname="GXHdeMacBook-Air.local"><testcase classname="tests.sandbox.test_docker" name="test_demo_file_tools_modify_test_result" time="2.519" /><testcase classname="tests.sandbox.test_docker" name="test_validation_receipts_bind_real_container_input" time="2.403" /><testcase classname="tests.sandbox.test_docker" name="test_secrets_other_users_host_socket_network_and_readonly" time="0.250" /><testcase classname="tests.sandbox.test_docker" name="test_limits_timeout_output_and_oom" time="3.626" /><testcase classname="tests.sandbox.test_docker" name="test_foreground_cancel_descendants_and_parallel_independence" time="0.304" /><testcase classname="tests.sandbox.test_docker" name="test_background_cancel_and_normal_completion" time="0.302"><error message="failed on teardown with &quot;AssertionError: Execution snapshots were not cleaned up&#10;assert not [PosixPath('/private/var/folders/c9/bkb9zzzn5pn251gl0w1bpmqc0000gn/T/pytest-of-gxh/pytest-211/test_background_cancel_and_nor0/stage/agent-sandbox-c38948d0e8f545e3b5f9d594a7781d63')]&#10; +  where [PosixPath('/private/var/folders/c9/bkb9zzzn5pn251gl0w1bpmqc0000gn/T/pytest-of-gxh/pytest-211/test_background_cancel_and_nor0/stage/agent-sandbox-c38948d0e8f545e3b5f9d594a7781d63')] = list(&lt;generator object Path.glob at 0x10a996ac0&gt;)&#10; +    where &lt;generator object Path.glob at 0x10a996ac0&gt; = glob('agent-sandbox-*')&#10; +      where glob = (PosixPath('/private/var/folders/c9/bkb9zzzn5pn251gl0w1bpmqc0000gn/T/pytest-of-gxh/pytest-211/test_background_cancel_and_nor0') / 'stage').glob&quot;">tmp_path = PosixPath('/private/var/folders/c9/bkb9zzzn5pn251gl0w1bpmqc0000gn/T/pytest-of-gxh/pytest-211/test_background_cancel_and_nor0')
+monkeypatch = &lt;_pytest.monkeypatch.MonkeyPatch object at 0x11c1d0b30&gt;
+
+    @pytest.fixture
+    def sandbox(tmp_path, monkeypatch):
+        if os.getenv("RUN_DOCKER_SANDBOX_TESTS") != "1":
+            pytest.skip("Explicit real Docker opt-in required")
+        monkeypatch.setattr(settings, "AGENT_EXECUTOR", "docker")
+        monkeypatch.setattr(settings, "SANDBOX_NETWORK_ENABLED", False)
+        monkeypatch.setattr(settings, "SANDBOX_UID", os.getuid())
+        monkeypatch.setattr(settings, "SANDBOX_GID", os.getgid())
+        monkeypatch.setattr(settings, "SANDBOX_STAGING_BASE", str(tmp_path / "stage"))
+        monkeypatch.setattr(settings, "SANDBOX_HOST_STAGING_BASE", str(tmp_path / "stage"))
+        monkeypatch.setattr(settings, "SANDBOX_DEPLOYMENT", "test-" + tmp_path.name[:35])
+        monkeypatch.setenv("WORKSPACE_BASE", str(tmp_path / "workspaces"))
+        set_current_user_id(901)
+        workspace = get_user_workspace()
+        executor = DockerExecutor()
+        # Fail, not skip, if opt-in is set but daemon/image unavailable.
+        executor.engine.request("GET", "/images/" + settings.SANDBOX_IMAGE + "/json")
+        yield executor, workspace
+        for container in executor.engine.containers(settings.SANDBOX_DEPLOYMENT):
+            executor.engine.remove(container["Id"])
+&gt;       assert not list((tmp_path / "stage").glob("agent-sandbox-*")), "Execution snapshots were not cleaned up"
+E       AssertionError: Execution snapshots were not cleaned up
+E       assert not [PosixPath('/private/var/folders/c9/bkb9zzzn5pn251gl0w1bpmqc0000gn/T/pytest-of-gxh/pytest-211/test_background_cancel_and_nor0/stage/agent-sandbox-c38948d0e8f545e3b5f9d594a7781d63')]
+E        +  where [PosixPath('/private/var/folders/c9/bkb9zzzn5pn251gl0w1bpmqc0000gn/T/pytest-of-gxh/pytest-211/test_background_cancel_and_nor0/stage/agent-sandbox-c38948d0e8f545e3b5f9d594a7781d63')] = list(&lt;generator object Path.glob at 0x10a996ac0&gt;)
+E        +    where &lt;generator object Path.glob at 0x10a996ac0&gt; = glob('agent-sandbox-*')
+E        +      where glob = (PosixPath('/private/var/folders/c9/bkb9zzzn5pn251gl0w1bpmqc0000gn/T/pytest-of-gxh/pytest-211/test_background_cancel_and_nor0') / 'stage').glob
+
+tests/sandbox/test_docker.py:45: AssertionError</error></testcase><testcase classname="tests.sandbox.test_docker" name="test_unavailable_never_runs_on_host" time="0.032" /><testcase classname="tests.sandbox.test_docker" name="test_reaper_recovers_expired_container_only" time="0.315" /><testcase classname="tests.sandbox.test_docker" name="test_pid_limit_tmpfs_and_large_output" time="0.510" /><testcase classname="tests.sandbox.test_docker" name="test_python_file_writer_conflicts_with_running_shell" time="1.223" /><testcase classname="tests.sandbox.test_docker" name="test_container_link_is_never_published_and_cancel_drops_mutations" time="0.811" /><testcase classname="tests.sandbox.test_docker" name="test_default_configuration_is_docker_and_unauthorized_workspace_rejected" time="0.030" /><testcase classname="tests.sandbox.test_docker" name="test_async_cancellation_reaches_real_sync_executor_and_trace" time="0.225" /><testcase classname="tests.sandbox.test_docker" name="test_independent_reaper_service_recovers_orphan" time="15.505"><failure message="AssertionError: Independent reaper did not collect orphan&#10;assert 1174729.484965583 &lt; 1174729.452375416&#10; +  where 1174729.484965583 = &lt;built-in function monotonic&gt;()&#10; +    where &lt;built-in function monotonic&gt; = time.monotonic">sandbox = (&lt;enterprise_agent.sandbox.executor.DockerExecutor object at 0x11c1d2150&gt;, PosixPath('/private/var/folders/c9/bkb9zzzn5pn251gl0w1bpmqc0000gn/T/pytest-of-gxh/pytest-211/test_independent_reaper_servic0/workspaces/user_901'))
+
+    def test_independent_reaper_service_recovers_orphan(sandbox):
+        """No live API worker is required to collect an orphaned container."""
+        executor, workspace = sandbox
+        orphan_name = "orphan-" + settings.SANDBOX_DEPLOYMENT
+        reaper_name = "reaper-" + settings.SANDBOX_DEPLOYMENT
+        foreign_name = "foreign-" + settings.SANDBOX_DEPLOYMENT
+        stage = workspace.parent / "orphan-stage"
+        stage.mkdir()
+        try:
+            for name, deployment in [(orphan_name, settings.SANDBOX_DEPLOYMENT), (foreign_name, "foreign-deployment")]:
+                spec = executor.spec(ExecutionRequest("sleep 60", workspace, 901), stage, name, 60)
+                spec["Labels"]["enterprise.deadline"] = str(time.time() - 1)
+                spec["Labels"]["enterprise.sandbox"] = deployment
+                executor.engine.request("POST", f"/containers/create?name={name}", spec)
+                executor.engine.request("POST", f"/containers/{name}/start")
+            executor.engine.request(
+                "POST",
+                f"/containers/create?name={reaper_name}",
+                {
+                    "Image": os.environ.get("SANDBOX_REAPER_TEST_IMAGE", "enterprise-agent-sandbox-reaper:1"),
+                    "User": "10001:10001",
+                    "Env": [f"SANDBOX_DEPLOYMENT={settings.SANDBOX_DEPLOYMENT}"],
+                    "HostConfig": {
+                        "NetworkMode": "none",
+                        "ReadonlyRootfs": True,
+                        "CapDrop": ["ALL"],
+                        "SecurityOpt": ["no-new-privileges:true"],
+                        "GroupAdd": list(
+                            {
+                                str(os.getgid()),
+                                os.getenv("SANDBOX_REAPER_SOCKET_GID", str(os.stat(settings.SANDBOX_DOCKER_SOCKET).st_gid)),
+                            }
+                        ),
+                        "Memory": 64 * 1024 * 1024,
+                        "PidsLimit": 32,
+                        "Mounts": [
+                            {
+                                "Type": "bind",
+                                "Source": os.getenv("SANDBOX_REAPER_HOST_SOCKET", settings.SANDBOX_DOCKER_SOCKET),
+                                "Target": "/var/run/docker.sock",
+                            }
+                        ],
+                    },
+                },
+            )
+            executor.engine.request("POST", f"/containers/{reaper_name}/start")
+            deadline = time.monotonic() + 15
+            while executor.engine.request("GET", f"/containers/{orphan_name}/json", missing_ok=True):
+&gt;               assert time.monotonic() &lt; deadline, "Independent reaper did not collect orphan"
+E               AssertionError: Independent reaper did not collect orphan
+E               assert 1174729.484965583 &lt; 1174729.452375416
+E                +  where 1174729.484965583 = &lt;built-in function monotonic&gt;()
+E                +    where &lt;built-in function monotonic&gt; = time.monotonic
+
+tests/sandbox/test_docker.py:445: AssertionError</failure></testcase><testcase classname="tests.sandbox.test_docker" name="test_early_exit_137_is_not_misreported_as_timeout" time="0.248" /><testcase classname="tests.sandbox.test_docker" name="test_real_shell_diff_and_safe_restore" time="0.204" /><testcase classname="tests.sandbox.test_docker" name="test_runtime_preflight_detects_missing_node_without_executing_project" time="0.225" /><testcase classname="tests.sandbox.test_docker" name="test_runtime_preflight_mixed_image_has_python_and_node" time="0.934" /><testcase classname="tests.sandbox.test_docker" name="test_online_pip_npm_install_persist_between_containers" time="0.025"><skipped type="pytest.skip" message="Explicit PyPI/npm network opt-in required">/Users/gxh/学生时代/my_mini_claude_code/tests/sandbox/test_docker.py:512: Explicit PyPI/npm network opt-in required</skipped></testcase><testcase classname="tests.skills.test_docker_resources" name="test_skill_resources_run_in_real_sandbox" time="0.392" /></testsuite></testsuites>

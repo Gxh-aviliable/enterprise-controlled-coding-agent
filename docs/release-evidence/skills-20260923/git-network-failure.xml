@@ -1,0 +1,24 @@
+<?xml version="1.0" encoding="utf-8"?><testsuites name="pytest tests"><testsuite name="pytest" errors="0" failures="1" skipped="0" tests="1" time="17.446" timestamp="2026-09-23T02:50:58.991894+08:00" hostname="GXHdeMacBook-Air.local"><testcase classname="tests.skills.test_lifecycle" name="test_real_git_subdirectory_import_and_install" time="15.969"><failure message="AssertionError: {&quot;detail&quot;:&quot;Git import failed; check URL/ref, HTTPS access and certificate, or use ZIP&quot;}&#10;assert 422 == 200&#10; +  where 422 = &lt;Response [422 Unprocessable Entity]&gt;.status_code">client = (&lt;httpx.AsyncClient object at 0x11bd804d0&gt;, {'id': 1})
+
+    @pytest.mark.integration
+    async def test_real_git_subdirectory_import_and_install(client):
+        import os
+    
+        if os.getenv("RUN_SKILL_GIT_IMPORT_TESTS") != "1":
+            pytest.skip("Opt in to read-only public Git network access")
+        http, _ = client
+        response = await http.post(
+            "/skills/imports",
+            json={
+                "kind": "git",
+                "url": "https://github.com/anthropics/skills",
+                "ref": "main",
+                "subdirectory": "skills/algorithmic-art",
+            },
+        )
+&gt;       assert response.status_code == 200, response.text
+E       AssertionError: {"detail":"Git import failed; check URL/ref, HTTPS access and certificate, or use ZIP"}
+E       assert 422 == 200
+E        +  where 422 = &lt;Response [422 Unprocessable Entity]&gt;.status_code
+
+tests/skills/test_lifecycle.py:251: AssertionError</failure></testcase></testsuite></testsuites>

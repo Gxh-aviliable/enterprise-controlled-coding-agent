@@ -1,0 +1,600 @@
+--- a/enterprise_agent/core/agent/nodes.py
++++ b/enterprise_agent/core/agent/nodes.py
+@@ -136,10 +136,10 @@
+ - `task_create` is only an operational record. Track genuinely multi-step work with `todo_update`.
+ - Batch independent reads in one turn; keep dependencies serial. Do not chain shell
+   operators to fake batches.
+-- Shell starts at workspace root. Use relative paths, never reveal its server path, and keep stdout/stderr separate.
++- Shell starts at workspace root. Follow the runtime path/output policy; never reveal its server path.
+ - Use `background_run` plus `check_background` for long commands. On `policy_blocked`,
+   follow remediation once; on `nonzero_exit`, inspect real stderr/config.
+-- Delete only with `delete_paths(paths, reason)` using exact relative paths; stop on protected paths.
++- Prefer `delete_paths(paths, reason)` for deletion; follow runtime policy and any user-required tool exactly.
+ - Compacted tool evidence is bounded and may be redacted/source-truncated. Re-read
+   verified ranges with `read_tool_artifact(path, sha256, ...)` when needed.
+ - Transcript handles are operational recovery backups, not immutable audit evidence or durable memory.
+@@ -207,11 +207,26 @@
+     else:
+         shell_info = "Bash"
+ 
++    policy = (
++        "- Docker policy: container paths `/workspace` and `/tmp`, inline scripts, pipes, redirects, "
++        "variables and multiline/heredoc commands are supported. Side effects, networking and complex "
++        "Shell need normal REVIEW approval; simple read-only commands can run automatically.\n"
++        "- Exact temporary workspace files may be removed with reviewed Shell; whole-root deletion is blocked. "
++        "Sensitive files and Agent metadata are filtered from snapshots; `.git` operations are not guaranteed.\n"
++        "- Networking follows server configuration. Network/dependency effects are not undone by file restore. "
++        "Missing tools or unavailable Docker are execution errors; never fall back to host Shell.\n"
++        "- For validation evidence use a direct test command (optional trailing `2>&1`); "
++        "pipes, `|| true` and other complex commands do not prove tests passed.\n"
++        if settings.AGENT_EXECUTOR == "docker" else
++        "- Path/output policy: relative paths only; do not use `/workspaces/...`, `..`, `/dev/null`, or `2>&1`\n"
++        "- Local policy: no inline scripts, substitutions or multiline commands; delete only with `delete_paths`.\n"
++    )
++
+     return (
+         f"- Tool runtime OS family: {system or 'Unknown'}; this does not imply the project's target platform\n"
+         f"- Available shell: {shell_info}\n"
+         "- Working directory: current workspace root (`.`); the server path is intentionally hidden\n"
+-        "- Path/output policy: relative paths only; do not use `/workspaces/...`, `..`, `/dev/null`, or `2>&1`\n"
++        f"{policy}"
+         "- Project runtimes: infer only from the detected project or repository files, never from the Agent host\n"
+         "- Command I/O encoding: UTF-8"
+     )
+--- a/enterprise_agent/core/agent/tools/contracts.py
++++ b/enterprise_agent/core/agent/tools/contracts.py
+@@ -275,7 +275,7 @@
+ 
+     # Shell control operators make a command harder to reason about. Keep it in
+     # review even when the first executable is read-only.
+-    if any(operator in command for operator in (";", "&&", "||", "|", ">", "<")):
++    if any(operator in command for operator in ";&|<>$`\n\r(){}\\"):
+         return RiskLevel.REVIEW
+ 
+     try:
+@@ -288,6 +288,22 @@
+     binary = Path(parts[0]).name.lower()
+     args = parts[1:]
+     lowered_args = {part.lower() for part in args}
++    if settings.AGENT_EXECUTOR == "docker":
++        # Only simple read-only invocations can skip approval. Unknown syntax,
++        # project runners and dispatching/output-writing options require REVIEW.
++        if "/" in parts[0] and Path(parts[0]).parent not in {Path("/bin"), Path("/usr/bin")}:
++            return RiskLevel.REVIEW
++        if binary == "find" and lowered_args.intersection({
++            "-exec", "-execdir", "-ok", "-okdir", "-delete", "-fprint", "-fprint0", "-fprintf", "-fls",
++        }):
++            return RiskLevel.REVIEW
++        if binary == "rg" and any(arg.split("=", 1)[0] in {"--pre", "--hostname-bin"} for arg in args):
++            return RiskLevel.REVIEW
++        if binary in {"pwd", "ls", "dir", "echo", "cat", "head", "tail", "wc", "find", "rg"}:
++            return RiskLevel.SAFE
++        if binary in {"python", "python3", "node"} and args in (["--version"], ["-V"] if binary != "node" else ["-v"]):
++            return RiskLevel.SAFE
++        return RiskLevel.REVIEW
+     if binary in {"python", "python3"}:
+         if not args:
+             return RiskLevel.REVIEW
+@@ -350,10 +366,10 @@
+                       else ToolResultStatus.BLOCKED if error_code == "policy_blocked"
+                       else ToolResultStatus.ERROR)
+         elif exit_code != 0:
+-            if "blocked:" in stderr.lower():
++            if not parsed.get("executor") and "blocked:" in stderr.lower():
+                 status = ToolResultStatus.BLOCKED
+                 error_code = "policy_blocked"
+-            elif "timed out" in stderr.lower() or exit_code == -1:
++            elif not parsed.get("executor") and ("timed out" in stderr.lower() or exit_code == -1):
+                 status = ToolResultStatus.TIMEOUT
+                 error_code = "tool_timeout"
+             else:
+--- a/enterprise_agent/core/agent/tools/shell.py
++++ b/enterprise_agent/core/agent/tools/shell.py
+@@ -118,9 +118,36 @@
+ 
+ 
+ def validate_command(command: str) -> Optional[str]:
+-    """Fail closed on commands that can escape the reviewable workspace boundary."""
++    """Select policy only from the server's executor setting, shared by all callers."""
+     if not command or not command.strip():
+         return _blocked("empty command", "provide one workspace-scoped command")
++    if settings.AGENT_EXECUTOR == "docker":
++        return _validate_docker_command(command)
++    return _validate_local_command(command)
++
++
++def _validate_docker_command(command: str) -> Optional[str]:
++    """Finite accident guard, not a Shell interpreter or an isolation boundary."""
++    tokens, _ = _tokenize_command(command)
++    for index, token in enumerate(tokens):
++        binary = Path(token).name.lower()
++        if binary in {"shutdown", "reboot", "halt", "poweroff", "mkfs", "dd", "format", "fdisk"} or binary.startswith(
++            "mkfs."
++        ):
++            return _blocked(f"destructive system command '{binary}' is not allowed.")
++        if binary == "rm":
++            for argument in tokens[index + 1:]:
++                if argument in CONTROL_OPERATORS:
++                    break
++                if argument.rstrip("/") in {"", "*", ".", "..", "/*", "/workspace", "/workspace/*"}:
++                    return _blocked("whole-root/workspace deletion is not allowed; use exact temporary file targets.")
++    if ":(){ :|:& };:" in command:
++        return _blocked("fork bomb is not allowed.")
++    return None
++
++
++def _validate_local_command(command: str) -> Optional[str]:
++    """Retain the strict legacy policy for explicit host development mode."""
+     if "\n" in command or "\r" in command:
+         return _blocked(
+             "multi-line shell commands are not allowed.",
+@@ -426,7 +453,7 @@
+ 
+ @tool
+ def bash(command: str) -> str:
+-    """Execute a workspace-relative command using the configured execution boundary.
++    """Execute a command from workspace root using the configured execution boundary.
+ 
+     Docker is the default. Local mode is explicitly unisolated development only.
+     """
+--- a/enterprise_agent/core/execution/evidence.py
++++ b/enterprise_agent/core/execution/evidence.py
+@@ -24,6 +24,11 @@
+ 
+ def validation_command(command: str) -> dict | None:
+     """Recognize a small, explicit argv grammar, not arbitrary Shell syntax."""
++    if "\n" in command or "\r" in command:
++        return None
++    # One exact trailing merge preserves the runner's exit code. All other
++    # redirects/compound syntax remain executable but cannot prove validation.
++    command = re.sub(r"\s+2>&1\s*$", "", command)
+     try:
+         argv = shlex.split(command)
+     except ValueError:
+@@ -31,6 +36,8 @@
+     cwd = "."
+     if len(argv) >= 4 and argv[0] == "cd" and argv[2] == "&&":
+         directory = Path(argv[1])
++        if settings.AGENT_EXECUTOR == "docker" and directory == Path("/workspace"):
++            directory = Path(".")
+         if directory.is_absolute() or ".." in directory.parts or argv[1].startswith("-"):
+             return None
+         cwd = directory.as_posix()
+--- a/enterprise_agent/sandbox/storage.py
++++ b/enterprise_agent/sandbox/storage.py
+@@ -3,6 +3,7 @@
+ import os
+ import shutil
+ import stat
++import time
+ from pathlib import Path
+ 
+ 
+@@ -20,4 +21,13 @@
+             directory = Path(current) / name
+             if stat.S_ISDIR(directory.lstat().st_mode):
+                 os.chmod(directory, 0o700, follow_symlinks=False)
+-    shutil.rmtree(root)
++    for attempt in range(3):
++        try:
++            shutil.rmtree(root)
++            return
++        except PermissionError:
++            # Docker Desktop can briefly deny rmdir on a just-detached nested
++            # bind target. Retry only this owned snapshot; persistent errors surface.
++            if attempt == 2:
++                raise
++            time.sleep(0.05 * (attempt + 1))
+--- a/tests/core/execution/test_approvals.py
++++ b/tests/core/execution/test_approvals.py
+@@ -104,3 +104,28 @@
+                 pytest.fail('Mutation body must not execute')
+     finally:
+         current_evidence.reset(token)
++
++
++@pytest.mark.parametrize("tool_name", ["bash", "background_run"])
++@pytest.mark.parametrize("decision", ["rejected", "expired"])
++async def test_new_docker_syntax_still_obeys_approval(state, monkeypatch, tool_name, decision):
++    monkeypatch.setattr(settings, "AGENT_EXECUTOR", "docker")
++    state["permissions"] = ["tools:shell"]
++    state["pending_tool_calls"] = [{
++        "id": "inline-write", "name": tool_name,
++        "args": {"command": 'python -c "from pathlib import Path; Path(\'unexpected\').touch()"'},
++    }]
++    state.update(await prepare_tool_execution_node(state))
++    assert state["task_status"] == "waiting_confirmation"
++    monkeypatch.setattr("enterprise_agent.core.agent.nodes.interrupt", lambda _: {"approved": decision != "rejected"})
++    state.update(await tool_confirm_node(state))
++    if decision == "expired":
++        state["pending_tool_calls"][0]["_approval_deadline"] = (
++            datetime.now(timezone.utc) - timedelta(seconds=1)
++        ).isoformat()
++    monkeypatch.setattr("enterprise_agent.sandbox.executor.get_executor", lambda: pytest.fail("must not execute"))
++    output = await tool_executor_node(state)
++    assert output["tool_execution_records"][0]["error_code"] == (
++        "user_rejected" if decision == "rejected" else "approval_stale"
++    )
++    assert not (get_user_workspace(501) / "unexpected").exists()
+--- a/tests/core/execution/test_evidence.py
++++ b/tests/core/execution/test_evidence.py
+@@ -257,3 +257,21 @@
+     with observe_file_mutation():
+         (root / "app.py").write_text("VALUE = 1\n")
+     assert _needs_verification(state)
++
++
++@pytest.mark.parametrize("command", [
++    "echo pytest 2>&1", "pytest --version 2>&1", "pytest -q 2>&1 || true",
++    "pytest -q | cat", "pytest -q 2>&1 | cat", "pytest -q > result.txt",
++    "pytest -q $(echo --version)", "pytest -q\necho passed", "pytest 2>&1 2>&1", "pytest\n2>&1",
++])
++def test_complex_shell_never_proves_validation(command):
++    assert validation_command(command) is None
++
++
++def test_exact_stream_merge_and_container_cwd_validation(monkeypatch):
++    monkeypatch.setattr(settings, "AGENT_EXECUTOR", "docker")
++    result = validation_command("cd /workspace && python -m pytest -q 2>&1")
++    assert result["kind"] == "test" and result["cwd"] == "."
++    assert validation_command("pytest -q 2>&1")["kind"] == "test"
++    monkeypatch.setattr(settings, "AGENT_EXECUTOR", "local")
++    assert validation_command("cd /workspace && python -m pytest -q") is None
+--- a/tests/core/test_nodes.py
++++ b/tests/core/test_nodes.py
+@@ -1632,3 +1632,13 @@
+     def test_rate_limit_is_retryable(self):
+         """Test rate limit pattern is retryable."""
+         assert "rate limit" in RETRYABLE_ERROR_PATTERNS
++
++
++def test_docker_runtime_prompt_matches_shell_policy(monkeypatch):
++    from enterprise_agent.config.settings import settings
++    from enterprise_agent.core.agent.nodes import _build_environment_info
++    monkeypatch.setattr(settings, "AGENT_EXECUTOR", "docker")
++    result = _build_environment_info()
++    assert "`/workspace`" in result and "heredoc" in result and "REVIEW" in result
++    assert "relative paths only" not in result
++    assert "never fall back to host Shell" in result
+--- a/tests/core/tools/test_contracts.py
++++ b/tests/core/tools/test_contracts.py
+@@ -1,6 +1,8 @@
+ """Uniform tool contract tests."""
+ 
+ import json
++
++import pytest
+ 
+ from enterprise_agent.core.agent.tools import (
+     ALL_TOOLS,
+@@ -157,3 +159,41 @@
+     assert blocked.error_code == "policy_blocked"
+     assert error.status == ToolResultStatus.ERROR
+     assert error.ok is False
++
++
++@pytest.mark.parametrize("tool_name", ["bash", "background_run"])
++@pytest.mark.parametrize("command, expected", [
++    ("ls -la", RiskLevel.SAFE), ("echo hello", RiskLevel.SAFE),
++    ("find . -not -path './.git/*'", RiskLevel.SAFE),
++    ("python --version", RiskLevel.SAFE), ("python -v", RiskLevel.REVIEW),
++    ("python -c 'print(2)'", RiskLevel.REVIEW),
++    ("node -e 'console.log(2)'", RiskLevel.REVIEW),
++    ("find . -exec touch changed ';'", RiskLevel.REVIEW),
++    ("find . -delete", RiskLevel.REVIEW), ("find . -fprint result", RiskLevel.REVIEW),
++    ("echo $HOME", RiskLevel.REVIEW), ("echo $(touch changed)", RiskLevel.REVIEW),
++    ("echo `touch changed`", RiskLevel.REVIEW), ("echo ok\ntouch changed", RiskLevel.REVIEW),
++    ("ls missing 2>/dev/null", RiskLevel.REVIEW), ("pytest -q 2>&1", RiskLevel.REVIEW),
++    ("echo ok &", RiskLevel.REVIEW), ("ls | head", RiskLevel.REVIEW),
++    ("curl -I https://example.com", RiskLevel.REVIEW),
++    ("wget https://example.com", RiskLevel.REVIEW),
++    ("cd /workspace && python -m pytest -q", RiskLevel.REVIEW),
++    ("rm -- generated.tmp", RiskLevel.REVIEW), ("bash -c 'echo ok'", RiskLevel.REVIEW),
++    ("rg --pre=helper pattern", RiskLevel.REVIEW),
++    ("rg --hostname-bin=helper pattern", RiskLevel.REVIEW),
++    ("./ls", RiskLevel.REVIEW), ("git status", RiskLevel.REVIEW),
++    ("rm -rf /", RiskLevel.DANGEROUS), ("mkfs.ext4 /dev/sda", RiskLevel.DANGEROUS),
++])
++def test_docker_risk_shared_by_foreground_and_background(monkeypatch, tool_name, command, expected):
++    from enterprise_agent.config.settings import settings
++    monkeypatch.setattr(settings, "AGENT_EXECUTOR", "docker")
++    assert resolve_tool_risk(tool_name, {"command": command, "executor": "local"}) == expected
++
++
++@pytest.mark.parametrize("executor", ["docker", "local"])
++@pytest.mark.parametrize("stderr", ["Blocked: application rejected request", "request timed out", "command not found"])
++def test_executor_stderr_does_not_impersonate_policy(monkeypatch, executor, stderr):
++    record = normalize_tool_result(
++        tool_name="bash", tool_call_id="real-error", duration_ms=1, attempt_count=1,
++        raw_result={"exit_code": 1, "stderr": stderr, "executor": executor},
++    )
++    assert record.error_code == "nonzero_exit"
+--- a/tests/core/tools/test_shell.py
++++ b/tests/core/tools/test_shell.py
+@@ -354,3 +354,32 @@
+         assert "rm" in BLOCKED_BINARIES
+         assert "sudo" in BLOCKED_BINARIES
+         assert "shutdown" in BLOCKED_BINARIES
++
++
++@pytest.mark.parametrize("command", [
++    "find . -not -path './.git/*'", 'python -c "print(1 + 1)"',
++    'node -e "console.log(2)"', "pytest -q 2>&1", "ls missing 2>/dev/null",
++    'echo "$HOME"', 'echo $(printf ok)', "curl -I https://example.com",
++    "cd /workspace && python -m pytest -q", "rm -- generated.tmp",
++    "python - <<'PYCODE'\nprint(2)\nPYCODE", "echo first\necho second",
++])
++def test_executor_policy_difference(monkeypatch, command):
++    monkeypatch.setattr(settings, "AGENT_EXECUTOR", "local")
++    assert validate_command(command) is not None
++    monkeypatch.setattr(settings, "AGENT_EXECUTOR", "docker")
++    assert validate_command(command) is None
++
++
++@pytest.mark.parametrize("executor", ["local", "docker"])
++@pytest.mark.parametrize("command", [
++    "", "rm -rf /", "rm -rf /*", "rm -rf -- /workspace", "rm -rf .",
++    "shutdown now", "reboot", "mkfs.ext4 /dev/sda1", "dd if=/dev/zero of=/dev/sda",
++])
++def test_disaster_guards_in_both_modes(monkeypatch, executor, command):
++    monkeypatch.setattr(settings, "AGENT_EXECUTOR", executor)
++    assert validate_command(command) is not None
++
++
++def test_command_cannot_select_docker_policy(monkeypatch):
++    monkeypatch.setattr(settings, "AGENT_EXECUTOR", "local")
++    assert validate_command("AGENT_EXECUTOR=docker python -c 'print(2)'") is not None
+--- a/tests/sandbox/test_docker.py
++++ b/tests/sandbox/test_docker.py
+@@ -557,3 +557,113 @@
+         assert task_evidence(state)["validation_satisfied"]
+     finally:
+         current_evidence.reset(token)
++
++
++@pytest.mark.parametrize("background", [False, True])
++def test_new_shell_syntax_through_real_tools(sandbox, monkeypatch, background):
++    from enterprise_agent.core.agent.tools.background import background_run, get_background_manager
++    from enterprise_agent.core.agent.tools.contracts import normalize_tool_result
++
++    executor, workspace = sandbox
++    monkeypatch.setattr(settings, "SANDBOX_IMAGE", os.environ.get(
++        "SANDBOX_MIXED_TEST_IMAGE", "enterprise-agent-sandbox-python-node:1"))
++    (workspace / "test_ok.py").write_text("def test_ok(): assert 1 + 1 == 2\n")
++    (workspace / "generated.tmp").write_text("delete this synthetic file")
++    (workspace / ".git").mkdir()
++    (workspace / ".git/config").write_text("synthetic git secret")
++    manager = get_background_manager() if background else None
++
++    def invoke(command):
++        if manager is None:
++            result = json.loads(bash.invoke({"command": command}))
++        else:
++            old = set(manager.tasks)
++            response = background_run.invoke({"command": command, "timeout": 20})
++            assert response.startswith("Background task"), response
++            task_id, = set(manager.tasks) - old
++            deadline = time.monotonic() + 30
++            while manager.tasks[task_id]["status"] == "running":
++                assert time.monotonic() < deadline
++                time.sleep(0.05)
++            result = manager.tasks[task_id]["execution"]
++        assert result["executor"] == "docker" and result["cleanup_confirmed"], result
++        assert not result.get("error_code"), result
++        assert result["receipt"]["phase"] == "finished"
++        return result
++
++    try:
++        for command, expected in [
++            ("find . -not -path './.git/*'", "test_ok.py"),
++            ('python -c "print(1 + 1)"', "2"),
++            ('node -e "console.log(2)"', "2"),
++            ("printf 'pipe-ok\\n' | cat", "pipe-ok"),
++            ('value=variable-ok; echo "$value"', "variable-ok"),
++            ('echo "$(printf substitution-ok)"', "substitution-ok"),
++            ("python - <<'PYCODE'\nprint('heredoc-ok')\nPYCODE", "heredoc-ok"),
++            ("printf first\nprintf second", "firstsecond"),
++            ("cd /workspace && python -m pytest -q 2>&1", "1 passed"),
++            ("printf redirected > generated.txt; cat generated.txt", "redirected"),
++        ]:
++            result = invoke(command)
++            assert result["exit_code"] == 0 and expected in result["stdout"], result
++            if command.startswith("find"):
++                assert ".git" not in result["stdout"]
++            if command.startswith("cd /workspace"):
++                assert result["receipt"]["ok"] and result["receipt"]["validation"]["kind"] == "test"
++        assert (workspace / "generated.txt").read_text() == "redirected"
++        deleted = invoke("rm -- generated.tmp")
++        assert deleted["exit_code"] == 0 and not (workspace / "generated.tmp").exists()
++        assert "generated.tmp" in deleted["published_paths"]
++        assert any(c["path"] == "generated.tmp" for c in deleted["receipt"]["changes"])
++        failed = invoke("ls missing 2>/dev/null")
++        assert failed["exit_code"] != 0 and not failed["stderr"]
++        assert not failed["receipt"]["ok"]
++        record = normalize_tool_result(tool_name="bash", tool_call_id="missing", raw_result=failed,
++                                       duration_ms=1, attempt_count=1)
++        assert record.error_code == "nonzero_exit"
++        missing = invoke("shell_policy_nonexistent_binary")
++        assert missing["exit_code"] == 127 and "not found" in missing["stderr"]
++        (workspace / "test_ok.py").write_text("def test_ok(): assert False\n")
++        failed = invoke("pytest -q 2>&1")
++        assert failed["exit_code"] == 1 and not failed["receipt"]["ok"]
++        for command in ("pytest -q 2>&1 | cat", "pytest -q 2>&1 || true", "echo pytest", "pytest --version"):
++            masked = invoke(command)
++            assert masked["exit_code"] == 0
++            assert masked["receipt"]["validation"] is None and not masked["receipt"]["ok"]
++    finally:
++        if manager:
++            manager.shutdown()
++    assert not executor.engine.containers(settings.SANDBOX_DEPLOYMENT)
++
++
++def test_curl_network_and_missing_binary_are_runtime_results(sandbox, monkeypatch):
++    """Use an isolated, labelled HTTP endpoint; never send workspace data."""
++    executor, workspace = sandbox
++    server = "shell-policy-http-" + settings.SANDBOX_DEPLOYMENT
++    spec = executor.spec(ExecutionRequest("unused", workspace, 901), workspace, server, 60)
++    spec.update(Entrypoint=["python"], Cmd=["-m", "http.server", "8080", "--bind", "0.0.0.0"],
++                WorkingDir="/tmp", NetworkDisabled=False)
++    spec["HostConfig"].update(NetworkMode="bridge", Mounts=[])
++    try:
++        executor.engine.request("POST", f"/containers/create?name={server}", spec)
++        executor.engine.request("POST", f"/containers/{server}/start")
++        networks = executor.engine.request("GET", f"/containers/{server}/json")["NetworkSettings"]["Networks"]
++        ip = networks["bridge"]["IPAddress"]
++        assert ip
++        # Bash TCP client tests networking even when curl is not in the administrator image.
++        command = f"exec 3<>/dev/tcp/{ip}/8080; printf 'HEAD / HTTP/1.0\r\n\r\n' >&3; head -1 <&3"
++        monkeypatch.setattr(settings, "SANDBOX_NETWORK_ENABLED", True)
++        connected = json.loads(bash.invoke({"command": command}))
++        assert connected["exit_code"] == 0 and "200 OK" in connected["stdout"], connected
++        curl = json.loads(bash.invoke({"command": f"curl -I --max-time 3 http://{ip}:8080"}))
++        assert curl.get("error_code") != "policy_blocked", curl
++        if curl["exit_code"] == 127:
++            assert "not found" in curl["stderr"]  # Tool absence remains an honest runtime result.
++        else:
++            assert curl["exit_code"] == 0 and "200 OK" in curl["stdout"], curl
++        monkeypatch.setattr(settings, "SANDBOX_NETWORK_ENABLED", False)
++        disconnected = json.loads(bash.invoke({"command": command}))
++        assert disconnected["exit_code"] != 0 and disconnected["cleanup_confirmed"], disconnected
++        assert not disconnected["receipt"]["ok"]
++    finally:
++        executor.engine.remove(server)
+--- a/tests/sandbox/test_workspace.py
++++ b/tests/sandbox/test_workspace.py
+@@ -122,3 +122,31 @@
+     assert (outside / "keep").read_text() == "safe"
+     assert outside.stat().st_mode & 0o777 == 0o755
+     assert not stage.exists()
++
++
++@pytest.mark.parametrize("persistent", [False, True])
++def test_snapshot_cleanup_retries_transient_detach_permission_only(tmp_path, monkeypatch, persistent):
++    import shutil
++
++    from enterprise_agent.sandbox.storage import remove_snapshot
++
++    stage = tmp_path / "owned-snapshot"
++    stage.mkdir()
++    (stage / "node_modules").mkdir()
++    real_rmtree = shutil.rmtree
++    calls = []
++
++    def delayed_detach(path):
++        calls.append(path)
++        if persistent or len(calls) == 1:
++            raise PermissionError("nested bind detach pending")
++        real_rmtree(path)
++
++    monkeypatch.setattr("enterprise_agent.sandbox.storage.shutil.rmtree", delayed_detach)
++    if persistent:
++        with pytest.raises(PermissionError):
++            remove_snapshot(stage)
++        assert len(calls) == 3 and stage.exists()
++    else:
++        remove_snapshot(stage)
++        assert len(calls) == 2 and not stage.exists()
+--- /dev/null
++++ b/scripts/shell_policy_demo.py
+@@ -0,0 +1,101 @@
++"""One synthetic real-model Docker task, not a benchmark score or production probe.
++
++PYTHONPATH=. .venv/bin/python scripts/shell_policy_demo.py
++"""
++
++import asyncio
++import json
++import os
++import tempfile
++import uuid
++from pathlib import Path
++
++from benchmarks.run import run_agent_case
++from enterprise_agent.config.settings import settings
++from enterprise_agent.core.agent.tool_artifacts import ToolArtifactStore
++from enterprise_agent.observability.release import source_manifest
++from enterprise_agent.sandbox.executor import DockerExecutor, shutdown_executions
++
++CASE = {
++    "id": "shell-policy.synthetic", "category": "bug_fix", "difficulty": "easy",
++    "title": "Docker syntax then repair a synthetic arithmetic function", "timeout_seconds": 180,
++    "prompt": (
++        "This is an isolated synthetic acceptance task. First use bash to execute exactly "
++        "python -c \"print(1 + 1)\" and confirm output 2. Then read math_utils.py and tests/test_math_utils.py, "
++        "fix subtract with the smallest edit, and run exactly "
++        "cd /workspace && python -m pytest -q 2>&1. Do not change tests. "
++        "Finish with actual results. Use single-agent tools only."
++    ),
++    "setup_files": {
++        "math_utils.py": "def subtract(a, b):\n    return a + b\n",
++        "tests/test_math_utils.py": (
++            "from math_utils import subtract\ndef test_subtract(): assert subtract(7, 4) == 3\n"
++        ),
++    },
++    "protected_files": ["tests/test_math_utils.py"],
++    "assertions": [
++        {"type": "file_contains", "path": "math_utils.py", "values": ["return a - b"]},
++        {"type": "workspace_changes_exact", "values": ["math_utils.py"]},
++        {"type": "protected_files_unchanged"}, {"type": "task_status", "value": "succeeded"},
++    ],
++}
++
++
++async def main():
++    output = Path("docs/release-evidence/shell-policy-20260923-agent.json")
++    manifest = source_manifest(Path.cwd())
++    if not settings.get_effective_api_key():
++        result = {"status": "not_run", "reason": "No configured model API key"}
++    else:
++        settings.ENABLE_MULTI_AGENT = False
++        settings.ENABLE_LONG_TERM_MEMORY = False
++        settings.ENABLE_TOOL_CONFIRMATION = True
++        settings.AGENT_EXECUTOR = "docker"
++        settings.MAX_AGENT_ROUNDS = 8
++        settings.TASK_TOKEN_BUDGET = 40000
++        settings.MAX_TOOL_CALLS_PER_TASK = 12
++        # Keep full executor envelopes for diagnostics; trace previews are bounded.
++        settings.MICROCOMPACT_MIN_CHARS = 1
++        settings.SANDBOX_DEPLOYMENT = "shell-policy-demo-" + uuid.uuid4().hex[:8]
++        with tempfile.TemporaryDirectory(prefix="shell-policy-agent-") as directory:
++            root = Path(directory).resolve()
++            os.environ["WORKSPACE_BASE"] = str(root / "workspaces")
++            settings.SANDBOX_STAGING_BASE = str(root / "stage")
++            settings.SANDBOX_HOST_STAGING_BASE = str(root / "stage")
++            try:
++                result = await run_agent_case(CASE, 923, "single")
++            finally:
++                shutdown_executions()
++            events = result.get("trace", {}).get("events", [])
++            artifacts = ToolArtifactStore(user_id=20923)
++            executions = [json.loads(artifacts.read_range(
++                e["data"]["artifact_path"], expected_sha256=e["data"]["artifact_sha256"],
++            )["content"]) for e in events if e.get("type") == "tool" and e.get("name") == "bash"
++                and e["data"].get("artifact_path")]
++            result["executions"] = executions
++            result["docker_checks"] = {
++                "real_containers": len(executions) >= 2 and all(
++                    e.get("executor") == "docker" and e.get("container_id") for e in executions),
++                "cleaned": bool(executions) and all(e.get("cleanup_confirmed") for e in executions),
++                "no_containers_remain": not DockerExecutor().engine.containers(settings.SANDBOX_DEPLOYMENT),
++                "approval_resumed": result.get("confirmation_resumes", 0) >= 2,
++                "inline_then_tests": len(executions) >= 2 and
++                executions[0].get("receipt", {}).get("command") == 'python -c "print(1 + 1)"' and
++                executions[0].get("stdout") == "2" and executions[0].get("exit_code") == 0 and
++                any(e.get("receipt", {}).get("ok") and
++                    e.get("receipt", {}).get("command") ==
++                    "cd /workspace && python -m pytest -q 2>&1" for e in executions),
++            }
++    result.update(source_sha256=manifest["source_sha256"], model=settings.get_effective_model_id(),
++                  qualification="synthetic-diagnostic-not-benchmark-score")
++    output.write_text(json.dumps(result, ensure_ascii=False, indent=2) + "\n")
++    print(json.dumps({k: result.get(k) for k in (
++        "status", "task_status", "duration_ms", "confirmation_resumes", "docker_checks", "task_budget",
++        "infrastructure_error", "system_error", "reason",
++    )}, ensure_ascii=False))
++    if result.get("status") != "passed" or not all(result.get("docker_checks", {}).values()):
++        raise SystemExit(1)
++
++
++if __name__ == "__main__":
++    asyncio.run(main())

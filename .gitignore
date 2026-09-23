@@ -1,4 +1,5 @@
 # Python
+enterprise_agent/_build_manifest.json
 __pycache__/
 *.py[cod]
 *$py.class
@@ -81,4 +82,5 @@ obsidian/
 
 # Runtime-managed shared Skill materialization
 managed_shared_skills/
-workspaces/*/.agent/
+# User uploads, project workspaces and runtime control/evidence data stay local.
+/workspaces/

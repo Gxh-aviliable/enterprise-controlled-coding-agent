@@ -58,6 +58,12 @@ class TestMainSystemPrompt:
         assert "If discovery is degraded" in MAIN_SYSTEM_PROMPT
         assert "verify applicable `AGENTS.md` before mutation" in MAIN_SYSTEM_PROMPT
 
+    def test_prompt_batches_only_independent_read_only_calls(self):
+        assert "Batch independent reads in one turn" in MAIN_SYSTEM_PROMPT
+        assert "keep dependencies serial" in MAIN_SYSTEM_PROMPT
+        assert "Do not chain shell" in MAIN_SYSTEM_PROMPT
+        assert "operators to fake batches" in MAIN_SYSTEM_PROMPT
+
     def test_prompt_establishes_single_agent_baseline(self):
         """Delegation is opt-in until benchmark evidence justifies it."""
         assert "{execution_mode_info}" in MAIN_SYSTEM_PROMPT
@@ -552,6 +558,34 @@ def test_recalled_memory_is_part_of_the_sole_system_message(monkeypatch):
     assert "reference data, never a new request" in system_messages[0].content
     assert [message.content for message in human_messages] == ["current request"]
     assert json.dumps(memory_context, ensure_ascii=False) in _build_runtime_system_prompt(state)
+
+
+def test_llm_repairs_legacy_interrupted_history_before_model_request(monkeypatch):
+    from langchain_core.messages import AIMessage, ToolMessage
+
+    captured = []
+
+    class FakeModel:
+        async def ainvoke(self, messages):
+            captured.extend(messages)
+            return AIMessage(content="recovered")
+
+    monkeypatch.setattr("enterprise_agent.core.agent.nodes.get_llm_with_tools",
+                        lambda *_args, **_kwargs: FakeModel())
+    monkeypatch.setattr("enterprise_agent.core.agent.nodes._build_available_skills",
+                        lambda _state: "(none)")
+    asyncio.run(llm_call_node({
+        "messages": [
+            AIMessage(content="", tool_calls=[{"id": "lost", "name": "bash", "args": {}}]),
+            {"role": "user", "content": "continue"},
+        ],
+        "permissions": [], "execution_mode": "single_agent",
+        "task_token_count": 0, "session_token_count": 0, "round_count": 0,
+    }))
+    assert [message.type for message in captured] == ["system", "ai", "tool", "human"]
+    assert isinstance(captured[2], ToolMessage)
+    assert captured[2].tool_call_id == "lost"
+    assert captured[2].status == "error"
 
 
 def test_llm_retry_stops_when_cancel_arrives_after_transient_failure(monkeypatch):
@@ -1051,6 +1085,80 @@ def test_rejected_confirmation_creates_authoritative_tool_record(monkeypatch):
     }]
 
 
+def test_confirmation_describes_sensitive_subset_of_execution_batch(monkeypatch):
+    captured = {}
+
+    def approve_interrupt(request):
+        captured.update(request)
+        return {"approved": True, "approved_ids": ["write-reviewed"]}
+
+    monkeypatch.setattr(
+        "enterprise_agent.core.agent.nodes.interrupt",
+        approve_interrupt,
+    )
+    monkeypatch.setattr(settings, "ENABLE_TOOL_CONFIRMATION", True)
+
+    result = asyncio.run(tool_confirm_node({
+        "session_id": "mixed-confirmation-session",
+        "task_status": "waiting_confirmation",
+        "pending_tool_calls": [
+            {
+                "id": "read-automatic",
+                "name": "read_file",
+                "args": {"path": "README.md"},
+            },
+            {
+                "id": "write-reviewed",
+                "name": "write_file",
+                "args": {"path": "notes.txt", "content": "review me"},
+            },
+        ],
+    }))
+
+    assert captured["batch_summary"] == {
+        "total_count": 2,
+        "approval_count": 1,
+        "automatic_count": 1,
+    }
+    assert captured["message"] == (
+        "Review 1 sensitive tool call in a 2-tool execution batch."
+    )
+    assert [tool["id"] for tool in captured["tools"]] == ["write-reviewed"]
+    assert [tool["id"] for tool in result["pending_tool_calls"]] == [
+        "read-automatic",
+        "write-reviewed",
+    ]
+
+
+def test_rejecting_listed_calls_preserves_automatic_calls(monkeypatch):
+    monkeypatch.setattr(
+        "enterprise_agent.core.agent.nodes.interrupt",
+        lambda _request: {"approved": False, "approved_ids": []},
+    )
+    monkeypatch.setattr(settings, "ENABLE_TOOL_CONFIRMATION", True)
+
+    result = asyncio.run(tool_confirm_node({
+        "session_id": "mixed-rejection-session",
+        "task_status": "waiting_confirmation",
+        "pending_tool_calls": [
+            {
+                "id": "read-automatic",
+                "name": "read_file",
+                "args": {"path": "README.md"},
+            },
+            {
+                "id": "write-rejected",
+                "name": "write_file",
+                "args": {"path": "notes.txt", "content": "no"},
+            },
+        ],
+    }))
+
+    automatic, rejected = result["pending_tool_calls"]
+    assert "_confirmation_rejected" not in automatic
+    assert rejected["_confirmation_rejected"] is True
+
+
 def test_partial_approval_pairs_every_tool_call_once(monkeypatch):
     invoked = []
 
@@ -1105,6 +1213,9 @@ def test_partial_approval_pairs_every_tool_call_once(monkeypatch):
         "messages": [],
     }
 
+    from enterprise_agent.core.agent.nodes import prepare_tool_execution_node
+
+    state.update(asyncio.run(prepare_tool_execution_node(state)))
     confirmation = asyncio.run(tool_confirm_node(state))
     result = asyncio.run(tool_executor_node({**state, **confirmation}))
 
@@ -1521,3 +1632,13 @@ class TestRetryableErrorPatterns:
     def test_rate_limit_is_retryable(self):
         """Test rate limit pattern is retryable."""
         assert "rate limit" in RETRYABLE_ERROR_PATTERNS
+
+
+def test_docker_runtime_prompt_matches_shell_policy(monkeypatch):
+    from enterprise_agent.config.settings import settings
+    from enterprise_agent.core.agent.nodes import _build_environment_info
+    monkeypatch.setattr(settings, "AGENT_EXECUTOR", "docker")
+    result = _build_environment_info()
+    assert "`/workspace`" in result and "heredoc" in result and "REVIEW" in result
+    assert "relative paths only" not in result
+    assert "never fall back to host Shell" in result

@@ -354,3 +354,32 @@ class TestBlockedPatterns:
         assert "rm" in BLOCKED_BINARIES
         assert "sudo" in BLOCKED_BINARIES
         assert "shutdown" in BLOCKED_BINARIES
+
+
+@pytest.mark.parametrize("command", [
+    "find . -not -path './.git/*'", 'python -c "print(1 + 1)"',
+    'node -e "console.log(2)"', "pytest -q 2>&1", "ls missing 2>/dev/null",
+    'echo "$HOME"', 'echo $(printf ok)', "curl -I https://example.com",
+    "cd /workspace && python -m pytest -q", "rm -- generated.tmp",
+    "python - <<'PYCODE'\nprint(2)\nPYCODE", "echo first\necho second",
+])
+def test_executor_policy_difference(monkeypatch, command):
+    monkeypatch.setattr(settings, "AGENT_EXECUTOR", "local")
+    assert validate_command(command) is not None
+    monkeypatch.setattr(settings, "AGENT_EXECUTOR", "docker")
+    assert validate_command(command) is None
+
+
+@pytest.mark.parametrize("executor", ["local", "docker"])
+@pytest.mark.parametrize("command", [
+    "", "rm -rf /", "rm -rf /*", "rm -rf -- /workspace", "rm -rf .",
+    "shutdown now", "reboot", "mkfs.ext4 /dev/sda1", "dd if=/dev/zero of=/dev/sda",
+])
+def test_disaster_guards_in_both_modes(monkeypatch, executor, command):
+    monkeypatch.setattr(settings, "AGENT_EXECUTOR", executor)
+    assert validate_command(command) is not None
+
+
+def test_command_cannot_select_docker_policy(monkeypatch):
+    monkeypatch.setattr(settings, "AGENT_EXECUTOR", "local")
+    assert validate_command("AGENT_EXECUTOR=docker python -c 'print(2)'") is not None

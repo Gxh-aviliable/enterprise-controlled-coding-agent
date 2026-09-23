@@ -31,7 +31,7 @@ parse → plan → execute → checkpoint → validate → summarize
 边执行边解释可观察证据：
 
 1. Agent 先读取入口、测试和相关实现。
-2. `plan_task` 建立执行计划。
+2. `pre_microcompact` 准备受控上下文，首轮 `llm_call` 根据对话与 workspace 建立执行计划。
 3. 在一次工具调用进行时点击 Stop；说明前端在服务端确认原 Trace 已 `cancelled` 前保持输入锁定，不会创建重叠任务。
 4. 取消完成后发送“继续完成剩余修复”；展示新 `trace_id`，并说明新一轮 LLM 根据聊天历史、workspace 现状和 continuation receipt 重新规划，没有 resume 旧 Graph。
 5. 文件修改进入 review 风险并触发独立的 `tool_confirmation` HITL。

@@ -1,0 +1,73 @@
+{
+  "checked_at": "2026-09-14T12:37:23.229883+08:00",
+  "scope": "read-only code analysis and pure-function probe; no live agent, shell, server, or model execution",
+  "sources": {
+    "enterprise_agent/core/agent/nodes.py": {
+      "sha256": "88f249038f0df10d02f6f9d88cf0e27130d65af783a20b53ac79a0e8a4739c2b",
+      "lines": 3388
+    },
+    "enterprise_agent/core/agent/state.py": {
+      "sha256": "0c97d12dcda0af7d7934231ffae97cbac292cea56ce50359304f34b8d9c54743",
+      "lines": 121
+    },
+    "enterprise_agent/core/agent/project_context.py": {
+      "sha256": "08ba01f6a71a75c32313fa8605dfdd4484a2574b0351596e4411184063ae0399",
+      "lines": 654
+    },
+    "enterprise_agent/sandbox/executor.py": {
+      "sha256": "bc734ca5767e015640945c9b8d1660babb177a1e17cb8ad74b2066c9067a22f5",
+      "lines": 305
+    },
+    "enterprise_agent/sandbox/workspace.py": {
+      "sha256": "32ef3e6f1f57c75deed18d4e1c1d40fcf71e1464e398beef34579e5e82949538",
+      "lines": 94
+    },
+    "enterprise_agent/observability/trace_store.py": {
+      "sha256": "2a673bf140acb3b7f45b7742bb0fce8f1dea3701b3e7767791d3abc35815e880",
+      "lines": 382
+    },
+    "enterprise_agent/api/routes/chat.py": {
+      "sha256": "48080dbb8c68660e60078fd1131801e4cd030efbefea150b207bb03408ca1bcf",
+      "lines": 3528
+    },
+    "frontend/src/components/FileViewer.vue": {
+      "sha256": "f1be70df78516dd394124da85698a453a3e600322aab6a44a710a496d51a4752",
+      "lines": 1377
+    },
+    "frontend/src/components/ChatPanel.vue": {
+      "sha256": "2fe0cafcaa15d3cdaf42a8860c85ebb4b3451130140ef362e3183a773444c979",
+      "lines": 2398
+    },
+    "enterprise_agent/config/settings.py": {
+      "sha256": "d2de121fea8f7c37ac960e04291e1d2dca2bb14fe8e4b04a9eedf6c18587965e",
+      "lines": 301
+    },
+    "benchmarks/README.md": {
+      "sha256": "bda2cfcd518c80370d554dcbee3b6f4f8bb75447371164224846d2d27d2b3f53",
+      "lines": 136
+    },
+    "benchmarks/results/20260827T181517Z-agent-single.json": {
+      "sha256": "261ab58fd4aa47a4e9674f92c38534bbc175e1302ec3f41d459211ff194ec547",
+      "lines": 40477
+    }
+  },
+  "probe_results": [
+    {
+      "workspace": "my_mini_claude_code",
+      "branch": "feature/multi-agent-plan-a",
+      "nodes_sha256": "88f249038f0df10d02f6f9d88cf0e27130d65af783a20b53ac79a0e8a4739c2b",
+      "echo_pytest_is_classified_as_validation": true,
+      "old_success_with_code_change_requires_new_validation": false,
+      "no_recorded_paths_requires_validation": false
+    },
+    {
+      "workspace": "my_mini_claude_code-github-mvp",
+      "branch": "feature/github-shell-mvp",
+      "nodes_sha256": "8203552167636a8c8ed9b3b8a208a95f34e0c5374681cc42412c072750e43ee9",
+      "echo_pytest_is_classified_as_validation": true,
+      "old_success_with_code_change_requires_new_validation": false,
+      "no_recorded_paths_requires_validation": false
+    }
+  ],
+  "external_revision_limitation": "Anonymous GitHub metadata API returned HTTP 403 rate limit; external docs/default-branch sources were browsed without immutable commit pin."
+}

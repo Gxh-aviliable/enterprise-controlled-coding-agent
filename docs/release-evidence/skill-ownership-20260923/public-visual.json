@@ -1,0 +1,16 @@
+{
+  "frontend": "http://175.24.166.236:8082",
+  "backend": "http://175.24.166.236:8082",
+  "real_auth_and_skill_api": true,
+  "mocked_api": false,
+  "clean_chat": true,
+  "library_hides_technical_fields": true,
+  "detail_focus_and_escape": true,
+  "template_preview": false,
+  "template_install_and_toggle": false,
+  "dark_and_1024": true,
+  "component_phone_width": false,
+  "page_errors": [],
+  "http_errors": [],
+  "real_model_called": false
+}

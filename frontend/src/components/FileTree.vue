@@ -4,11 +4,11 @@
       <span class="tree-title">Workspace</span>
       <div class="tree-actions">
         <!-- Upload -->
-        <label class="btn-icon upload-btn" title="Upload files">
+        <label class="btn-icon upload-btn" :title="`Upload files to workspace/${uploadDirectory}`">
           <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5">
             <path d="M21 15v4a2 2 0 01-2 2H5a2 2 0 01-2-2v-4"/><polyline points="17 8 12 3 7 8"/><line x1="12" y1="3" x2="12" y2="15"/>
           </svg>
-          <input type="file" hidden multiple @change="handleUpload" ref="fileInput" />
+          <input type="file" hidden multiple :disabled="uploading" @change="handleUpload" ref="fileInput" />
         </label>
         <!-- Download workspace -->
         <button class="btn-icon" title="Download workspace" @click="downloadAll">
@@ -27,6 +27,15 @@
       </div>
     </div>
 
+    <div class="upload-target">
+      <label for="upload-directory">Upload to workspace/</label>
+      <div class="upload-target-controls">
+        <input id="upload-directory" v-model="uploadDirectory" :disabled="uploading"
+          placeholder="Root, or e.g. GXH" aria-label="Upload directory" />
+        <button class="btn-icon" title="Upload to workspace root" :disabled="uploading || !uploadDirectory"
+          @click="uploadDirectory = ''">/</button>
+      </div>
+    </div>
     <div v-if="loading" class="tree-status">Loading...</div>
     <div v-else-if="error" class="tree-status tree-error">{{ error }}</div>
     <div
@@ -41,7 +50,7 @@
         <svg width="32" height="32" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
           <path d="M21 15v4a2 2 0 01-2 2H5a2 2 0 01-2-2v-4"/><polyline points="17 8 12 3 7 8"/><line x1="12" y1="3" x2="12" y2="15"/>
         </svg>
-        <span>Drop files to upload</span>
+        <span>Upload to workspace/{{ uploadDirectory }}</span>
       </div>
       <TreeNode
         v-for="node in treeChildren"
@@ -49,7 +58,7 @@
         :node="node"
         :depth="0"
         :selected-path="selectedPath"
-        @select="$emit('select', $event)"
+        @select="handleSelect"
         @delete="handleDelete"
         @rename="handleRename"
         @download="handleDownload"
@@ -79,6 +88,15 @@ const loading = ref(false)
 const error = ref('')
 const dragOver = ref(false)
 const fileInput = ref(null)
+const uploadDirectory = ref('')
+const uploading = ref(false)
+
+function handleSelect(node) {
+  if (!uploading.value) {
+    uploadDirectory.value = node.type === 'dir' ? node.path : node.path.split('/').slice(0, -1).join('/')
+  }
+  emit('select', node)
+}
 
 const treeChildren = computed(() => treeData.value?.children || [])
 
@@ -114,80 +132,53 @@ async function loadTree() {
   }
 }
 
-// ── Upload ──
-async function handleUpload(e) {
-  const files = e.target.files
-  if (!files?.length) return
-  const paths = Array.from(files, file => file.name)
-  const change = {
-    type: 'upload',
-    paths,
-    affectsSelected: paths.some(pathAffectsSelection),
-    selectedPath: props.selectedPath
-  }
-  if (!authorizeMutation(change)) {
-    if (fileInput.value) fileInput.value.value = ''
+// Both the picker and drag/drop use the same destination and mutation guard.
+async function uploadSelectedFiles(files) {
+  if (!files?.length || uploading.value) return
+  const directory = uploadDirectory.value.trim().replaceAll('\\', '/').split('/').filter(part => part && part !== '.').join('/')
+  if (directory.split('/').includes('..')) {
+    toast.error('Choose a directory inside the workspace')
     return
   }
-  let selectedFileWasUploaded = false
-  try {
-    toast.show(`Uploading ${files.length} file(s)...`, 'info', 0)
-    await api.uploadFiles(files, '', (done) => {
-      if (pathAffectsSelection(paths[done - 1])) selectedFileWasUploaded = true
-    })
-    toast.show(`Uploaded ${files.length} file(s)`, 'success')
-    await loadTree()
-    reportMutation(change)
-  } catch (err) {
-    if (selectedFileWasUploaded) {
-      await loadTree()
-      reportMutation({ ...change, partial: true })
-    }
-    toast.error('Upload failed: ' + (err.message || 'Unknown error'))
-  }
-  // Reset input so same files can be re-selected
-  if (fileInput.value) fileInput.value.value = ''
-}
-
-// ── Drag & drop ──
-let dragCounter = 0
-function onDragLeave() {
-  dragCounter--
-  if (dragCounter <= 0) {
-    dragOver.value = false
-    dragCounter = 0
-  }
-}
-
-async function handleDrop(e) {
-  dragOver.value = false
-  dragCounter = 0
-  const files = e.dataTransfer?.files
-  if (!files?.length) return
-  const paths = Array.from(files, file => file.name)
+  const paths = Array.from(files, file => directory ? `${directory}/${file.name}` : file.name)
   const change = {
-    type: 'upload',
-    paths,
+    type: 'upload', paths,
     affectsSelected: paths.some(pathAffectsSelection),
     selectedPath: props.selectedPath
   }
   if (!authorizeMutation(change)) return
-  let selectedFileWasUploaded = false
+  uploading.value = true
+  let completed = 0
   try {
-    toast.show(`Uploading ${files.length} file(s)...`, 'info', 0)
-    await api.uploadFiles(files, '', (done) => {
-      if (pathAffectsSelection(paths[done - 1])) selectedFileWasUploaded = true
-    })
-    toast.show(`Uploaded ${files.length} file(s)`, 'success')
+    toast.show(`Uploading ${files.length} file(s) to workspace/${directory}...`, 'info', 0)
+    await api.uploadFiles(files, directory, done => { completed = done })
+    toast.show(`Uploaded ${files.length} file(s) to workspace/${directory}`, 'success')
     await loadTree()
     reportMutation(change)
   } catch (err) {
-    if (selectedFileWasUploaded) {
+    if (completed > 0) {
       await loadTree()
-      reportMutation({ ...change, partial: true })
+      reportMutation({ ...change, partial: true,
+        affectsSelected: paths.slice(0, completed).includes(change.selectedPath) })
     }
     toast.error('Upload failed: ' + (err.message || 'Unknown error'))
+  } finally {
+    uploading.value = false
   }
+}
+
+async function handleUpload(e) {
+  try { await uploadSelectedFiles(Array.from(e.target.files || [])) }
+  finally { if (fileInput.value) fileInput.value.value = '' }
+}
+
+function onDragLeave(e) {
+  if (!e.currentTarget.contains(e.relatedTarget)) dragOver.value = false
+}
+
+async function handleDrop(e) {
+  dragOver.value = false
+  await uploadSelectedFiles(Array.from(e.dataTransfer?.files || []))
 }
 
 // ── Download all ──
@@ -275,7 +266,7 @@ async function handleRename(node) {
 function newFolder() {
   const name = prompt('Folder name:')
   if (name) {
-    const prefix = props.selectedPath || ''
+    const prefix = uploadDirectory.value.trim()
     const fullPath = prefix ? `${prefix}/${name}` : name
     api.createDir(fullPath).then(loadTree).catch(e => toast.error(e.message))
   }
@@ -299,6 +290,23 @@ defineExpose({ loadTree })
   justify-content: space-between;
   padding: 10px 16px;
   border-bottom: 1px solid var(--border-light);
+}
+
+.upload-target {
+  padding: 8px 16px;
+  border-bottom: 1px solid var(--border-light);
+  font-size: var(--text-xs);
+  color: var(--text-secondary);
+}
+.upload-target-controls { display: flex; gap: 4px; margin-top: 4px; }
+.upload-target input {
+  flex: 1;
+  min-width: 0;
+  padding: 6px 8px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: var(--bg-primary);
+  color: var(--text-primary);
 }
 
 .tree-title {

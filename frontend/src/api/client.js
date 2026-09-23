@@ -127,6 +127,7 @@ export async function resetPassword({ email, code, new_password }) {
 }
 
 // Chat API
+const streamCursors = new Map()
 export async function getAgentCapabilities() {
   const res = await request('/chat/capabilities')
   const data = await res.json()
@@ -174,7 +175,17 @@ async function consumeEventStream(res, handlers = {}, label = 'stream') {
       return false
     }
 
-    if (data.delta !== undefined) {
+    if (data.trace_id && Number.isInteger(data.seq)) {
+      const previous = streamCursors.get(data.trace_id) || 0
+      if (data.seq <= previous) return false
+      streamCursors.set(data.trace_id, data.seq)
+      if (streamCursors.size > 256) streamCursors.delete(streamCursors.keys().next().value)
+    }
+
+    if (data.event === 'done') {
+      onDone?.(data)
+      return true
+    } else if (data.delta !== undefined) {
       onDelta?.(data.delta, data)
     } else if (data.event === 'task_started') {
       onTaskStarted?.(data)
@@ -249,6 +260,7 @@ export function streamMessage({
   session_id,
   content,
   mode = 'single_agent',
+  skill_ids = [], project = '', implicit_skills = true,
   signal,
   ...handlers
 }) {
@@ -257,7 +269,7 @@ export function streamMessage({
     {
       method: 'POST',
       signal,
-      body: JSON.stringify({ session_id, content, stream: true, mode })
+      body: JSON.stringify({ session_id, content, stream: true, mode, skill_ids, project, implicit_skills })
     },
     handlers,
     'Stream failed',
@@ -658,10 +670,10 @@ export async function validateAdminSkill(name) {
   return data
 }
 
-export async function publishAdminSkill(name, changelog, expectedUpdatedAt = null) {
+export async function publishAdminSkill(name, changelog, expectedUpdatedAt = null, expectedRevision = null) {
   const res = await request(`/admin/skills/${encodeURIComponent(name)}/publish`, {
     method: 'POST',
-    body: JSON.stringify({ changelog, expected_updated_at: expectedUpdatedAt })
+    body: JSON.stringify({ changelog, expected_updated_at: expectedUpdatedAt, expected_revision: expectedRevision })
   })
   const data = await res.json()
   if (!res.ok) throw new Error(data.detail?.message || data.detail || 'Failed to publish Shared Skill')
@@ -704,3 +716,45 @@ export async function getAdminSystemHealth() {
   if (!res.ok) throw new Error(data.detail || 'Failed to load system health')
   return data
 }
+
+export async function getTaskChanges(traceId) {
+  const res = await request(`/tasks/${encodeURIComponent(traceId)}/changes`)
+  const data = await res.json()
+  if (!res.ok) throw new Error(data.detail || 'Failed to load task changes')
+  return data
+}
+
+export async function getTaskEvents(traceId, after = 0) {
+  const res = await request(`/tasks/${encodeURIComponent(traceId)}/events?after=${after}`)
+  const data = await res.json()
+  if (!res.ok) throw new Error(data.detail || 'Failed to read task events')
+  return data
+}
+
+export async function restoreTaskFiles(traceId, paths, expectedVersion) {
+  const res = await request(`/tasks/${encodeURIComponent(traceId)}/restore`, {
+    method: 'POST', body: JSON.stringify({ paths, expected_version: expectedVersion })
+  })
+  const data = await res.json()
+  if (!res.ok) throw new Error(data.detail || 'File restore failed; inspect current files before retrying')
+  return data
+}
+
+// Skills are always scoped by the authenticated user and optional workspace project.
+export const listSkills = (project = '', q = '') => skillRequest(`/skills?${new URLSearchParams({ project, q })}`)
+export const getSkill = (id, project = '') => skillRequest(`/skills/${encodeURIComponent(id)}?${new URLSearchParams({ project })}`)
+export const previewSkillImport = (body) => skillRequest('/skills/imports', { method: 'POST', body: JSON.stringify(body) })
+export const previewSkillZip = (file) => skillRequest('/skills/imports/zip', {
+  method: 'POST', headers: { 'Content-Type': 'application/zip' }, body: file
+})
+export const installSkill = (body) => skillRequest('/skills/install', { method: 'POST', body: JSON.stringify(body) })
+export const updateSkill = (id, body) => skillRequest(`/skills/${encodeURIComponent(id)}`, { method: 'PATCH', body: JSON.stringify(body) })
+export const uninstallSkill = (id, version) => skillRequest(`/skills/${encodeURIComponent(id)}?expected_version=${version}`, { method: 'DELETE' })
+
+async function skillRequest(path, options) {
+  const res = await request(path, options)
+  const data = await res.json()
+  if (!res.ok) throw new Error(typeof data.detail === 'string' ? data.detail : JSON.stringify(data.detail || 'Skill request failed'))
+  return data
+}
+export const getSkillImportCandidate = (id, candidate) => skillRequest(`/skills/imports/${encodeURIComponent(id)}/${candidate}`)

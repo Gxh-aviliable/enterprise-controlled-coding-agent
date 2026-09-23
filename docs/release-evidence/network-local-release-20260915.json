@@ -1,0 +1,27 @@
+{
+  "source_sha256": "a7bbb693f7c3b0940c3ba5e12b51cde8ec5be32f742243c64abdd6c7364b1ea3",
+  "api_image": "sha256:53bf31c908dacef907544e98947866efdd9247dacf13383b453ad595e0295dad",
+  "previous_image": "sha256:41f7c7d3b15dc1e84606c3128f3ba8fc93a50f83da1e3906c861709bf3ae37e8",
+  "health": {
+    "status": "healthy",
+    "version": "0.1.0",
+    "build": {
+      "source_sha256": "a7bbb693f7c3b0940c3ba5e12b51cde8ec5be32f742243c64abdd6c7364b1ea3",
+      "qualification": "diagnostic-snapshot",
+      "git": {
+        "commit": "0648e72dad083e21a70eb8811e1e0dc890bd5714",
+        "branch": "feature/verified-agent-delivery",
+        "dirty": true
+      }
+    },
+    "name": "Enterprise Agent",
+    "checks": {
+      "mysql": "ok",
+      "redis": "ok"
+    }
+  },
+  "network_enabled": true,
+  "volumes_unchanged": true,
+  "backup": "logs/network-demo/20260915-002151",
+  "remote_touched": false
+}

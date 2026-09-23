@@ -1,0 +1,11 @@
+{
+  "origin": "http://175.24.166.236:8082",
+  "actual_auth_and_skill_api": true,
+  "mocked_requests": false,
+  "file_tree": true,
+  "zip_preview": true,
+  "chat_skill_selection": true,
+  "real_model_called": false,
+  "page_errors": [],
+  "http_errors": []
+}

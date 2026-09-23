@@ -12,6 +12,7 @@ from enterprise_agent.api.routes.auth import router as auth_router
 from enterprise_agent.api.routes.chat import router as chat_router
 from enterprise_agent.api.routes.chat import sessions_router
 from enterprise_agent.api.routes.memory import router as memory_router
+from enterprise_agent.api.routes.skills import router as skills_router
 from enterprise_agent.api.routes.tasks import router as tasks_router
 from enterprise_agent.api.routes.workspace import router as workspace_router
 from enterprise_agent.config.settings import settings
@@ -29,6 +30,18 @@ async def lifespan(app: FastAPI):
     """Application lifespan - startup and shutdown"""
     # Startup
     settings.validate_runtime_security()
+    if settings.AGENT_EXECUTOR == "docker":
+        import asyncio
+
+        from enterprise_agent.sandbox.engine import Engine
+        from enterprise_agent.sandbox.reaper import reap
+
+        try:
+            await asyncio.to_thread(reap, Engine(settings.SANDBOX_DOCKER_SOCKET),
+                                    settings.SANDBOX_DEPLOYMENT, settings.SANDBOX_STAGING_BASE)
+        except Exception:
+            # API file tools remain available; every shell invocation still fails closed.
+            logger.exception("Sandbox unavailable at startup; shell execution will fail closed")
     # LangSmith tracing (optional — only enables if API key is configured)
     if settings.LANGSMITH_API_KEY:
         os.environ["LANGCHAIN_TRACING_V2"] = "true"
@@ -48,6 +61,8 @@ async def lifespan(app: FastAPI):
     from enterprise_agent.core.agent.graph import setup_checkpointer
     await setup_checkpointer()
     logger.info("Redis checkpointer ready")
+    from enterprise_agent.core.execution.child_store import recover_abandoned_children
+    await recover_abandoned_children()
 
     # Preserve any still-readable Redis-only transcripts before their TTL expires.
     from enterprise_agent.api.routes.chat import migrate_readable_checkpoint_histories
@@ -73,11 +88,21 @@ async def lifespan(app: FastAPI):
     from enterprise_agent.memory.decay import get_or_start_cleanup_task
     cleanup_task = get_or_start_cleanup_task()
     logger.info("Memory decay cleanup task started")
+    import asyncio
+
+    from enterprise_agent.observability.storage_governance import maintenance_loop
+    storage_task = asyncio.create_task(maintenance_loop(), name="service-record-retention")
 
     logger.info("Application startup complete")
     yield
     # Shutdown
     logger.info("Shutting down...")
+    import asyncio
+
+    from enterprise_agent.core.execution.children import shutdown_children
+    await shutdown_children()
+    from enterprise_agent.sandbox.executor import shutdown_executions
+    await asyncio.to_thread(shutdown_executions)
     try:
         from enterprise_agent.core.agent.nodes import _drain_memory_flush_tasks
         await _drain_memory_flush_tasks()
@@ -96,6 +121,8 @@ async def lifespan(app: FastAPI):
         logger.warning("Error draining background Agent processes: %s", e)
 
     cleanup_task.cancel()  # Stop memory cleanup task
+    storage_task.cancel()
+    await asyncio.gather(storage_task, return_exceptions=True)
 
     # Close Redis checkpointer connection pool
     try:
@@ -139,6 +166,7 @@ app.add_middleware(
 # Register routers
 app.include_router(auth_router)
 app.include_router(admin_router)
+app.include_router(skills_router)
 app.include_router(chat_router)
 app.include_router(sessions_router)
 app.include_router(workspace_router)
@@ -158,6 +186,7 @@ async def health_check():
     """Health check endpoint — verifies all dependencies"""
     from enterprise_agent.db.mysql import async_session_factory
     from enterprise_agent.db.redis import get_redis
+    from enterprise_agent.observability.release import build_identity
 
     status = "healthy"
     checks = {}
@@ -185,6 +214,7 @@ async def health_check():
     return {
         "status": status,
         "version": settings.APP_VERSION,
+        "build": build_identity(),
         "name": settings.APP_NAME,
         "checks": checks
     }

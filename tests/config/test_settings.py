@@ -52,6 +52,8 @@ def test_default_context_and_cumulative_budget_policy():
     assert fields["MODEL_CONTEXT_WINDOW_TOKENS"].default == 1_000_000
     assert fields["MODEL_CONTEXT_WINDOW_MODEL_ID"].default == "deepseek-v4-flash"
     assert fields["CONTEXT_COMPRESSION_RATIO"].default == 0.8
+    assert fields["MICROCOMPACT_KEEP_LAST"].default == 15
+    assert fields["MICROCOMPACT_MIN_CHARS"].default == 4_000
     assert fields["TASK_TOKEN_BUDGET"].default == 4_000_000
     assert fields["SESSION_TOKEN_BUDGET"].default == 0
 

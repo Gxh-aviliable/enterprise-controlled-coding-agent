@@ -1,0 +1,72 @@
+{
+  "updated_at": "2026-09-14T14:35:01.286982",
+  "source_sha256": "09f808c317008df8b03a9cd3eebdfde01defafcd2693edc1a90a93b50243b0ea",
+  "implementation_root": "/Users/gxh/学生时代/my_mini_claude_code",
+  "project": "docker",
+  "health": {
+    "status": "healthy",
+    "version": "0.1.0",
+    "build": {
+      "source_sha256": "09f808c317008df8b03a9cd3eebdfde01defafcd2693edc1a90a93b50243b0ea",
+      "qualification": "diagnostic-snapshot",
+      "git": {
+        "commit": "0648e72dad083e21a70eb8811e1e0dc890bd5714",
+        "branch": "feature/verified-agent-delivery",
+        "dirty": true
+      }
+    },
+    "name": "Enterprise Agent",
+    "checks": {
+      "mysql": "ok",
+      "redis": "ok"
+    }
+  },
+  "images": {
+    "api": {
+      "before": "sha256:800b77bd0817ad4480ad01d1e93f6676a7723de9636827a1dfd1bd90835ebd1b",
+      "after": "sha256:41f7c7d3b15dc1e84606c3128f3ba8fc93a50f83da1e3906c861709bf3ae37e8"
+    },
+    "frontend": {
+      "before": "sha256:7990af0cb2813cedb32f4176f65b919b5f5cbc76cafd1d63e15499624bb2eee9",
+      "after": "sha256:a893f1c80076d0d4f77aaca8a59b44b312ed10bf4c684faf6641b4d8b3b5338c"
+    }
+  },
+  "volumes_unchanged": true,
+  "database_containers_unchanged": true,
+  "volumes": {
+    "api": [
+      [
+        "docker_chroma_data",
+        "/data/chroma"
+      ],
+      [
+        "docker_huggingface_cache",
+        "/data/huggingface"
+      ],
+      [
+        "docker_managed_shared_skills",
+        "/data/shared-skills"
+      ],
+      [
+        "docker_workspace_data",
+        "/workspaces"
+      ]
+    ],
+    "frontend": [],
+    "mysql": [
+      [
+        "docker_mysql_data",
+        "/var/lib/mysql"
+      ]
+    ],
+    "redis": [
+      [
+        "docker_redis_data",
+        "/data"
+      ]
+    ]
+  },
+  "backup": "logs/goal-backups/20260914-142539",
+  "frontend_http_status": 200,
+  "remote_touched": false
+}

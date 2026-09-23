@@ -1,0 +1,20 @@
+# Layer over the single implementation source's docker/docker-compose.yml.
+# Use scripts/local_demo.sh; private environment/state stay under ignored logs/.
+services:
+  api:
+    image: enterprise-agent-api:workbench
+    env_file:
+      - ${DEMO_PROJECT_ROOT:?Set DEMO_PROJECT_ROOT}/.env
+    environment:
+      ENABLE_MULTI_AGENT: "true"
+      SANDBOX_IMAGE: ${DEMO_SANDBOX_IMAGE:-enterprise-agent-sandbox-python-node:1}
+      GITHUB_ENABLED: "false"
+      GITHUB_MASTER_KEY: ""
+    ports: !override
+      - "127.0.0.1:8000:8000"
+  frontend:
+    image: enterprise-agent-frontend:workbench
+    ports: !override
+      - "127.0.0.1:3000:80"
+  sandbox-reaper:
+    image: enterprise-agent-sandbox-reaper:local-demo

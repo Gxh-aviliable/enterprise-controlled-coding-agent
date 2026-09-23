@@ -51,6 +51,14 @@ class TestAgentStateDefinition:
         """Memory flushing is managed by the accumulator, not a stale flag."""
         assert "pending_memory_flush" not in AgentState.__annotations__
 
+    def test_state_does_not_keep_unused_should_end_flag(self):
+        """Terminal routing uses task_status and should_end_after_save."""
+        assert "should_end" not in AgentState.__annotations__
+
+    def test_only_messages_is_required_at_type_level(self):
+        """Nodes and restored legacy checkpoints may provide partial state."""
+        assert AgentState.__required_keys__ == frozenset({"messages"})
+
 
 class TestAgentStateUsage:
     """Test AgentState can be used as a dict."""
@@ -67,7 +75,6 @@ class TestAgentStateUsage:
             "tool_results": {},
             "tool_call_stats": {},
             "should_compress": False,
-            "should_end": False,
             "rounds_without_todo": 0,
             "used_todo_last_round": False,
             "has_open_todos": False,

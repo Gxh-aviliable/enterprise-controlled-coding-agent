@@ -1,0 +1,5 @@
+{
+  "source_sha256": "1d8434bb0ff1de7422e62cf02a1894f743c35931dc8dbe7b19eda3afcac894b0",
+  "scope": "synthetic isolated browser; no fixture credentials archived",
+  "cross_user": "trace/diff/events/restore 404; traversal 500 is failed experiment, fixed afterwards"
+}

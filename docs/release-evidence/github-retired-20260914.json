@@ -1,0 +1,137 @@
+{
+  "release": "20260914-workbench",
+  "frontend_tests": 99,
+  "backend_tests": 9,
+  "local": {
+    "target": "local",
+    "checks": {
+      "/": 200,
+      "/api/health": 200,
+      "/api/github/settings": 404,
+      "/api/github/connection": 404,
+      "/api/github/repositories": 404
+    },
+    "settings": {
+      "github_enabled": false,
+      "github_key_present": false,
+      "multi_enabled": true,
+      "executor": "docker",
+      "github_routes": 0
+    },
+    "api": {
+      "image": "enterprise-agent-api:workbench",
+      "image_id": "sha256:800b77bd0817ad4480ad01d1e93f6676a7723de9636827a1dfd1bd90835ebd1b",
+      "health": "healthy",
+      "github_state_mounted": false
+    },
+    "frontend": {
+      "image": "enterprise-agent-frontend:workbench",
+      "image_id": "sha256:7990af0cb2813cedb32f4176f65b919b5f5cbc76cafd1d63e15499624bb2eee9",
+      "health": "healthy",
+      "github_state_mounted": false
+    },
+    "frontend_github_assets_removed": true,
+    "mysql": {
+      "status": "running",
+      "started_at": "2026-08-27T08:00:42.471356542Z"
+    },
+    "redis": {
+      "status": "running",
+      "started_at": "2026-08-27T08:00:42.473049084Z"
+    },
+    "sandbox-reaper": {
+      "status": "running",
+      "started_at": "2026-09-13T16:51:50.328790172Z"
+    },
+    "database_revision": "20260914_0006",
+    "passed": true
+  },
+  "server": {
+    "target": "server",
+    "checks": {
+      "/": 200,
+      "/api/health": 200,
+      "/api/github/settings": 404,
+      "/api/github/connection": 404,
+      "/api/github/repositories": 404
+    },
+    "settings": {
+      "github_enabled": false,
+      "github_key_present": false,
+      "multi_enabled": true,
+      "executor": "docker",
+      "github_routes": 0
+    },
+    "api": {
+      "image": "mini-claude-api:20260914-workbench",
+      "image_id": "sha256:950ad9d603236f55f67db2faff4d4944a92765cf5f4e4b0991a2bf390013c56a",
+      "health": "healthy",
+      "github_state_mounted": false
+    },
+    "frontend": {
+      "image": "mini-claude-frontend:20260914-workbench",
+      "image_id": "sha256:fe0ebea2bd75daf19195abab13e28c499ce50c2b3a00d3bfe9a31741441b30ac",
+      "health": "healthy",
+      "github_state_mounted": false
+    },
+    "frontend_github_assets_removed": true,
+    "mysql": {
+      "status": "running",
+      "started_at": "2026-09-07T09:03:04.014063517Z"
+    },
+    "redis": {
+      "status": "running",
+      "started_at": "2026-09-07T09:03:04.015211611Z"
+    },
+    "sandbox-reaper": {
+      "status": "running",
+      "started_at": "2026-09-13T17:19:04.293275199Z"
+    },
+    "database_revision": "20260914_0006",
+    "passed": true
+  },
+  "local_integration": {
+    "health": {
+      "status": "healthy",
+      "version": "0.1.0",
+      "name": "Enterprise Agent",
+      "checks": {
+        "mysql": "ok",
+        "redis": "ok"
+      }
+    },
+    "github_routes_removed_for_free_user": true,
+    "capabilities": {
+      "default_mode": "single_agent",
+      "available_modes": [
+        "single_agent",
+        "multi_agent"
+      ],
+      "multi_agent_enabled": true,
+      "multi_agent_permitted": true,
+      "multi_agent_reason": null
+    },
+    "github_routes_removed_for_admin": true,
+    "file_edit_and_stale_write_rejection": true,
+    "real_shell": {
+      "executor": "docker",
+      "cleanup_confirmed": true,
+      "network_blocked": true,
+      "consecutive_calls_persist": true
+    },
+    "passed": true,
+    "temporary_account_removed": true
+  },
+  "public_http": {
+    "/": 200,
+    "/api/health": 200,
+    "/api/github/settings": 404,
+    "/api/github/connection": 404
+  },
+  "database_schema_check": "No new upgrade operations detected",
+  "limitations": [
+    "Browser complete click flow not rerun",
+    "Live model calls not repeated during retirement",
+    "Historical GitHub data preserved; internal modules inactive"
+  ]
+}

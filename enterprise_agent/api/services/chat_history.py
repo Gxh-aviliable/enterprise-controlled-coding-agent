@@ -12,7 +12,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from enterprise_agent.models.chat_message import ChatMessage
 from enterprise_agent.models.session import Session
 
-_OPEN_TOOL_STATUSES = {"running", "waiting"}
+_OPEN_TOOL_STATUSES = {"running", "waiting", "queued"}
 _TERMINAL_TOOL_STATUSES = {"done", "error", "rejected"}
 _TOOL_STATUS_ALIASES = {
     "approval_rejected": "rejected",
@@ -25,6 +25,7 @@ _TOOL_STATUS_ALIASES = {
     "not_approved": "rejected",
     "rejected": "rejected",
     "success": "done",
+    "queued": "queued",
     "succeeded": "done",
     "timeout": "error",
     "waiting_confirmation": "waiting",
@@ -128,6 +129,9 @@ def merge_timeline(
             merged.append({
                 "role": "tool_call",
                 "toolCallId": tool_id,
+                **({"toolEventSeq": int(raw_entry["toolEventSeq"])} if raw_entry.get("toolEventSeq") else {}),
+                **({"parentToolCallId": str(raw_entry["parentToolCallId"])}
+                   if raw_entry.get("parentToolCallId") else {}),
                 "toolName": tool_name or "tool",
                 "toolStatus": incoming_status or "running",
                 "toolResult": _timeline_text(raw_result) if result_present else "",
@@ -137,6 +141,13 @@ def merge_timeline(
             return
 
         block = merged[match_index]
+        if raw_entry.get("toolEventSeq"):
+            sequence = int(raw_entry["toolEventSeq"])
+            if sequence < block.get("toolEventSeq", 0):
+                return
+            block["toolEventSeq"] = sequence
+        if raw_entry.get("parentToolCallId"):
+            block["parentToolCallId"] = str(raw_entry["parentToolCallId"])
         if tool_id:
             block["toolCallId"] = tool_id
         if name_present and tool_name:
@@ -189,6 +200,9 @@ def terminalize_timeline(
 def serialize_message(message: ChatMessage) -> dict[str, Any]:
     """Return the stable frontend message shape."""
     serialized: dict[str, Any] = {"role": message.role, "content": message.content}
+    if message.role == "assistant" and getattr(message, "trace_id", None):
+        serialized["trace_id"] = message.trace_id
+        serialized["status"] = getattr(message, "status", None)
     timeline = merge_timeline(None, getattr(message, "timeline", None))
     if message.role == "assistant" and timeline:
         serialized["timeline"] = timeline

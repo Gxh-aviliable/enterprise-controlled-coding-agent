@@ -9,7 +9,7 @@
       <button class="icon-button" title="Close admin console" @click="$emit('close')">×</button>
     </header>
 
-    <div :class="['scope-bar', { elevated: grantActive }]">
+    <div v-if="section !== 'skills'" :class="['scope-bar', { elevated: grantActive }]">
       <div class="scope-state">
         <span class="scope-dot"></span>
         <div>
@@ -200,10 +200,17 @@
 
         <section v-else-if="section === 'skills'" class="panel-stack">
           <div class="section-heading">
-            <div><span>PROMPT SUPPLY CHAIN</span><h2>Shared Skill registry</h2></div>
-            <button class="primary-button" @click="newSkill">New managed Skill</button>
+            <div><span>管理员发布</span><h2>公共 Skill 管理</h2></div>
+            <button class="primary-button" @click="newSkill">新建公共 Skill</button>
           </div>
 
+          <div class="controls">
+            <label>导入完整 ZIP 包<input type="file" accept=".zip" @change="previewAdminPackage" /></label>
+            <select v-if="adminImport" v-model="adminCandidate" aria-label="公共 Skill 候选">
+              <option v-for="(item, i) in adminImport.candidates" :key="i" :value="i" :disabled="!item.valid">{{ item.metadata?.name || item.path }} · {{ item.valid ? item.path : item.error }}</option>
+            </select>
+            <button v-if="adminImport" @click="loadAdminPackage">预览候选到草稿编辑器</button>
+          </div>
           <div class="skills-layout">
             <div class="data-panel skill-list">
               <button
@@ -211,38 +218,40 @@
                 :key="`${skill.source}-${skill.name}`"
                 :class="{ selected: skillEditor.name === skill.name }"
                 @click="selectSkill(skill)"
+                :disabled="loading"
               >
                 <span><strong>{{ skill.name }}</strong><small>{{ skill.description || 'No description' }}</small></span>
-                <span :class="['status-pill', skill.status === 'published' || skill.status === 'builtin' ? 'succeeded' : 'pending']">{{ skill.status }}</span>
+                <span :class="['status-pill', skill.status === 'published' ? 'succeeded' : 'pending']">{{ ({ published: '已发布', draft: '草稿', retired: '已下架' })[skill.status] || skill.status }}</span>
               </button>
             </div>
 
             <div class="data-panel skill-editor">
               <div class="panel-title">
-                <div><h3>{{ skillEditor.name || 'Select a Skill' }}</h3><span>{{ skillEditor.source === 'builtin' ? 'Built-in Skills are immutable.' : 'Managed versions are persisted and auditable.' }}</span></div>
+                <div><h3>{{ skillEditor.name || '选择一个 Skill' }}</h3><span>编辑后保存草稿，再发布给所有用户。</span></div>
                 <code v-if="skillEditor.active_version">v{{ skillEditor.active_version }}</code>
               </div>
               <template v-if="skillEditor.name">
                 <div class="form-grid two">
-                  <label>Name<input v-model="skillEditor.name" :disabled="Boolean(skillEditor.persisted)" placeholder="python-quality" /></label>
-                  <label>Description<input v-model="skillEditor.description" :disabled="skillEditor.source === 'builtin'" /></label>
+                  <label>名称<input v-model="skillEditor.name" :disabled="Boolean(skillEditor.persisted)" placeholder="python-quality" /></label>
+                  <label>用途<input v-model="skillEditor.description" /></label>
                 </div>
                 <label class="editor-label">SKILL.md
-                  <textarea v-model="skillEditor.content" :disabled="skillEditor.source === 'builtin'" rows="18" spellcheck="false"></textarea>
+                  <textarea v-model="skillEditor.content" rows="18" spellcheck="false"></textarea>
                 </label>
+                <ul v-if="skillEditor.package"><li v-for="path in Object.keys(skillEditor.package)" :key="path"><code>{{ path }}</code></li></ul>
                 <div v-if="skillValidation" :class="['validation-box', { invalid: !skillValidation.valid }]">
                   <strong>{{ skillValidation.valid ? 'Validation passed' : 'Validation failed' }}</strong>
                   <span>{{ skillValidation.bytes }} bytes · ~{{ skillValidation.estimated_tokens }} tokens</span>
                   <ul v-if="skillValidation.errors?.length"><li v-for="item in skillValidation.errors" :key="item">{{ item }}</li></ul>
                   <ul v-if="skillValidation.warnings?.length"><li v-for="item in skillValidation.warnings" :key="item">{{ item }}</li></ul>
                 </div>
-                <template v-if="skillEditor.source !== 'builtin'">
+                <template v-if="skillEditor.name">
                   <div class="skill-actions">
-                    <button class="secondary-button" @click="saveSkill">Save draft</button>
-                    <button class="secondary-button" :disabled="!skillEditor.persisted" @click="validateSkill">Validate</button>
-                    <input v-model="skillChangelog" placeholder="Version changelog" />
-                    <button class="primary-button" :disabled="!skillEditor.persisted || skillChangelog.length < 3" @click="publishSkill">Publish version</button>
-                    <button v-if="skillEditor.status === 'published'" class="danger-button" @click="retireSkill">Retire</button>
+                    <button class="secondary-button" @click="saveSkill">保存草稿</button>
+                    <button class="secondary-button" :disabled="!skillEditor.persisted" @click="validateSkill">校验</button>
+                    <input v-model="skillChangelog" placeholder="说明本次修改" />
+                    <button class="primary-button" :disabled="!skillEditor.persisted || skillChangelog.length < 3" @click="publishSkill">发布版本</button>
+                    <button v-if="skillEditor.status === 'published'" class="danger-button" @click="retireSkill">下架</button>
                   </div>
                   <div v-if="skillEditor.versions?.length" class="version-list">
                     <span v-for="version in skillEditor.versions" :key="version.version">
@@ -251,12 +260,12 @@
                         v-if="version.version !== skillEditor.active_version"
                         :disabled="skillChangelog.length < 3"
                         @click="rollbackSkill(version.version)"
-                      >Roll back</button>
+                      >回滚</button>
                     </span>
                   </div>
                 </template>
               </template>
-              <div v-else class="empty-state">Select an existing Skill or create a managed draft.</div>
+              <div v-else class="empty-state">选择一个公共 Skill，或新建草稿。</div>
             </div>
           </div>
         </section>
@@ -302,7 +311,7 @@ defineEmits(['close'])
 const sections = [
   { id: 'overview', label: 'Overview', mark: 'O' },
   { id: 'users', label: 'Users', mark: 'U' },
-  { id: 'skills', label: 'Shared Skills', mark: 'S' },
+  { id: 'skills', label: '公共 Skills', mark: 'S' },
   { id: 'audit', label: 'Audit Log', mark: 'A' },
   { id: 'system', label: 'System', mark: '●' }
 ]
@@ -326,6 +335,7 @@ const grantReason = ref('')
 const activeGrant = ref(null)
 const skills = ref([])
 const skillEditor = reactive({ name: '', description: '', content: '', source: 'managed', persisted: false, versions: [] })
+const adminImport = ref(null), adminCandidate = ref(0)
 const skillValidation = ref(null)
 const skillChangelog = ref('')
 const auditLogs = ref([])
@@ -473,28 +483,39 @@ async function readSelectedWorkspaceFile() {
   if (data) workspacePreview.value = data
 }
 
+async function previewAdminPackage(event) {
+  const file = event.target.files?.[0]
+  if (!file) return
+  adminImport.value = await run(() => api.previewSkillZip(file))
+  adminCandidate.value = Math.max(0, adminImport.value?.candidates.findIndex(c => c.valid) || 0)
+}
+async function loadAdminPackage() {
+  const data = await run(() => api.getSkillImportCandidate(adminImport.value.preview_id, adminCandidate.value))
+  if (data?.valid) resetSkillEditor({ name: data.metadata.name, description: data.metadata.description, content: data.content, package: data.package })
+}
+
 async function loadSkills() {
   const data = await run(() => api.listAdminSkills())
-  if (data) skills.value = data.items
+  if (data) {
+    skills.value = data.items
+    if (!skillEditor.name && data.items.length) await selectSkill(data.items[0])
+  }
 }
 
 function resetSkillEditor(value = {}) {
-  Object.assign(skillEditor, { name: '', description: '', content: '', source: 'managed', persisted: false, status: 'draft', versions: [], ...value })
+  Object.assign(skillEditor, { name: '', description: '', content: '', source: 'managed', persisted: false, status: 'draft', versions: [], package: null, revision: null, ...value })
   skillValidation.value = null
   skillChangelog.value = ''
 }
 
 function newSkill() {
   resetSkillEditor({
+    name: 'new-skill',
     content: '---\nname: new-skill\ndescription: Explain what this guidance controls\n---\n\n# Managed Skill\n\nAdd precise, reusable guidance here.\n'
   })
 }
 
 async function selectSkill(skill) {
-  if (skill.source === 'builtin') {
-    resetSkillEditor({ ...skill, content: '', persisted: true, source: 'builtin' })
-    return
-  }
   const data = await run(() => api.getAdminSkill(skill.name))
   if (!data) return
   resetSkillEditor({ ...data, content: data.draft_content, persisted: true, source: 'managed' })
@@ -502,12 +523,14 @@ async function selectSkill(skill) {
 }
 
 async function saveSkill() {
-  const data = await run(() => api.saveAdminSkillDraft({ name: skillEditor.name, description: skillEditor.description, content: skillEditor.content }))
+  const data = await run(() => api.saveAdminSkillDraft({ name: skillEditor.name, description: skillEditor.description, content: skillEditor.content, package: skillEditor.package, expected_revision: skillEditor.revision }))
   if (!data) return
   skillEditor.persisted = true
   skillEditor.status = data.status
+  skillEditor.revision = data.revision
+  skillEditor.updated_at = data.updated_at
   skillValidation.value = data.validation
-  notice.value = 'Shared Skill draft saved.'
+  notice.value = '公共 Skill 草稿已保存。'
   await loadSkills()
 }
 
@@ -517,7 +540,7 @@ async function validateSkill() {
 }
 
 async function publishSkill() {
-  const data = await run(() => api.publishAdminSkill(skillEditor.name, skillChangelog.value))
+  const data = await run(() => api.publishAdminSkill(skillEditor.name, skillChangelog.value, skillEditor.updated_at, skillEditor.revision))
   if (!data) return
   notice.value = `Published ${data.name} v${data.version}.`
   skillChangelog.value = ''
@@ -680,6 +703,7 @@ input:focus, textarea:focus { border-color: #7770e7; box-shadow: 0 0 0 3px #eeee
 .skill-list button { width: 100%; border: 0; border-bottom: 1px solid #eef0f3; background: #fff; padding: 11px 12px; display: flex; justify-content: space-between; gap: 8px; text-align: left; cursor: pointer; }
 .skill-list button:hover, .skill-list button.selected { background: #f4f4fb; }
 .skill-list button > span:first-child { min-width: 0; display: grid; }
+.skill-list .status-pill { flex-shrink: 0; align-self: center; white-space: nowrap; }
 .skill-list strong { font: 700 12px var(--font-mono); }
 .skill-list small { color: #8a92a2; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; }
 .skill-editor { padding: 0 16px 16px; }

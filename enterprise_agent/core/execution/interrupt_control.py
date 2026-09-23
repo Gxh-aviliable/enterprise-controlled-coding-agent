@@ -414,10 +414,9 @@ def _get_sync_redis():
 def is_current_task_cancel_requested_sync() -> bool:
     """Poll the exact Redis tombstone from synchronous tools such as ``bash``.
 
-    Missing task context deliberately means "not cancellable" so command tools
-    keep their existing CLI/test behavior. Redis transport failures also return
-    false: the HTTP Stop path must fail closed and retain its active lease, while
-    a transient polling failure must not invent a cancellation.
+    Missing task context deliberately keeps CLI/test behavior. A Redis failure
+    cannot verify the runner fence, so active execution stops conservatively;
+    API state recovery reports the control failure instead of replaying tools.
     """
     identity = get_current_task_control_identity()
     if identity is None:
@@ -442,8 +441,8 @@ def is_current_task_cancel_requested_sync() -> bool:
                 return True
         raw = redis.get(_cancel_key(user_id, session_id, trace_id))
     except Exception:
-        logger.warning("Synchronous cancellation poll failed", exc_info=True)
-        return False
+        logger.warning("Runner control unavailable; stopping execution", exc_info=True)
+        return True
     if raw is None:
         return False
     try:

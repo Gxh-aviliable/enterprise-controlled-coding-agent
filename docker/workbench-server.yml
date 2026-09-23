@@ -1,0 +1,14 @@
+# Current workbench deployment. The retired GitHub integration stays disabled.
+services:
+  api:
+    image: mini-claude-api:20260923-skill-ownership
+    environment:
+      ENABLE_MULTI_AGENT: "true"
+      SANDBOX_IMAGE: mini-claude-executor:20260916-workbench-r2
+      SANDBOX_NETWORK_ENABLED: "true"
+      GITHUB_ENABLED: "false"
+      GITHUB_MASTER_KEY: ""
+  frontend:
+    image: mini-claude-frontend:20260923-skill-ownership
+  sandbox-reaper:
+    image: mini-claude-sandbox-reaper:20260916-workbench-r2

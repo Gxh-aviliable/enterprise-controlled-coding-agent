@@ -1,0 +1,44 @@
+{
+  "initial": {
+    "passed": 6,
+    "failed": 2,
+    "expected_failure": true,
+    "failed_tests": [
+      "test_checkout_rules[free-shipping-boundary]",
+      "test_checkout_rules[discount-boundary]"
+    ]
+  },
+  "corrected_temporary_copy": {
+    "passed": 8,
+    "failed": 0,
+    "uploaded": false
+  },
+  "files": {
+    "README.md": "9caf19ef8fc08414cf16006fa22d24eceab75dfafa7b5d1fa891890a37e9a87a",
+    "checkout.py": "50b4251e617ffdc6690fcf0fcfffc70ca62490eac2f7abb21830339d8fa2adde",
+    "test_checkout.py": "93a50bc56bf6ad2822a0ec94858a77959059628a5997c6765967de44e7dfe671"
+  },
+  "upload": {
+    "username": "Gxh",
+    "user_id": 5,
+    "workspace_directory": "/workspaces/user_5/GXH",
+    "files": {
+      "README.md": "9caf19ef8fc08414cf16006fa22d24eceab75dfafa7b5d1fa891890a37e9a87a",
+      "checkout.py": "50b4251e617ffdc6690fcf0fcfffc70ca62490eac2f7abb21830339d8fa2adde",
+      "test_checkout.py": "93a50bc56bf6ad2822a0ec94858a77959059628a5997c6765967de44e7dfe671"
+    }
+  },
+  "server_test": {
+    "image": "mini-claude-executor:20260916-workbench-r2",
+    "exit_code": 1,
+    "passed": 6,
+    "failed": 2,
+    "failures_expected": true,
+    "failed_tests": [
+      "test_checkout.py::test_checkout_rules[free-shipping-boundary]",
+      "test_checkout.py::test_checkout_rules[discount-boundary]"
+    ],
+    "readonly_workspace_mount": true,
+    "output": "..F..F..                                                                 [100%]\n=================================== FAILURES ===================================\n_________________ test_checkout_rules[free-shipping-boundary] __________________\n\nsubtotal = '99.00', discount = '0.00', shipping = '0.00', total = '99.00'\n\n    @pytest.mark.parametrize(\n        \"subtotal,discount,shipping,total\",\n        [\n            (\"1.00\", \"0.00\", \"8.00\", \"9.00\"),\n            (\"98.99\", \"0.00\", \"8.00\", \"106.99\"),\n            (\"99.00\", \"0.00\", \"0.00\", \"99.00\"),\n            (\"99.01\", \"0.00\", \"0.00\", \"99.01\"),\n            (\"199.99\", \"0.00\", \"0.00\", \"199.99\"),\n            (\"200.00\", \"20.00\", \"0.00\", \"180.00\"),\n            (\"200.01\", \"20.00\", \"0.00\", \"180.01\"),\n            (\"399.00\", \"20.00\", \"0.00\", \"379.00\"),\n        ],\n        ids=[\"small-order\", \"below-free-shipping\", \"free-shipping-boundary\",\n             \"above-free-shipping\", \"below-discount\", \"discount-boundary\",\n             \"above-discount\", \"larger-order\"],\n    )\n    def test_checkout_rules(subtotal, discount, shipping, total):\n>       assert checkout(subtotal) == {\n            \"subtotal\": Decimal(subtotal),\n            \"discount\": Decimal(discount),\n            \"shipping\": Decimal(shipping),\n            \"total\": Decimal(total),\n        }\nE       AssertionError: assert {'discount': ...mal('107.00')} == {'discount': ...imal('99.00')}\nE         \nE         Omitting 2 identical items, use -vv to show\nE         Differing items:\nE         {'total': Decimal('107.00')} != {'total': Decimal('99.00')}\nE         {'shipping': Decimal('8.00')} != {'shipping': Decimal('0.00')}\nE         Use -v to get more diff\n\ntest_checkout.py:25: AssertionError\n____________________ test_checkout_rules[discount-boundary] ____________________\n\nsubtotal = '200.00', discount = '20.00', shipping = '0.00', total = '180.00'\n\n    @pytest.mark.parametrize(\n        \"subtotal,discount,shipping,total\",\n        [\n            (\"1.00\", \"0.00\", \"8.00\", \"9.00\"),\n            (\"98.99\", \"0.00\", \"8.00\", \"106.99\"),\n            (\"99.00\", \"0.00\", \"0.00\", \"99.00\"),\n            (\"99.01\", \"0.00\", \"0.00\", \"99.01\"),\n            (\"199.99\", \"0.00\", \"0.00\", \"199.99\"),\n            (\"200.00\", \"20.00\", \"0.00\", \"180.00\"),\n            (\"200.01\", \"20.00\", \"0.00\", \"180.01\"),\n            (\"399.00\", \"20.00\", \"0.00\", \"379.00\"),\n        ],\n        ids=[\"small-order\", \"below-free-shipping\", \"free-shipping-boundary\",\n             \"above-free-shipping\", \"below-discount\", \"discount-boundary\",\n             \"above-discount\", \"larger-order\"],\n    )\n    def test_checkout_rules(subtotal, discount, shipping, total):\n>       assert checkout(subtotal) == {\n            \"subtotal\": Decimal(subtotal),\n            \"discount\": Decimal(discount),\n            \"shipping\": Decimal(shipping),\n            \"total\": Decimal(total),\n        }\nE       AssertionError: assert {'discount': ...mal('200.00')} == {'discount': ...mal('180.00')}\nE         \nE         Omitting 2 identical items, use -vv to show\nE         Differing items:\nE         {'total': Decimal('200.00')} != {'total': Decimal('180.00')}\nE         {'discount': Decimal('0.00')} != {'discount': Decimal('20.00')}\nE         Use -v to get more diff\n\ntest_checkout.py:25: AssertionError\n=========================== short test summary info ============================\nFAILED test_checkout.py::test_checkout_rules[free-shipping-boundary] - Assert...\nFAILED test_checkout.py::test_checkout_rules[discount-boundary] - AssertionEr...\n2 failed, 6 passed in 0.04s\n"
+  }
+}

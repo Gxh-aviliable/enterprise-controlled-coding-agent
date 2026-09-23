@@ -1,0 +1,10 @@
+# Layer after docker-compose.yml and server.yml for the 175 server release.
+services:
+  api:
+    image: mini-claude-api:20260914-github-mvp
+    environment:
+      ENABLE_MULTI_AGENT: "true"
+  frontend:
+    image: mini-claude-frontend:20260914-github-mvp
+  sandbox-reaper:
+    image: mini-claude-sandbox-reaper:20260914-github-mvp

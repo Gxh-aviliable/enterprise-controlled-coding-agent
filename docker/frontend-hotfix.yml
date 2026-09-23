@@ -1,0 +1,4 @@
+# Apply after the workbench layers to update the UI without restarting the API.
+services:
+  frontend:
+    image: mini-claude-frontend:20260923-skill-ownership

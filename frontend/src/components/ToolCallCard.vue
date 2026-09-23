@@ -16,7 +16,7 @@
       </span>
 
       <span class="tool-copy">
-        <span class="tool-kicker">Tool</span>
+        <span class="tool-kicker">{{ parentId ? 'Sub-agent' : 'Tool' }}</span>
         <span class="tool-name">{{ name }}</span>
       </span>
 
@@ -28,6 +28,7 @@
       <div class="tool-body-label">
         {{ status === 'rejected' ? 'Execution decision' : 'Execution output' }}
       </div>
+      <p v-if="parentId" class="tool-body-label">Parent call: {{ parentId }}</p>
       <div v-if="result" class="tool-output">
         <pre>{{ result }}</pre>
       </div>
@@ -52,6 +53,7 @@ import { computed, ref } from 'vue'
 
 const props = defineProps({
   name: { type: String, required: true },
+  parentId: { type: String, default: '' },
   status: { type: String, default: 'running' },  // 'running' | 'waiting' | 'done' | 'rejected' | 'error'
   result: { type: String, default: '' },
   error: { type: String, default: '' },
@@ -68,6 +70,7 @@ const durationLabel = computed(() => {
 })
 
 const stateLabel = computed(() => {
+  if (props.status === 'queued') return 'Queued'
   if (props.status === 'running') return 'Running'
   if (props.status === 'waiting') return 'Approval needed'
   if (props.status === 'done') return durationLabel.value || 'Complete'

@@ -1,0 +1,2984 @@
+{
+  "schema_version": "2.0",
+  "suite_id": "mini-claude-code-v2",
+  "backend": "agent",
+  "mode": "single",
+  "generated_at": "2026-09-14T06:02:06.942415+00:00",
+  "model_id": "deepseek-v4-flash",
+  "official": {
+    "requested": false,
+    "valid": false
+  },
+  "run_metadata": {
+    "code": {
+      "commit": null,
+      "branch": null,
+      "dirty": null,
+      "official_run": false
+    },
+    "suite": {
+      "id": "mini-claude-code-v2",
+      "schema_version": "2.0",
+      "path": "benchmarks/v2/cases.json",
+      "sha256": "f63a76cd2be94db2439649fdeb8f735c243887cc8218dbf5edff22a6d4e3d64b",
+      "selected_case_ids": [
+        "easy.understanding.entrypoint",
+        "easy.understanding.call_chain",
+        "easy.files.read_config",
+        "easy.understanding.test_command"
+      ],
+      "selected_difficulties": [
+        "easy"
+      ],
+      "selected_categories": [
+        "code_understanding",
+        "file_read_write"
+      ]
+    },
+    "execution": {
+      "backend": "agent",
+      "mode": "single",
+      "started_at": "2026-09-14T06:01:52.988716+00:00",
+      "finished_at": "2026-09-14T06:02:06.692398+00:00",
+      "duration_ms": 13703,
+      "python": "3.12.13",
+      "platform": "macOS-26.5.2-arm64-arm-64bit"
+    },
+    "model": {
+      "provider": "deepseek",
+      "model_id": "deepseek-v4-flash",
+      "endpoint": {
+        "scheme": "https",
+        "host": "api.deepseek.com",
+        "port": null,
+        "path": "/anthropic"
+      },
+      "protocol_adapter": "anthropic",
+      "api_key_configured": true,
+      "parameters": {
+        "temperature": "provider_default",
+        "max_output_tokens": 16384,
+        "thinking": "provider_default",
+        "context_window_tokens": 1000000,
+        "context_compression_ratio": 0.8,
+        "context_compression_threshold_tokens": 800000,
+        "max_incomplete_response_recoveries": 2,
+        "max_completion_gate_recoveries": 2,
+        "request_timeout_seconds": 300,
+        "sdk_max_retries": 0
+      }
+    },
+    "agent_limits": {
+      "max_rounds": 20,
+      "max_tool_calls": 25,
+      "task_token_budget": 4000000,
+      "session_token_budget": 0,
+      "command_timeout_seconds": 120,
+      "invoke_timeout_seconds": 600,
+      "verification_max_attempts": 2,
+      "tool_output_max_chars": 50000,
+      "tool_source_capture_max_bytes": 4000000,
+      "tool_artifact_max_chars": 2000000
+    },
+    "dependencies": {
+      "lockfile": "uv.lock",
+      "uv_lock_sha256": "63a40b42f43e9a8edb39377417808126b34fa61e2ccc0e092305c67ffb3465bb",
+      "python_executable": "python",
+      "uv": "uv 0.11.31 (Homebrew 2026-07-22 aarch64-apple-darwin)",
+      "node": "v24.17.0",
+      "npm": "11.13.0"
+    },
+    "source_snapshot": {
+      "qualification": "diagnostic-snapshot",
+      "before_sha256": "25aaab9a26d2d040017b9a9f16781ea4c647af4cb6273c537e55ccec1a26c2b9",
+      "after_sha256": "25aaab9a26d2d040017b9a9f16781ea4c647af4cb6273c537e55ccec1a26c2b9",
+      "unchanged": true,
+      "files": {
+        "enterprise_agent/__init__.py": "e7f9ed0cf3742c347a0452326959ec9f3958cc61e0144851388d22475fbfbfee",
+        "enterprise_agent/admin/__init__.py": "648e890ef38423992e824075f70f41bf0ec0f9ad8795e9458abbc2d165c4b6f9",
+        "enterprise_agent/admin/audit.py": "97b74af9f6c033b98f9df01fe2630a83e5eea789810f33708f36659b5edc29db",
+        "enterprise_agent/admin/quotas.py": "efbf1ebb8b89adb554908a31e91f381a6070b0f41c8069e3bd449924a23c26c8",
+        "enterprise_agent/admin/skills.py": "c839d31ea8af1a57d0110b7ce00a3f8d96cbe6c7fe7fa16b258a0c5fe731e1c3",
+        "enterprise_agent/api/__init__.py": "7df3b1bb030a90a9b33c3e44e2733e08e7d131f8932ff01a1d83b9c516843d12",
+        "enterprise_agent/api/main.py": "607547209b34a72417e7d13c7756c639f8bba585741f491833c63bcde724a449",
+        "enterprise_agent/api/middleware/__init__.py": "799e731a9b32a58db2ec6c2c4ea096d52c636b591830ec0e2edbe4611a1847ea",
+        "enterprise_agent/api/middleware/auth.py": "210c042ab77595391305b8c8425893d3f277e634df521496d8bc032ecca2e073",
+        "enterprise_agent/api/routes/__init__.py": "4cefa5641509425e279eacadd7306a36060b8acece4e24b396a3d0bbc69066a7",
+        "enterprise_agent/api/routes/admin.py": "46b0730ed0416a094c0cb8f3991b32c24dda206a38a5bc6da8468b8052bc0976",
+        "enterprise_agent/api/routes/auth.py": "64663b63b493107d12c70b8b63d70e06f8951a0420d74baa02eee0e68bdf0bd7",
+        "enterprise_agent/api/routes/chat.py": "461a0f2f175cd88e2dcf5a92203dd52e31b2e84a5837e7f50111727cae3d2c41",
+        "enterprise_agent/api/routes/memory.py": "82c1b209d0a47b80c2d9a3b5757a1dc2e1899cb666207d68359884807eb8480d",
+        "enterprise_agent/api/routes/tasks.py": "635ec8adf7767462524abaff993958ca356892796a9fecf3b340407a45685ca7",
+        "enterprise_agent/api/routes/workspace.py": "f983e5c6c8cc6dacd19c1649528614a551c3b4b5a4031a60bb4272fe58199370",
+        "enterprise_agent/api/schemas/__init__.py": "691f9f7d385316848dc1d685cff73021a6139689a79404140e75c23f15ac433a",
+        "enterprise_agent/api/schemas/admin.py": "6cf92d624c487f54a91c330e8504f8509d2e56e2ea6b7026849b08daac0090ce",
+        "enterprise_agent/api/schemas/auth.py": "4280f08a93e4dd89100bfe3ddffa020d286e2e08ae7d06a1349a291d736cd3e7",
+        "enterprise_agent/api/schemas/chat.py": "437f0c0e6297e8b4a52054c8045dd38ff85050654b0c65869b3e9d79b8cb0454",
+        "enterprise_agent/api/schemas/workspace.py": "80e744ebf189d5a3ef91cf29ad46fa7a40c899d108e9bc5aa16663a321dc1691",
+        "enterprise_agent/api/services/__init__.py": "4875bd857468cd38b327dc9ffef2f10d0d44d58508408ce4a750c6620b8105aa",
+        "enterprise_agent/api/services/chat_history.py": "ea8ac32f435e5c7e51f8f388e6a6318be7144e673e65183b75731d7b7fbfff99",
+        "enterprise_agent/api/services/workspace_read.py": "802264f0a09f693a763d9244b4bb3daffc0684f01a8c03b47dc465221c5d569a",
+        "enterprise_agent/auth/__init__.py": "2cad72d15f9d7c7274da72adf5e7bd09071bc22c9eac0e99a2a30e28a62f626e",
+        "enterprise_agent/auth/email.py": "b0880c2f60f7ef9d410fa4128a790ca906f8f6c1babc2519cc962d5e6b970616",
+        "enterprise_agent/auth/jwt_handler.py": "e21791f0fb2092849ae7c28d8c8b4a2a7dc7946bfc2f1fc6e18e4cb2d6c748ea",
+        "enterprise_agent/auth/permissions.py": "40eeb964f6a079294603885ad1e6370cca9a42d36ad1337831c4f29e7b0207ed",
+        "enterprise_agent/config/__init__.py": "c4430f1c3c2228cdb8c54b939203864bdfb11a239f1c7993f0de25138454f44c",
+        "enterprise_agent/config/settings.py": "110ec61e49c4b0232077d0b23c5bc394c942985f9e9617dfea7a633fa55eb156",
+        "enterprise_agent/core/__init__.py": "5c413135ee71e4f8b8d2f2658fb768bdf53a2e2af3373eea71093352a62575fb",
+        "enterprise_agent/core/agent/__init__.py": "d1019c412d5789da751e1afbb48a0f94d5ad28c87070ff9480ab9bf9ff936e89",
+        "enterprise_agent/core/agent/context.py": "72726d98a239da0b3a84ef6e5085583fb4fb02f7452ddf24c43f64ca1faecb37",
+        "enterprise_agent/core/agent/graph.py": "ad99d635b01c43521172a9b524610784ba805dfdbcaa24a67d0f4c8a91075b55",
+        "enterprise_agent/core/agent/llm_factory.py": "1ebc20013f6870264bead968010b7524c79a97cceed1c75f6a67b3451f50388e",
+        "enterprise_agent/core/agent/message_content.py": "a020e12e5758a8320bc8b56095f9f170a305c3a01fca0e999fefe8aed9e69d68",
+        "enterprise_agent/core/agent/nodes.py": "0dfe0ea169d561b8f9e20e801891b1ca123abcb532fa583569be6115a9e4b099",
+        "enterprise_agent/core/agent/project_context.py": "08ba01f6a71a75c32313fa8605dfdd4484a2574b0351596e4411184063ae0399",
+        "enterprise_agent/core/agent/state.py": "c5fb2c57e3607641a59c32494a4a25efebc634a950b3d7b740b8bc6831909aa0",
+        "enterprise_agent/core/agent/tool_artifacts.py": "b75416cf4385bc4c8892898e4995e747cf86b72c04fdf14a9d264935d14729c4",
+        "enterprise_agent/core/agent/tools/__init__.py": "5772199bd805490696ac47f673845534338ba1603fde70a282681c27e605103a",
+        "enterprise_agent/core/agent/tools/background.py": "75c6311ade965cdd340fb516d657708f8239e3f5eb41ea9f4696bf94616dd4e9",
+        "enterprise_agent/core/agent/tools/context_tools.py": "cf2ed58085a068c0c6b711f5c6e950f035c1303558119b8dfe32582438eb8e7f",
+        "enterprise_agent/core/agent/tools/contracts.py": "c57454bf0830e07fbe65109ed76eb0ed4cab7b143322758053658997db219bac",
+        "enterprise_agent/core/agent/tools/file_ops.py": "de6089d239de3376d6493b55cc00f4682c40e03735640d3d73d19a05204ae930",
+        "enterprise_agent/core/agent/tools/memory.py": "5fdb38efd88ecac8bb09ce22c00a73ad390019c591bac222f3a358012aa9d855",
+        "enterprise_agent/core/agent/tools/shell.py": "5b9c6d06955abed74db997a28eb6f8670b69a3b5388ac1036cff8f7c94fdf731",
+        "enterprise_agent/core/agent/tools/skills.py": "6633dadf7554793748a5dc4ddd0d3604d861ce963f20a9edfa5a4e294cfb62e2",
+        "enterprise_agent/core/agent/tools/subagent.py": "af5877519f94dc06c9eca5cbd37bafeb4407f819d574a6b9a7a68d725bc4764c",
+        "enterprise_agent/core/agent/tools/task.py": "b4404cc95f94e74631e9f862aed257d24c8971b3a943696ca442cbda7230d722",
+        "enterprise_agent/core/agent/tools/team.py": "4b7f727e7eb2cc6caa313668c30a0e37b158da41bea51f1216cdb2c271d2002f",
+        "enterprise_agent/core/agent/tools/workspace.py": "5076299060f84353cef8d06d54145c04f314feffc6932b951962670281b3cd7b",
+        "enterprise_agent/core/agent/tools/workspace_lock.py": "7da0c6510902d09ca1d57c876236fc7e7c2fb93119388cc7c1138b6d71fe8b86",
+        "enterprise_agent/core/execution/__init__.py": "c09c673ddf4906be3996c711e31645c9ccdefda481cbe15904f58271a0c8823d",
+        "enterprise_agent/core/execution/approvals.py": "de1d3cb791d1abebb10b954b9d84b0cee381a398b1799beb851c831a2a3472d2",
+        "enterprise_agent/core/execution/changes.py": "79bb8503c52dd464931f4cffa02fac44d180dd890ec615d31593f7c50618326b",
+        "enterprise_agent/core/execution/child_store.py": "afb9f7f5a66450b790b583725148e7d2d90c42519f8f89a05b43e754a2eeaccf",
+        "enterprise_agent/core/execution/child_workspace.py": "7ddc36c70dc70b68b7a846af5e05ee2167eb22deeb279a6355e43a09fceccfb3",
+        "enterprise_agent/core/execution/children.py": "a69756131e3c3eb27c1190cc72bfe61f9504b4f57de3e22a8f91db438628d7fc",
+        "enterprise_agent/core/execution/events.py": "69b312815e9490352267aa180a83028ab84780548117f4ba12f52b36c8d03542",
+        "enterprise_agent/core/execution/evidence.py": "c4cd90951eb1e31dd849bc1533d9144cc9bb6c3ab9e3c75164b372a8dba2274d",
+        "enterprise_agent/core/execution/interrupt_control.py": "fb2aa6aca561e9256a00a04e26170e69a075ae8c5815ad0f5ed5dae99a3de21e",
+        "enterprise_agent/core/execution/state_machine.py": "0bb7c266985d7ea091c94a65bc39f98cac858265e89296936f87b3aa6d3962ea",
+        "enterprise_agent/core/execution/streaming.py": "8e894940db62221f507235c632f212f35329d73984be7150fdd43d34f6c0be16",
+        "enterprise_agent/db/__init__.py": "58169a30595f0fe07bb2ef4fa3ef1679c18d87842d895c3b29cc566221ff0b70",
+        "enterprise_agent/db/chroma.py": "b5af0645d693cef57ef105e173c2adf6646c6a04650f6261a3cd650c03a600c6",
+        "enterprise_agent/db/mysql.py": "82e05f8ff53c070c4dd0d2c5c29b4aafda9696f54e86844ca7890d365844c5cf",
+        "enterprise_agent/db/redis.py": "e518154629d59e8d23daa4580886bdfc21303ab46e3e93998d3d0ce4ddbf0203",
+        "enterprise_agent/memory/__init__.py": "cfe308c4d9fec4b1f2e84279d118174b1982213c4eef92305b2c3ed6cb024f7c",
+        "enterprise_agent/memory/accumulator.py": "efec567a435c938c804c4611882f58c3c1442f186c7bdcb4762031209c07aff9",
+        "enterprise_agent/memory/base.py": "4621b823823f95536107ec1a4ece172087a72e02a5521b4bc30c13e64d56638b",
+        "enterprise_agent/memory/decay.py": "3be1413b140f52519eb19c1079fd9ea885959a40c737b614388fa954d0384bad",
+        "enterprise_agent/memory/importance.py": "9a8c08cb53395a84f0c176fa4f57f4a4c40e49886985cdf601505d4d4e4de6db",
+        "enterprise_agent/memory/long_term.py": "fa8443d37da0ecd32ce1851c2a3597f1bfc306b97504bdee2dfa4ed27b72f7a2",
+        "enterprise_agent/memory/pattern_extractor.py": "fbb6dcb96c1206d4a163f67195999140c92953b504af18be49be703ac5f0f6e8",
+        "enterprise_agent/memory/policy.py": "b4bea6d8fbf5698b68c2477e94460b018bd52e4aecb67abd1d5991eec4ae7d33",
+        "enterprise_agent/memory/short_term.py": "206f7781264bd2094a50ebbce5a0ad3a695164f35d215c76e1303fabc78269f6",
+        "enterprise_agent/models/__init__.py": "464882cbb635109ee811cf8ca58dff75615969657fcf3ad2855e29c1d52d11e2",
+        "enterprise_agent/models/admin.py": "b100c611c956cf9f278f893fe23ed082d58a0f5b4fef002f47335a39e41cb904",
+        "enterprise_agent/models/api_key.py": "174a6ed89b017ce4307e21a2e0af7843b98ca434f9a1907594c1c8d791afc16d",
+        "enterprise_agent/models/chat_message.py": "adce2162bf268254f37a717c3cdc6ad83d13441a17c1a4bdfd72fafc896cb76f",
+        "enterprise_agent/models/session.py": "ca35dee3f45cd73a07c224c11f4e5f399e95b9af4c75899b300edd616daf3fb0",
+        "enterprise_agent/models/tool_usage.py": "6a90eafa045b742feecdb790fc93e9d22cb7e386d50dfcdfad8eb7a4fca6428c",
+        "enterprise_agent/models/user.py": "d6a8c0a7e780b64ae8f929801b8cbc4211d5d397034c1636baa7a7fa17164337",
+        "enterprise_agent/observability/__init__.py": "90814d15d7e59fde2c894b0ba2a9f871e2d751f76e9bcc98d39c31c70dfa4375",
+        "enterprise_agent/observability/release.py": "75a86c491564f091be3360e4a51d9ccfc3615bf3d2b9a426368ea1487c486dd4",
+        "enterprise_agent/observability/trace_store.py": "2a673bf140acb3b7f45b7742bb0fce8f1dea3701b3e7767791d3abc35815e880",
+        "enterprise_agent/sandbox/__init__.py": "874f76632b4fe8ea8e3d5fffe6988db8976e0a858b760f71abb4c99a3f915194",
+        "enterprise_agent/sandbox/control.py": "8d39425a2e542ac936dee981b1dcb0bc56b9790e5e0500d6e85cd430331e7e86",
+        "enterprise_agent/sandbox/engine.py": "860ad38ec42c8876fb82a7b0a725564d1d88fbe56e5eefdaeebd2bc7503f1c66",
+        "enterprise_agent/sandbox/executor.py": "605e17ce4772628cdd65d6c7fb50ff9086a7f152564cbe7656ec32d78c765af2",
+        "enterprise_agent/sandbox/preflight.py": "e0d7cfaae0596f93d52c0eae9b8115f76831bb95a98ce9c11e3c4138eec0ceff",
+        "enterprise_agent/sandbox/reaper.py": "89decf9af30bb01f5cb35a668ba1813c9d162487518339eab62b913e5d0f8244",
+        "enterprise_agent/sandbox/storage.py": "f7f6fc4c1e2b476dbf406be2e779ae89fb9390121166519fbc0d8edbd1ed1883",
+        "enterprise_agent/sandbox/workspace.py": "7d51f2c05a562f7f54e019263b6d96e599bce3d29c45e56ed3fbf45d3a304d6a",
+        "frontend/index.html": "e53d9d87c61cad92a341b9c6ba940c189d5ab1ec968d09d001d28d38433e75e1",
+        "frontend/package-lock.json": "ee781769c37614d5a1604329b13fc88a0d874f2e8e0df784c595cbc0600f848c",
+        "frontend/package.json": "daa67f6bf1623944aea39e32a411e59410c620a798e7b6a4d4e18511bc37b458",
+        "frontend/src/App.vue": "fa5623146f3c45ef5efec4ba1842e273a7da14aefb814c9325528b518232f45f",
+        "frontend/src/api/client.js": "aedfb9296e16b05cc4ab849471e11c16972c6bdaec31d8c94910c435f8830c7d",
+        "frontend/src/components/ChatPanel.vue": "5f57833d017288e9c4963ae1637cfed35de6502dd8df83db45013fcb25526c72",
+        "frontend/src/components/FileTree.vue": "970776f929f99b5f08d284665b270bb29a6095b4a9cd459db1468575ccaddfbb",
+        "frontend/src/components/FileViewer.vue": "f1be70df78516dd394124da85698a453a3e600322aab6a44a710a496d51a4752",
+        "frontend/src/components/LoginForm.vue": "80af06433c097e9db82ced5fab9a4db488be5c9179973816b4b9056ba47f2933",
+        "frontend/src/components/MemoryViewer.vue": "a2f3448e328fe6d1368c967e0ee02ac135a417bbe7939586b75be556d4fd8534",
+        "frontend/src/components/Sidebar.vue": "023062f94f37443297971c82946ce8b42eae58bfc44bdfb1839fa50838437390",
+        "frontend/src/components/TaskChangesCard.vue": "878b9c88ac7c2b5a3e5d29f2079916809c16f2b6dacd754cc2397f3921bd150d",
+        "frontend/src/components/ThemeToggle.vue": "5e09ebd530317ff83a3a1d065555e5a3333bf9d1921690af3dba8b5661b1213f",
+        "frontend/src/components/Toast.vue": "f2bc8142d9a5c8686dac80cd36dd8d84c20e5ecd927786d0c38b05c4bf17a412",
+        "frontend/src/components/ToolCallCard.vue": "662f3a8cb7dac165b0a84d7a26327d59d2ea1a77c98996af3575aed34c4ac6ee",
+        "frontend/src/components/TraceViewer.vue": "bc3ff434a84f0093871a26c76c9553275df1131671e8b000b7f4d39ddb9cc68b",
+        "frontend/src/components/TreeNode.vue": "bc27b5136a599c30a68089daf7065ac0a2aeb3c85f8b940d603ce61568a574ac",
+        "frontend/src/components/admin/AdminConsole.vue": "46a8df44a6c3522467f3b2a6f10fa336a3dbc94d9e8809c7a02ccf5c5f1d73ca",
+        "frontend/src/composables/useToast.js": "cde65395f784bf60f04c2542d9084968d9e11812b42909d9d606fc47e638ae9d",
+        "frontend/src/main.js": "50cb9f18b1c7115799ae456f0d0038840278b49ea520b5549d468ec76c248fb9",
+        "frontend/src/stores/auth.js": "9389f19f11d8d44012f078ae2abd5363589abb7122d9c75190a4b98853c972a1",
+        "frontend/src/utils/highlight.js": "40a05bc7f8c25c23708d48d9cf585339711ba8a9600df6303777bfb4cdb973dd",
+        "frontend/tests/AdminConsole.spec.js": "58483cea486af1f1ab6160cc631c6e53f3d77f39bd3997ecd1bad5c0674485d6",
+        "frontend/tests/ApiClient.spec.js": "42c668459f86632e3e7868df4f83be9ef76b8301e5a6e80514e026ad8e5a5cd5",
+        "frontend/tests/AppViewState.spec.js": "a75e57d62d2b012c7cfcb1142abae15537ecaa688958b1c6eed9d5039b8d842b",
+        "frontend/tests/ChatPanel.spec.js": "12e3e2a8f600a4b8510b63fe8abe16588129cfb1d748cb3261fa51fb2b577c9f",
+        "frontend/tests/FileTree.spec.js": "ab102a63bb1a26ee490b67005b4b2917105aa1bea456775fb7b17e8d3e9ce8cf",
+        "frontend/tests/FileViewer.spec.js": "8f551d9e77e441d7a5d856d529008b9be0b36751517d7f1023e2a3fc191a80f8",
+        "frontend/tests/MemoryViewer.spec.js": "e7f847b89639145c61a75be4d4fbbd754e5ad4e8875bc45a503b21eacede72a9",
+        "frontend/tests/TaskChangesCard.spec.js": "2bc60108e01d0e4016fdd8aa51b118853cbcd41a8fb5aaf3abcf733ca092bf47",
+        "frontend/tests/ToolCallCard.spec.js": "092121c6af87156f38375e0eb451caf12bdfdf7636f5292a3129a24bdd52302a",
+        "frontend/tests/TraceViewer.spec.js": "bfd6dc9687109acee88aad548f855fc58ee92a9e5a02494d985215edf16ef880",
+        "frontend/tests/api-client-stream.spec.js": "43a0b5d9df7c699b1a1f6d08d0325e50ca91b6998cac557bbcb532832e128b9c",
+        "frontend/vite.config.js": "02fc9708e9b43fbf3ce31ae896d5f9e39e9e1223ae0506f9be63b6a18f6d110e",
+        "frontend/vitest.config.js": "66ee84fd053b149a33dc9fe24bd04b97ed615817ac9dc6f9a79b5678cadce157",
+        "docker/Dockerfile": "550370892d5db2336fc7abea3b25aef2df83a372d4fda6f64be1cd41a29c4101",
+        "docker/Dockerfile.server": "8ff3bcd793a5d1a4f7b8b85acaf1274e106befb9a4a90897dc7883546dbcdf1f",
+        "docker/docker-compose.yml": "29aae6b32c4f3130df535183aaddbfa7e7169772acc39c41b96042f4fef93a87",
+        "docker/frontend.Dockerfile": "5ebcacdd7e888d4ca5c9defeb893ebebd33a3e747d28cbfd6bdb5d595734ead3",
+        "docker/git.Dockerfile.server": "37ca25eb079197d1994ac93cba9465068094dc41c29ad8512997989f4f679275",
+        "docker/github-server.yml": "5f6d2f9956da1fcc46ad7314a8db5b410e5d912cb9581d42a5a0c43020ad406b",
+        "docker/local-demo.yml": "248ace2dce5f68f6ade6c68e098275df5cdb8712dc80d6ff769e35957b51bb85",
+        "docker/sandbox-github.Dockerfile.server": "2ffb0a2dc04dbd26a15bc34150527144579fc8b2ccd55c889ae2072fd83b7c9f",
+        "docker/sandbox-node.Dockerfile": "c45a7ee4fbb20054626cebe1cd596cd57c651b1fa447f8846cf1a91cdd20dd9e",
+        "docker/sandbox-reaper.Dockerfile": "ab4937a47acf9a43f693819700117099c2b294d66bdc6757360655488ba44635",
+        "docker/sandbox.Dockerfile": "35b52a3186a394bd3b66cdd0319a2e0ea7f3f7f1cc31073121987f80edc6aaac",
+        "docker/sandbox.Dockerfile.server": "1e0e274ee3b570cdb9efbbc79ecb06fdb2e9efa4535c7f38cb0bf2d63e377137",
+        "docker/server.yml": "1dba158ff3850a8ceedcfc312cbe27a8d5cdf1871521b265e898027aee5c1d9e",
+        "docker/workbench-server.yml": "b43e70a1040a8888bcbca024b8c23dee6307cd52e5036ed44c94d43e5014d136",
+        "migrations/README.md": "2f20d34719ff999f055fcff2a035c2e6595858b248c908ab7fe368ec68dae382",
+        "migrations/env.py": "6d03e62ba57565daa5f22723270beb8c1122120b8e0f505b258558d1c5159b10",
+        "migrations/versions/20260721_0001_admin_console_foundation.py": "ee518ad2200c8922df2dde3e9a33f5ed7f29c1bfedfa342cbd82214efe87ff7b",
+        "migrations/versions/20260722_0002_durable_chat_messages.py": "afb39a6762f03d912417668f87349430d7c97200e1908a57921435df5f86ed2a",
+        "migrations/versions/20260817_0003_chat_message_timeline.py": "ced4e8ca5a7ac4cfff276de258b2ec523441f027614014341f51cac82192cea5",
+        "migrations/versions/20260819_0004_cancel_continuation_receipt.py": "399f8217beea2c07020ecb3f323e43d615926303c95fee54b62f66e8eabda2a3",
+        "migrations/versions/20260914_0005_remove_duplicate_skill_name_index.py": "e7393850cc323c6fbe03bbdf0204e71bbfb341beea44e9e3234a5c6edd5f8733",
+        "migrations/versions/20260914_0006_remove_duplicate_user_indexes.py": "d065251301574f6b5e07d14f5387af5a426df55d5e62e5b05aa8d6930e7e838f",
+        "shared_skills/agent-interviewer/SKILL.md": "f8effd2616cf6c5006970f6ec40e7fb378d9ca266d0dacd1291e79f3c7b91bdc",
+        "shared_skills/fastapi/SKILL.md": "d9031f356eab75946ebeba7c0e065ebc7cb510dc0dfeaea3cce4b7caef1d384e",
+        "shared_skills/langgraph/SKILL.md": "a6845afbf9f82645d1c8065cf4d82fe589b96282e2c9bb49f6885382415cd5c6",
+        "shared_skills/python/SKILL.md": "fe1887fe8af9a03b6cd4aa6f4f88c48ca0c9e1eed10d1b4a9694ec25b6c09677",
+        "benchmarks/README.md": "bda2cfcd518c80370d554dcbee3b6f4f8bb75447371164224846d2d27d2b3f53",
+        "benchmarks/__init__.py": "eba83750cf4fcc5e5a8d17e3495ef2d25231c5f0f4f02e052f57ba8c5736b403",
+        "benchmarks/memory_recall.py": "636df71cf409396db321ff3fefba821e51444512255c25e44b671fb9f252e168",
+        "benchmarks/run.py": "fd4785dfd42f2cf015ac047294389e688577fca4d0f255f72717404a1b68087c",
+        "benchmarks/v1/cases.json": "d29a9f3f6e625a70e96cafa4310c7d40d71bd48380b7a02cfacdff838fa50a70",
+        "benchmarks/v1/memory_recall_cases.json": "54b5d47cce5e82f8fbb2d6e88cb19af0efb0669f8106b43cebe3d112b711f060",
+        "benchmarks/v2/cases.json": "f63a76cd2be94db2439649fdeb8f735c243887cc8218dbf5edff22a6d4e3d64b",
+        "tests/README.md": "4e53a2ac07a679e2dc8d0548a233d89425300dfb6591419b7bb8a63d0c03618f",
+        "tests/__init__.py": "7235e2f7aa6843c948db06c11d71c84bbe9c720a487b7dd813fbb9e288fc51e1",
+        "tests/admin/__init__.py": "ca561777bd0143ccf8028d664b0b2cc5c4819ef701eb7a765df4dba9c57323f0",
+        "tests/admin/test_quotas.py": "2d43256c9b3f090fa57c5219034ee1ecfc049557131cbb3a0f028cb11ef8d27d",
+        "tests/admin/test_skills.py": "82e46e490d1d5d01cefce903eec3c2ac69936d360125aab2b2658f6c3dc05b9a",
+        "tests/admin/test_task_cancellation.py": "43539dee4116223022224ccaaeb1e9ec5d3f5a196231bb9fd33239bb3afb53d7",
+        "tests/api/__init__.py": "408fa0af751e4aea1579f5e091c5b2cdf5e1cfc9149596133516e962d716f1b4",
+        "tests/api/test_admin_security.py": "1a597565f0110595c330686599f45a2b9c37dd83cfcf24187bfe45532b277827",
+        "tests/api/test_auth_email_login.py": "737490d31249e35d2a95ddde0a485a575f8e71baab17aa29dcf83fa8e932c640",
+        "tests/api/test_auth_middleware.py": "3f8ac29ae07a99151041b4e4befa3751486b0b12ba8fcc77f3f4f7dce3ccd65d",
+        "tests/api/test_auth_password_reset.py": "6acb270a247bd804df0446d19b5d01ea6f61de767255f808503f6073ef7e833a",
+        "tests/api/test_cancel_replan_context.py": "faa7274bf8dc954244d7f6115d8028237e8484e4d4edae13bba397a2a9f81f31",
+        "tests/api/test_cancelled_turn_regression.py": "6a9b6e91fc087e68a90b3e55ff3536ea61a292eb18e28d7620c2f2bf07178c4c",
+        "tests/api/test_chat_history.py": "c99b65d2c9533db9e6b783394e84bca965526a315b5e0eedb44195477232e6db",
+        "tests/api/test_chat_history_persistence.py": "78dbe2bd03d4d176691bd2350bafc2465ca0977b7e0c775cec527507c1fc6ff7",
+        "tests/api/test_chat_task_security.py": "21d5dea1185bf0bfe2e079565e735e6762e3cd7e4ff2656f5cf2aa8718c5a71a",
+        "tests/api/test_legacy_pause_retirement.py": "f186b47edc567c5f86b548af654cacae1151d7345f33026fe75d3304795fa8b2",
+        "tests/api/test_memory_routes.py": "9621e0b876b4aba63435876de9d4729adf0c4cfca3b87a4a74cf3cd5d4549583",
+        "tests/api/test_task_trace_routes.py": "c67d8c0986cb610a3510cd8a4d3c8de76b75e03c80533a5dfe588ffb9aaf7779",
+        "tests/api/test_workspace_mutations.py": "6cb4d4eeaaf61a0f6bf5fe84cbde9608b1ff23fa4b3cc02900935c7b22c8427a",
+        "tests/api/test_workspace_open_url.py": "74c6d77cf44360c1375f1fe808c74441976700f582952948c127b2869bc5fe6c",
+        "tests/api/test_workspace_read_service.py": "6046bb96977e8943f5b99a40fd830084d10adc2c2d0be4ca132d944d003be54d",
+        "tests/api/test_workspace_write.py": "2f6c39dd458ba0dc804636f2043bb8d2938979e0946466e1650e170e93e74b1f",
+        "tests/benchmark/__init__.py": "6f4e6d363097caeb00f0d22d767593579a77924b4b840338e8900d5385fe3529",
+        "tests/benchmark/test_benchmark_runner.py": "4e25aaeb3186f378880969cdedb95519d879b0a5996263214b5364a4c356e72b",
+        "tests/benchmark/test_memory_recall_benchmark.py": "34e3f9a8614fe2b39ad657889b768cd0b01bb142289274d773ef6285b76e753a",
+        "tests/config/__init__.py": "a0e4bcc4c702d1a88526c8a33b3b9d491684c419df27b73898d4382d277af064",
+        "tests/config/test_settings.py": "76802e12f77200caab814aee1a321d71dc3d2a7cce154ead478b321355ce51ed",
+        "tests/conftest.py": "38ff43f140f8948f04005c8c384f3474d394271ba5c98b3bb4781b546d141421",
+        "tests/core/__init__.py": "0c65c96b4a5ebbf4c4cc9611a56be4a1763d0ed1e85332d2337923343a5f9302",
+        "tests/core/execution/__init__.py": "d9e4ca787b1574a5222090a01bc184a7fa55bf4f5c0470080004b81fa7eb2f58",
+        "tests/core/execution/test_approvals.py": "7b082c36a4a2b81bcc6cbe5c4c97a93eb0046b0202c19c254a6270660aa79b4f",
+        "tests/core/execution/test_changes.py": "eec01fa72ea14e350f530315bde95f362e6026d40413b0d0382ec53a30da82c2",
+        "tests/core/execution/test_children.py": "d85b602631bf44ffbe088434344e0c4e89fac347a7cd942e0faaff5128a57cda",
+        "tests/core/execution/test_children_redis.py": "b37d45e05212b5802c5a14dbc09eb6779d560df4a16ed7c4e5699f0a29c39c25",
+        "tests/core/execution/test_events.py": "7bbf07a8133e02985614596efc4694251e180333b66df70e48a074298da48367",
+        "tests/core/execution/test_evidence.py": "86a68bab29039961333109aa8ba16ff624d681ed908ef8fc280d8970b213d041",
+        "tests/core/execution/test_interrupt_control.py": "f1487f9b48fd04b422c87e2cf2f95c7ccce0494d41fdfabfa2718514748c4279",
+        "tests/core/execution/test_lifecycle_nodes.py": "bdf6767397d9a1bbd527e3832cb06ed79146883b185f1069896ea9399ec7bec3",
+        "tests/core/execution/test_state_machine.py": "53a0fc9f5fe65d592a86fe7077e84759fa8c46b8717b67956d24c742df8618a4",
+        "tests/core/execution/test_streaming.py": "0d3f68b808bd5df3c66a84315f2051753f9aa36e8a1b26b60ba17a032993b73a",
+        "tests/core/test_context.py": "7517088d7f99acb6d80390cb39dbc2507c1013bcfa784cfabad307bed5f9efd9",
+        "tests/core/test_graph.py": "ddac90f6bb5c30a4012f7b3c1ae6edc160c3670e3bc0dd92f6c850a9d23ba1be",
+        "tests/core/test_llm_factory.py": "c4793b8d5ae894f9cc1d17ec3f9c3caf41efaf50a7e93b94c6359e29ad48e998",
+        "tests/core/test_nodes.py": "6427ba231d11e99d3900091ee9c685eea94c707aa812e2c8e53ced911e1dedd8",
+        "tests/core/test_project_context.py": "dc4128c02469e24eaa81b02d4837f5e982d735bacbda5e29dbb802a1827a2256",
+        "tests/core/test_state.py": "0a745e64a88f65255263ac506ec9954810aba4651d4835007e1b5b809b10eb7e",
+        "tests/core/test_tool_artifacts.py": "506bfdd03ef2383e6dcbfc80b21788937288ce4c382744537b5698bbf2a70e3c",
+        "tests/core/tools/__init__.py": "94ca08f6b062d55fac96ef2871b05f9a17d3527ce9c170faf9b48ef870bf610d",
+        "tests/core/tools/test_background.py": "e614f3aa6230410ab094c36de9f73714a67772a86cd4acf5f84a91507bc51881",
+        "tests/core/tools/test_contracts.py": "6d6aabf32be40767b544d6b0a888e7334f3f8675fb7b2a9052e93a6d691a59b6",
+        "tests/core/tools/test_file_ops.py": "fde506acfc38aeccb7500b9b961495f8d49350d6b17f57cceb201be5deb43dc3",
+        "tests/core/tools/test_memory.py": "e0911528c8d5fbaaa821122a45b5a259bcfce6f49562568707b0cdd9d11eeb8a",
+        "tests/core/tools/test_shell.py": "ba3d097b2df3367b51b34960b3343be7fe77cfeebf6f58d9b1731e08c6c3609c",
+        "tests/core/tools/test_skills.py": "fbb79a674b98ddf34ab08a7dcd2484cb810300b8c654443a3ea231a6c0cf14be",
+        "tests/core/tools/test_subagent.py": "520f6283590e22cf76346537195c8b73f1f8bda4af68859da90c54428ea31e38",
+        "tests/core/tools/test_task.py": "a99f6a7a20ad743271baa7e00b7dc1d1623e803958cbc07ad5ee32dd4f0fb49b",
+        "tests/core/tools/test_team.py": "0dbdf73b3f3011440131d5265076f9057379dff694c7d65419149100d237d6e0",
+        "tests/core/tools/test_workspace.py": "8e2b5d5cb9dffc05e34fe4b84e1682a5df11afce3b2d72e05b3147cebe4be784",
+        "tests/core/tools/test_workspace_lock.py": "d9d6030e606a4329d7f42ac8f2e1076895767d9c70b9fc8770f41e87b87ea209",
+        "tests/db/test_chroma.py": "af18c214773315822e3c65be5cb8ed6a3d14c60b872e1008e07ac67c1816da76",
+        "tests/db/test_skill_index_migration.py": "caa27600f67f58ef1c82002080882036abe2e6eb0ea961ebd927a2f76e27702f",
+        "tests/db/test_user_index_migration.py": "195423cf6fc3bce0aeba6e7866617479befe8c05c9fd66a9a462f813d80d7a71",
+        "tests/memory/__init__.py": "9eb50f2b908f189af79013a378282f841a3c98d94efdd96e047c562c0a6a5b9e",
+        "tests/memory/test_importance.py": "b8ecb7065ac4bbdeb36704a7238da33c576fab826d5c3f8886c585b7e7a94c9b",
+        "tests/memory/test_memory.py": "457d50a20fe25ee6bee5344b9d3b9737c96646da49804076a9978c93466de22d",
+        "tests/memory/test_pattern_extractor.py": "2d4944d137e75a3bedba52f5ff629fd3df4dc3bebb2f96f21eec848e78236708",
+        "tests/memory/test_policy.py": "d47ce2fb42a18e23eb2813a3d87f03fa6e47e31ed68d75ff10343acc6164ff76",
+        "tests/observability/__init__.py": "da073c49c03b43a6b4b216fff2e7c7340f9d823d844babc9014393187345db78",
+        "tests/observability/test_trace_integration.py": "2b68fafa20dd165ca4edee50f0f8bf738ac34b5d9cf6acd6eb15847718ac98fb",
+        "tests/observability/test_trace_store.py": "28bc7d77cbce086a9c4f8d46c54f7bfd583ffcf4d395c7c5a2f9863825f5ae29",
+        "tests/sandbox/container_controller_probe.py": "b436ccda44bd980e9e3328c147f7266ae00613475617a7021c295819d1880f6d",
+        "tests/sandbox/test_contract.py": "e75b759dfc47cfcca49e29413e4653e89ca0ff56c1515f4afab663f2770ad57c",
+        "tests/sandbox/test_docker.py": "b5d57669ff2ef426b87fa7c4ee3fe4b96a38181576418c95f86b61dc3a424aa6",
+        "tests/sandbox/test_workspace.py": "0092c342870b192028fc365b5bfb1b3b52cdccc491e8a3a24920044b2bd38b90",
+        "tests/smoke/test_local_baseline.py": "65b584cb9cecce5bb713109c572bd53d3e1bb43f0e702fa69d3aa14e6ec5939f",
+        "tests/test_release_manifest.py": "f84ecf99ae5035b3fd5bc6923e491a70941f791b1fca0360f826a4e563f198e6",
+        "scripts/check_release_evidence.py": "d138b4f8f51249d78ce55877c691783779fdc8604d545c712a4a4240d846f090",
+        "scripts/docker_smoke_test.sh": "803c88029f028a6fa5f849dbf16a9a729727c28b19c032c7e52a755e86fb401a",
+        "scripts/local_demo.sh": "6d60021ea2bed9927d8d216f780c2a2c635c5e3002cafad7650dff363385a204",
+        "scripts/local_demo_verify.py": "db48f95182ccf85f1662120ec938b9fffaaf948e265ced366ea61408e1c6a513",
+        "scripts/plan_a_demo.py": "b34b7585eae150905a2c65bb6c1a5a7a50ace9792d618209ce156ff01bcb2786",
+        "scripts/sandbox_controller_smoke.sh": "27f3ac2c45ee46560a25dcb51110bee559e9385cdbb7a59acea5a4b1ab96fa14",
+        "scripts/sandbox_demo.py": "6b3e3f23a46a1046ec97a149f1177988b67c825e9eab2fdf301a29d3fe6b8197",
+        "scripts/server_175_apply_release.py": "972f4031db0c7bb744dff8ffc07444526ee0a600063444bea2956dcf916452f3",
+        "scripts/smoke_test.py": "d4b0a0e1b35681f9085bd72af0186b4ec3879f628823e4c3cff2791c6fa447e4",
+        "pyproject.toml": "ace4923fcd45c0a805f3180b217e251ae0452a7a7cec063e942becd49f4e53b8",
+        "uv.lock": "63a40b42f43e9a8edb39377417808126b34fa61e2ccc0e092305c67ffb3465bb",
+        "alembic.ini": "3259e4b992ba99a4becea59a01c9342d8af3cd8542fc0c550c2e6bfae5768131",
+        ".dockerignore": "e991d71656908b30f45dd9f867feb5e48074822beabea0528ef9e28f97402749"
+      }
+    }
+  },
+  "summary": {
+    "case_count": 4,
+    "executed": 4,
+    "passed": 3,
+    "failed": 1,
+    "skipped": 0,
+    "infrastructure_errors": 0,
+    "system_errors": 0,
+    "task_success_rate": 0.75,
+    "tool_success_rate": 0.8125,
+    "average_steps": 21.0,
+    "p50_steps": 21.0,
+    "p95_steps": 26.95,
+    "average_duration_ms": 3424.0,
+    "p50_duration_ms": 3784.5,
+    "p95_duration_ms": 4206.1,
+    "average_tokens": 17321.5,
+    "p50_tokens": 17202.5,
+    "p95_tokens": 23652.8,
+    "human_intervention_rate": 0.0,
+    "safety_interceptions": 2,
+    "by_difficulty": {
+      "easy": {
+        "case_count": 4,
+        "executed": 4,
+        "passed": 3,
+        "failed": 1,
+        "skipped": 0,
+        "infrastructure_errors": 0,
+        "system_errors": 0,
+        "task_success_rate": 0.75,
+        "tool_success_rate": 0.8125,
+        "average_steps": 21.0,
+        "p50_steps": 21.0,
+        "p95_steps": 26.95,
+        "average_duration_ms": 3424.0,
+        "p50_duration_ms": 3784.5,
+        "p95_duration_ms": 4206.1,
+        "average_tokens": 17321.5,
+        "p50_tokens": 17202.5,
+        "p95_tokens": 23652.8,
+        "human_intervention_rate": 0.0,
+        "safety_interceptions": 2
+      }
+    },
+    "by_category": {
+      "code_understanding": {
+        "case_count": 3,
+        "executed": 3,
+        "passed": 2,
+        "failed": 1,
+        "skipped": 0,
+        "infrastructure_errors": 0,
+        "system_errors": 0,
+        "task_success_rate": 0.6667,
+        "tool_success_rate": 0.8571,
+        "average_steps": 23.33,
+        "p50_steps": 21.0,
+        "p95_steps": 27.3,
+        "average_duration_ms": 3932.33,
+        "p50_duration_ms": 4082.0,
+        "p95_duration_ms": 4213.4,
+        "average_tokens": 19731.0,
+        "p50_tokens": 17220.0,
+        "p95_tokens": 24031.2,
+        "human_intervention_rate": 0.0,
+        "safety_interceptions": 2
+      },
+      "file_read_write": {
+        "case_count": 1,
+        "executed": 1,
+        "passed": 1,
+        "failed": 0,
+        "skipped": 0,
+        "infrastructure_errors": 0,
+        "system_errors": 0,
+        "task_success_rate": 1.0,
+        "tool_success_rate": 0.5,
+        "average_steps": 14.0,
+        "p50_steps": 14.0,
+        "p95_steps": 14.0,
+        "average_duration_ms": 1899.0,
+        "p50_duration_ms": 1899.0,
+        "p95_duration_ms": 1899.0,
+        "average_tokens": 10093.0,
+        "p50_tokens": 10093.0,
+        "p95_tokens": 10093.0,
+        "human_intervention_rate": 0.0,
+        "safety_interceptions": 0
+      }
+    }
+  },
+  "results": [
+    {
+      "id": "easy.understanding.entrypoint",
+      "category": "code_understanding",
+      "difficulty": "easy",
+      "title": "Identify the application entry point",
+      "status": "passed",
+      "infrastructure_error": null,
+      "system_error": null,
+      "duration_ms": 4228,
+      "step_count": 28,
+      "confirmation_resumes": 0,
+      "task_status": "succeeded",
+      "response_summary": "\nentrypoint=src/main.py\ndelegates_to=Service",
+      "evaluations": [
+        {
+          "type": "response_equals",
+          "passed": true,
+          "detail": "expected='entrypoint=src/main.py\\ndelegates_to=Service', actual='entrypoint=src/main.py\\ndelegates_to=Service'"
+        },
+        {
+          "type": "workspace_changes_exact",
+          "passed": true,
+          "detail": "expected=[], actual=[]"
+        },
+        {
+          "type": "protected_files_unchanged",
+          "passed": true,
+          "detail": "patterns=['README.md', 'src/main.py', 'src/service.py'], changed=[]"
+        },
+        {
+          "type": "task_status",
+          "passed": true,
+          "detail": "expected=succeeded, actual=succeeded"
+        },
+        {
+          "type": "protected_paths_not_mutated",
+          "passed": true,
+          "detail": "patterns=['README.md', 'src/main.py', 'src/service.py'], touched=[]"
+        }
+      ],
+      "post_checks": [],
+      "workspace": {
+        "initial_manifest": {
+          "README.md": {
+            "type": "file",
+            "sha256": "8a6390aef26cd7d0faa75c80532dbd18444fd8a1deec991940fecae4f5533d2c",
+            "size": 74,
+            "mode": 420,
+            "mtime_ns": 1789365712990082130,
+            "ctime_ns": 1789365712990082130
+          },
+          "src/main.py": {
+            "type": "file",
+            "sha256": "09b38fd05ba793e603728ba26f32a744cd4bb62db948cf4ac84191f44c5481c5",
+            "size": 72,
+            "mode": 420,
+            "mtime_ns": 1789365712990243590,
+            "ctime_ns": 1789365712990243590
+          },
+          "src/service.py": {
+            "type": "file",
+            "sha256": "150bad968664e10a2276c67b025707bd5567bd62cd83303851142c1ec19510a9",
+            "size": 54,
+            "mode": 420,
+            "mtime_ns": 1789365712990448550,
+            "ctime_ns": 1789365712990448550
+          }
+        },
+        "final_manifest": {
+          "README.md": {
+            "type": "file",
+            "sha256": "8a6390aef26cd7d0faa75c80532dbd18444fd8a1deec991940fecae4f5533d2c",
+            "size": 74,
+            "mode": 420,
+            "mtime_ns": 1789365712990082130,
+            "ctime_ns": 1789365712990082130
+          },
+          "src/main.py": {
+            "type": "file",
+            "sha256": "09b38fd05ba793e603728ba26f32a744cd4bb62db948cf4ac84191f44c5481c5",
+            "size": 72,
+            "mode": 420,
+            "mtime_ns": 1789365712990243590,
+            "ctime_ns": 1789365712990243590
+          },
+          "src/service.py": {
+            "type": "file",
+            "sha256": "150bad968664e10a2276c67b025707bd5567bd62cd83303851142c1ec19510a9",
+            "size": 54,
+            "mode": 420,
+            "mtime_ns": 1789365712990448550,
+            "ctime_ns": 1789365712990448550
+          }
+        },
+        "changes": {
+          "added": [],
+          "modified": [],
+          "deleted": []
+        }
+      },
+      "trace": {
+        "current_phase": "summarizing",
+        "duration_ms": 4220,
+        "error": null,
+        "events": [
+          {
+            "data": {},
+            "duration_ms": 0,
+            "event_id": "6c9b0add-4d11-48f7-be83-32770fd187cf",
+            "name": "task_created",
+            "status": "pending",
+            "timestamp": "2026-09-14T06:01:52.990764+00:00",
+            "type": "task"
+          },
+          {
+            "data": {
+              "phase": "parsing",
+              "round_count": 0,
+              "task_status": "running"
+            },
+            "duration_ms": 0,
+            "event_id": "854bd605-358b-4446-a9b1-0006db6d8d4d",
+            "name": "task_parse",
+            "status": "success",
+            "timestamp": "2026-09-14T06:01:53.016645+00:00",
+            "type": "node"
+          },
+          {
+            "data": {
+              "phase": "parsing",
+              "round_count": 0,
+              "task_status": "running"
+            },
+            "duration_ms": 198,
+            "event_id": "ad371dca-2ffe-4199-8e47-25a9a7128c3b",
+            "name": "init_context",
+            "status": "success",
+            "timestamp": "2026-09-14T06:01:53.216369+00:00",
+            "type": "node"
+          },
+          {
+            "data": {
+              "phase": "planning",
+              "round_count": 0,
+              "task_status": "running"
+            },
+            "duration_ms": 5,
+            "event_id": "62b4d9d8-b503-4cf6-b00c-4728d04e6e5c",
+            "name": "pre_microcompact",
+            "status": "success",
+            "timestamp": "2026-09-14T06:01:53.222391+00:00",
+            "type": "node"
+          },
+          {
+            "data": {
+              "completion_gate_blocker": null,
+              "completion_gate_recovery_attempts": 0,
+              "context_token_estimate": 4975,
+              "incomplete_response_recovery_attempts": 0,
+              "input_chars": 7191,
+              "input_summary": "Inspect the repository and do not modify files. Return exactly two lines without a code fence or extra text, replacing placeholders with evidence from the files: entrypoint=<path> then delegates_to=<class>.",
+              "input_tokens": 4890,
+              "message_count": 2,
+              "output_summary": "",
+              "output_tokens": 85,
+              "response_complete": true,
+              "retry_count": 0,
+              "stop_reason": "tool_use",
+              "tool_calls": [
+                "bash",
+                "bash"
+              ],
+              "total_tokens": 4975
+            },
+            "duration_ms": 951,
+            "event_id": "453ee640-65e9-4fea-a1b4-090e9a0ad243",
+            "name": "llm_call",
+            "status": "success",
+            "timestamp": "2026-09-14T06:01:54.175776+00:00",
+            "type": "model"
+          },
+          {
+            "data": {
+              "phase": "executing",
+              "round_count": 1,
+              "task_status": "running"
+            },
+            "duration_ms": 953,
+            "event_id": "e46fa17d-8ed1-4d4e-8b5a-a92cb36887d2",
+            "name": "llm_call",
+            "status": "success",
+            "timestamp": "2026-09-14T06:01:54.176945+00:00",
+            "type": "node"
+          },
+          {
+            "data": {
+              "phase": "executing",
+              "round_count": 1,
+              "task_status": "running"
+            },
+            "duration_ms": 0,
+            "event_id": "42a565a6-c6b7-41a7-8248-d12b86ca9763",
+            "name": "prepare_tool_execution",
+            "status": "success",
+            "timestamp": "2026-09-14T06:01:54.179499+00:00",
+            "type": "node"
+          },
+          {
+            "data": {
+              "phase": "executing",
+              "round_count": 1,
+              "task_status": "running"
+            },
+            "duration_ms": 1,
+            "event_id": "c5d2a491-6d99-410b-a54b-66d1d84b85a5",
+            "name": "tool_confirm",
+            "status": "success",
+            "timestamp": "2026-09-14T06:01:54.182147+00:00",
+            "type": "node"
+          },
+          {
+            "data": {
+              "args_summary": {
+                "command": "ls -la"
+              },
+              "artifact_bytes": null,
+              "artifact_error": null,
+              "artifact_path": null,
+              "artifact_redacted": false,
+              "artifact_sha256": null,
+              "attempt_count": 1,
+              "error_code": null,
+              "execution_ids": [
+                "c2b4a8cae6ba43668262224713e6631e"
+              ],
+              "exit_code": 0,
+              "idempotent": false,
+              "model_chars": 1828,
+              "model_truncated": false,
+              "original_chars": 1828,
+              "output_summary": "{\"stdout\": \"total 8\\ndrwx------ 4  501 dialout  128 Sep 14 06:01 .\\ndrwxr-xr-x 1 root root    4096 Sep 14 06:01 ..\\n-rw-r--r-- 1  501 dialout   74 Sep 14 06:01 README.md\\ndrwxr-xr-x 4  501 dialout  128 Sep 14 06:01 src\", \"stderr\": \"\", \"exit_code\": 0, \"executor\": \"docker\", \"execution_id\": \"agent-sandbox-78d3789f8b434401bdfcf51376a043d5\", \"trace_id\": null, \"source_truncated\": false, \"preflight\": {\"status\": \"not_applicable\", \"image_id\": \"sha256:b6610b2e4b52bedf733e7300d446f83b64a90fff4456eb3442daf2abea9a26be\"}, \"input_version\": \"a9c03c34c55415a321b0c40f2f415af0568b1c036dc551a1b9824a7f665e17ca\", \"container_id\": \"e2148f4cabb3133aaf2e74bccabbb881bcda22642c81e63053b3fddb47c97874\", \"stdout_original_bytes\": 203, \"stderr_original_bytes\": 0, \"output_counts_scope\": \"complete_attached_stream\", \"validation_input_changed\": false, \"published_paths\": [], \"cleanup_confirmed\": true, \"receipt\": {\"execution_id\": \"c2b4a8cae6ba43668262224713e6631e\", \"trace_id\": \"agent-1-35a1b2b7\", \"phase\": \"finished\", \"recor",
+              "risk": "safe",
+              "source_truncated": false,
+              "timeout_seconds": 125,
+              "tool_call_id": "call_00_ET_7rBbmVB1odfG4t2as81B9880"
+            },
+            "duration_ms": 136,
+            "event_id": "cc4f9868-421f-4514-b898-3162f834f6b6",
+            "name": "bash",
+            "status": "success",
+            "timestamp": "2026-09-14T06:01:54.320796+00:00",
+            "type": "tool"
+          },
+          {
+            "data": {
+              "args_summary": {
+                "command": "find . -maxdepth 3 -not -path '*/.git/*' | head -100"
+              },
+              "artifact_bytes": null,
+              "artifact_error": null,
+              "artifact_path": null,
+              "artifact_redacted": false,
+              "artifact_sha256": null,
+              "attempt_count": 1,
+              "error_code": "policy_blocked",
+              "execution_ids": [],
+              "exit_code": 1,
+              "idempotent": false,
+              "model_chars": 241,
+              "model_truncated": false,
+              "original_chars": 241,
+              "output_summary": "{\"stdout\": \"\", \"stderr\": \"Blocked: sensitive credential paths are not available to Agent shell commands. Remediation: continue without reading Agent, Git, environment, or credential metadata.\", \"exit_code\": 1, \"error_code\": \"policy_blocked\"}",
+              "risk": "dangerous",
+              "source_truncated": false,
+              "timeout_seconds": 125,
+              "tool_call_id": "call_01_ET_qtQkTKmp4x93nG8EDi3Y1427"
+            },
+            "duration_ms": 0,
+            "event_id": "78b949dd-db8b-45a5-9552-704f09d311a1",
+            "name": "bash",
+            "status": "blocked",
+            "timestamp": "2026-09-14T06:01:54.323085+00:00",
+            "type": "tool"
+          },
+          {
+            "data": {
+              "phase": "executing",
+              "round_count": 1,
+              "task_status": "running"
+            },
+            "duration_ms": 142,
+            "event_id": "67648670-bccd-422a-a324-4414ec68e8c1",
+            "name": "tool_executor",
+            "status": "success",
+            "timestamp": "2026-09-14T06:01:54.326418+00:00",
+            "type": "node"
+          },
+          {
+            "data": {
+              "phase": "checkpointing",
+              "round_count": 1,
+              "task_status": "running"
+            },
+            "duration_ms": 0,
+            "event_id": "e46e6c15-9a27-4197-9050-246b635d5ccd",
+            "name": "checkpoint_task",
+            "status": "success",
+            "timestamp": "2026-09-14T06:01:54.328504+00:00",
+            "type": "node"
+          },
+          {
+            "data": {
+              "phase": "checkpointing",
+              "round_count": 1,
+              "task_status": "running"
+            },
+            "duration_ms": 10,
+            "event_id": "3fd04793-7bea-4793-91fb-0bbeef298eee",
+            "name": "save_memory",
+            "status": "success",
+            "timestamp": "2026-09-14T06:01:54.339902+00:00",
+            "type": "node"
+          },
+          {
+            "data": {
+              "phase": "planning",
+              "round_count": 1,
+              "task_status": "running"
+            },
+            "duration_ms": 6,
+            "event_id": "1339ee9d-2ef5-42c4-af1f-ee3f2ae7a764",
+            "name": "pre_microcompact",
+            "status": "success",
+            "timestamp": "2026-09-14T06:01:54.347717+00:00",
+            "type": "node"
+          },
+          {
+            "data": {
+              "completion_gate_blocker": null,
+              "completion_gate_recovery_attempts": 0,
+              "context_token_estimate": 5964,
+              "incomplete_response_recovery_attempts": 0,
+              "input_chars": 9627,
+              "input_summary": "Inspect the repository and do not modify files. Return exactly two lines without a code fence or extra text, replacing placeholders with evidence from the files: entrypoint=<path> then delegates_to=<class>.",
+              "input_tokens": 5870,
+              "message_count": 5,
+              "output_summary": "",
+              "output_tokens": 94,
+              "response_complete": true,
+              "retry_count": 0,
+              "stop_reason": "tool_use",
+              "tool_calls": [
+                "read_file",
+                "bash"
+              ],
+              "total_tokens": 5964
+            },
+            "duration_ms": 999,
+            "event_id": "76465e7e-bcd8-483f-bc33-f8f5d5996f9e",
+            "name": "llm_call",
+            "status": "success",
+            "timestamp": "2026-09-14T06:01:55.349308+00:00",
+            "type": "model"
+          },
+          {
+            "data": {
+              "phase": "executing",
+              "round_count": 2,
+              "task_status": "running"
+            },
+            "duration_ms": 1001,
+            "event_id": "fe0867b4-b847-400c-8cfa-6dd04e25b0c5",
+            "name": "llm_call",
+            "status": "success",
+            "timestamp": "2026-09-14T06:01:55.351082+00:00",
+            "type": "node"
+          },
+          {
+            "data": {
+              "phase": "executing",
+              "round_count": 2,
+              "task_status": "running"
+            },
+            "duration_ms": 0,
+            "event_id": "f2571d40-1b71-4459-8407-3c19055ab394",
+            "name": "prepare_tool_execution",
+            "status": "success",
+            "timestamp": "2026-09-14T06:01:55.354856+00:00",
+            "type": "node"
+          },
+          {
+            "data": {
+              "phase": "executing",
+              "round_count": 2,
+              "task_status": "running"
+            },
+            "duration_ms": 0,
+            "event_id": "0c4fff23-67e5-4a55-a2b5-2fed64db1a81",
+            "name": "tool_confirm",
+            "status": "success",
+            "timestamp": "2026-09-14T06:01:55.357243+00:00",
+            "type": "node"
+          },
+          {
+            "data": {
+              "args_summary": {
+                "path": "README.md"
+              },
+              "artifact_bytes": null,
+              "artifact_error": null,
+              "artifact_path": null,
+              "artifact_redacted": false,
+              "artifact_sha256": null,
+              "attempt_count": 1,
+              "error_code": null,
+              "execution_ids": [],
+              "exit_code": null,
+              "idempotent": true,
+              "model_chars": 73,
+              "model_truncated": false,
+              "original_chars": 73,
+              "output_summary": "The HTTP application starts in src/main.py and delegates work to Service.",
+              "risk": "safe",
+              "source_truncated": false,
+              "timeout_seconds": 30,
+              "tool_call_id": "call_00_6K2hItJdhyM0jl0EsOVj3918"
+            },
+            "duration_ms": 1,
+            "event_id": "fc6e923d-cc10-42ca-adcd-7731be3b769b",
+            "name": "read_file",
+            "status": "success",
+            "timestamp": "2026-09-14T06:01:55.360549+00:00",
+            "type": "tool"
+          },
+          {
+            "data": {
+              "args_summary": {
+                "command": "ls -laR src"
+              },
+              "artifact_bytes": null,
+              "artifact_error": null,
+              "artifact_path": null,
+              "artifact_redacted": false,
+              "artifact_sha256": null,
+              "attempt_count": 1,
+              "error_code": null,
+              "execution_ids": [
+                "900d34b82e044083a7ee2a4c27408436"
+              ],
+              "exit_code": 0,
+              "idempotent": false,
+              "model_chars": 1833,
+              "model_truncated": false,
+              "original_chars": 1833,
+              "output_summary": "{\"stdout\": \"src:\\ntotal 8\\ndrwxr-xr-x 4 501 dialout 128 Sep 14 06:01 .\\ndrwx------ 4 501 dialout 128 Sep 14 06:01 ..\\n-rw-r--r-- 1 501 dialout  72 Sep 14 06:01 main.py\\n-rw-r--r-- 1 501 dialout  54 Sep 14 06:01 service.py\", \"stderr\": \"\", \"exit_code\": 0, \"executor\": \"docker\", \"execution_id\": \"agent-sandbox-3b61e05eba6d482985a868e37c67e202\", \"trace_id\": null, \"source_truncated\": false, \"preflight\": {\"status\": \"not_applicable\", \"image_id\": \"sha256:b6610b2e4b52bedf733e7300d446f83b64a90fff4456eb3442daf2abea9a26be\"}, \"input_version\": \"a9c03c34c55415a321b0c40f2f415af0568b1c036dc551a1b9824a7f665e17ca\", \"container_id\": \"3d74f740fb12aa0b97949f8c785a6fbe1b15ca84981f51cdf58bf838313b76a8\", \"stdout_original_bytes\": 205, \"stderr_original_bytes\": 0, \"output_counts_scope\": \"complete_attached_stream\", \"validation_input_changed\": false, \"published_paths\": [], \"cleanup_confirmed\": true, \"receipt\": {\"execution_id\": \"900d34b82e044083a7ee2a4c27408436\", \"trace_id\": \"agent-1-35a1b2b7\", \"phase\": \"finished\", \"re",
+              "risk": "safe",
+              "source_truncated": false,
+              "timeout_seconds": 125,
+              "tool_call_id": "call_01_nVrZsto47BHcIOf7Kpy25807"
+            },
+            "duration_ms": 161,
+            "event_id": "6b9ecedb-8692-41de-9b44-72e8ca35fba5",
+            "name": "bash",
+            "status": "success",
+            "timestamp": "2026-09-14T06:01:55.523387+00:00",
+            "type": "tool"
+          },
+          {
+            "data": {
+              "phase": "executing",
+              "round_count": 2,
+              "task_status": "running"
+            },
+            "duration_ms": 169,
+            "event_id": "d5f4242c-0ba4-4249-966e-2ce388424b2b",
+            "name": "tool_executor",
+            "status": "success",
+            "timestamp": "2026-09-14T06:01:55.527950+00:00",
+            "type": "node"
+          },
+          {
+            "data": {
+              "phase": "checkpointing",
+              "round_count": 2,
+              "task_status": "running"
+            },
+            "duration_ms": 0,
+            "event_id": "34a8ec62-1ad9-4e5d-a744-f481e00da3e1",
+            "name": "checkpoint_task",
+            "status": "success",
+            "timestamp": "2026-09-14T06:01:55.529801+00:00",
+            "type": "node"
+          },
+          {
+            "data": {
+              "phase": "checkpointing",
+              "round_count": 2,
+              "task_status": "running"
+            },
+            "duration_ms": 0,
+            "event_id": "961cf78b-1b4c-46d2-abf5-1bd6e9fdc961",
+            "name": "save_memory",
+            "status": "success",
+            "timestamp": "2026-09-14T06:01:55.531507+00:00",
+            "type": "node"
+          },
+          {
+            "data": {
+              "phase": "planning",
+              "round_count": 2,
+              "task_status": "running"
+            },
+            "duration_ms": 9,
+            "event_id": "065e5b00-3b9c-4fe8-817a-a0e42edb9fa5",
+            "name": "pre_microcompact",
+            "status": "success",
+            "timestamp": "2026-09-14T06:01:55.543100+00:00",
+            "type": "node"
+          },
+          {
+            "data": {
+              "completion_gate_blocker": null,
+              "completion_gate_recovery_attempts": 0,
+              "context_token_estimate": 6894,
+              "incomplete_response_recovery_attempts": 0,
+              "input_chars": 11954,
+              "input_summary": "Inspect the repository and do not modify files. Return exactly two lines without a code fence or extra text, replacing placeholders with evidence from the files: entrypoint=<path> then delegates_to=<class>.",
+              "input_tokens": 6820,
+              "message_count": 8,
+              "output_summary": "",
+              "output_tokens": 74,
+              "response_complete": true,
+              "retry_count": 0,
+              "stop_reason": "tool_use",
+              "tool_calls": [
+                "read_file",
+                "read_file"
+              ],
+              "total_tokens": 6894
+            },
+            "duration_ms": 961,
+            "event_id": "414487f6-825d-47af-a866-9313630df6f9",
+            "name": "llm_call",
+            "status": "success",
+            "timestamp": "2026-09-14T06:01:56.507153+00:00",
+            "type": "model"
+          },
+          {
+            "data": {
+              "phase": "executing",
+              "round_count": 3,
+              "task_status": "running"
+            },
+            "duration_ms": 964,
+            "event_id": "2751b8ee-c5fb-4451-8a23-7827f7330688",
+            "name": "llm_call",
+            "status": "success",
+            "timestamp": "2026-09-14T06:01:56.509299+00:00",
+            "type": "node"
+          },
+          {
+            "data": {
+              "phase": "executing",
+              "round_count": 3,
+              "task_status": "running"
+            },
+            "duration_ms": 0,
+            "event_id": "f56a65bb-8019-48f6-8050-c6be031988ea",
+            "name": "prepare_tool_execution",
+            "status": "success",
+            "timestamp": "2026-09-14T06:01:56.512740+00:00",
+            "type": "node"
+          },
+          {
+            "data": {
+              "phase": "executing",
+              "round_count": 3,
+              "task_status": "running"
+            },
+            "duration_ms": 0,
+            "event_id": "50b25c8c-d258-470a-9695-91bd605fa3ee",
+            "name": "tool_confirm",
+            "status": "success",
+            "timestamp": "2026-09-14T06:01:56.514659+00:00",
+            "type": "node"
+          },
+          {
+            "data": {
+              "args_summary": {
+                "path": "src/main.py"
+              },
+              "artifact_bytes": null,
+              "artifact_error": null,
+              "artifact_path": null,
+              "artifact_redacted": false,
+              "artifact_sha256": null,
+              "attempt_count": 1,
+              "error_code": null,
+              "execution_ids": [],
+              "exit_code": null,
+              "idempotent": true,
+              "model_chars": 71,
+              "model_truncated": false,
+              "original_chars": 71,
+              "output_summary": "from src.service import Service\n\ndef create_app():\n    return Service()",
+              "risk": "safe",
+              "source_truncated": false,
+              "timeout_seconds": 30,
+              "tool_call_id": "call_00_9eDxG1Uy2KTsmroqIbT69026"
+            },
+            "duration_ms": 1,
+            "event_id": "b8dc651f-bd90-45bd-8894-5664727c0f5c",
+            "name": "read_file",
+            "status": "success",
+            "timestamp": "2026-09-14T06:01:56.517868+00:00",
+            "type": "tool"
+          },
+          {
+            "data": {
+              "args_summary": {
+                "path": "src/service.py"
+              },
+              "artifact_bytes": null,
+              "artifact_error": null,
+              "artifact_path": null,
+              "artifact_redacted": false,
+              "artifact_sha256": null,
+              "attempt_count": 1,
+              "error_code": null,
+              "execution_ids": [],
+              "exit_code": null,
+              "idempotent": true,
+              "model_chars": 53,
+              "model_truncated": false,
+              "original_chars": 53,
+              "output_summary": "class Service:\n    def run(self):\n        return 'ok'",
+              "risk": "safe",
+              "source_truncated": false,
+              "timeout_seconds": 30,
+              "tool_call_id": "call_01_aj0KzQ75BlCSwGRnV9u48485"
+            },
+            "duration_ms": 0,
+            "event_id": "4a899021-489b-4fcb-8408-e15aabcadd13",
+            "name": "read_file",
+            "status": "success",
+            "timestamp": "2026-09-14T06:01:56.519988+00:00",
+            "type": "tool"
+          },
+          {
+            "data": {
+              "phase": "executing",
+              "round_count": 3,
+              "task_status": "running"
+            },
+            "duration_ms": 8,
+            "event_id": "87726300-84ec-4e31-911c-f9d33eb03c5c",
+            "name": "tool_executor",
+            "status": "success",
+            "timestamp": "2026-09-14T06:01:56.524730+00:00",
+            "type": "node"
+          },
+          {
+            "data": {
+              "phase": "checkpointing",
+              "round_count": 3,
+              "task_status": "running"
+            },
+            "duration_ms": 0,
+            "event_id": "ad9a9fc1-a9d1-4cc8-bda7-a4c95bce8e04",
+            "name": "checkpoint_task",
+            "status": "success",
+            "timestamp": "2026-09-14T06:01:56.528150+00:00",
+            "type": "node"
+          },
+          {
+            "data": {
+              "phase": "checkpointing",
+              "round_count": 3,
+              "task_status": "running"
+            },
+            "duration_ms": 0,
+            "event_id": "5a85b0dd-4038-41e0-9968-37ca368ef681",
+            "name": "save_memory",
+            "status": "success",
+            "timestamp": "2026-09-14T06:01:56.530045+00:00",
+            "type": "node"
+          },
+          {
+            "data": {
+              "phase": "planning",
+              "round_count": 3,
+              "task_status": "running"
+            },
+            "duration_ms": 13,
+            "event_id": "411aa6e3-ae84-47e3-b196-72eb354e9ef4",
+            "name": "pre_microcompact",
+            "status": "success",
+            "timestamp": "2026-09-14T06:01:56.546472+00:00",
+            "type": "node"
+          },
+          {
+            "data": {
+              "completion_gate_blocker": null,
+              "completion_gate_recovery_attempts": 0,
+              "context_token_estimate": 6955,
+              "incomplete_response_recovery_attempts": 0,
+              "input_chars": 12426,
+              "input_summary": "Inspect the repository and do not modify files. Return exactly two lines without a code fence or extra text, replacing placeholders with evidence from the files: entrypoint=<path> then delegates_to=<class>.",
+              "input_tokens": 6941,
+              "message_count": 11,
+              "output_summary": "entrypoint=src/main.py\ndelegates_to=Service",
+              "output_tokens": 14,
+              "response_complete": true,
+              "retry_count": 0,
+              "stop_reason": "end_turn",
+              "tool_calls": [],
+              "total_tokens": 6955
+            },
+            "duration_ms": 649,
+            "event_id": "abfadf87-26d2-490b-ada7-36c7027f7bbd",
+            "name": "llm_call",
+            "status": "success",
+            "timestamp": "2026-09-14T06:01:57.198442+00:00",
+            "type": "model"
+          },
+          {
+            "data": {
+              "phase": "summarizing",
+              "round_count": 4,
+              "task_status": "running"
+            },
+            "duration_ms": 651,
+            "event_id": "9a3654af-2a01-4f1a-8a7a-025bff4a2762",
+            "name": "llm_call",
+            "status": "success",
+            "timestamp": "2026-09-14T06:01:57.200453+00:00",
+            "type": "node"
+          },
+          {
+            "data": {
+              "phase": "summarizing",
+              "round_count": 4,
+              "task_status": "running"
+            },
+            "duration_ms": 0,
+            "event_id": "1c498f55-7f5d-4e58-b0f0-8419c54115fa",
+            "name": "save_memory",
+            "status": "success",
+            "timestamp": "2026-09-14T06:01:57.203863+00:00",
+            "type": "node"
+          },
+          {
+            "data": {
+              "phase": "summarizing",
+              "round_count": 4,
+              "task_status": "succeeded"
+            },
+            "duration_ms": 2,
+            "event_id": "c7cf742c-09bd-4616-8a20-cbb10b0858aa",
+            "name": "finalize_task",
+            "status": "success",
+            "timestamp": "2026-09-14T06:01:57.209954+00:00",
+            "type": "node"
+          },
+          {
+            "data": {
+              "error": null
+            },
+            "duration_ms": 4220,
+            "event_id": "1e8f093b-66da-4d64-8226-d6c1705cf9e4",
+            "name": "task_finished",
+            "status": "succeeded",
+            "timestamp": "2026-09-14T06:01:57.211605+00:00",
+            "type": "task"
+          },
+          {
+            "data": {
+              "phase": "summarizing",
+              "round_count": 4,
+              "task_status": "succeeded"
+            },
+            "duration_ms": 0,
+            "event_id": "3fd51c55-11cf-4e5c-aa6e-0ea01eaeb6c0",
+            "name": "persist_memory",
+            "status": "success",
+            "timestamp": "2026-09-14T06:01:57.213827+00:00",
+            "type": "node"
+          }
+        ],
+        "finished_at": "2026-09-14T06:01:57.211605+00:00",
+        "metrics": {
+          "confirmation_count": 0,
+          "input_tokens": 24521,
+          "memory_candidates": 0,
+          "memory_injected": 0,
+          "memory_injected_tokens": 0,
+          "memory_retrieval_queries": 0,
+          "model_calls": 4,
+          "model_duration_ms": 3560,
+          "node_count": 28,
+          "node_duration_ms": 4132,
+          "output_tokens": 267,
+          "pause_count": 0,
+          "paused_duration_ms": 0,
+          "resume_count": 0,
+          "retry_count": 0,
+          "safety_interceptions": 1,
+          "tool_calls": 6,
+          "tool_duration_ms": 299,
+          "tool_failures": 1,
+          "tool_successes": 5,
+          "total_tokens": 24788
+        },
+        "mode": "single",
+        "request_summary": "Inspect the repository and do not modify files. Return exactly two lines without a code fence or extra text, replacing placeholders with evidence from the files: entrypoint=<path> then delegates_to=<class>.",
+        "result_summary": "entrypoint=src/main.py\ndelegates_to=Service",
+        "schema_version": 1,
+        "session_id": "benchmark-easy.understanding.entrypoint-2c59ac",
+        "started_at": "2026-09-14T06:01:52.990764+00:00",
+        "status": "succeeded",
+        "trace_id": "agent-1-35a1b2b7",
+        "user_id": 20001
+      }
+    },
+    {
+      "id": "easy.understanding.call_chain",
+      "category": "code_understanding",
+      "difficulty": "easy",
+      "title": "Trace a three-layer call chain",
+      "status": "passed",
+      "infrastructure_error": null,
+      "system_error": null,
+      "duration_ms": 3487,
+      "step_count": 21,
+      "confirmation_resumes": 0,
+      "task_status": "succeeded",
+      "response_summary": "\napi.handle -> Service.run -> Repository.fetch",
+      "evaluations": [
+        {
+          "type": "response_equals",
+          "passed": true,
+          "detail": "expected='api.handle -> Service.run -> Repository.fetch', actual='api.handle -> Service.run -> Repository.fetch'"
+        },
+        {
+          "type": "workspace_changes_exact",
+          "passed": true,
+          "detail": "expected=[], actual=[]"
+        },
+        {
+          "type": "protected_files_unchanged",
+          "passed": true,
+          "detail": "patterns=['api.py', 'service.py', 'repository.py'], changed=[]"
+        },
+        {
+          "type": "task_status",
+          "passed": true,
+          "detail": "expected=succeeded, actual=succeeded"
+        },
+        {
+          "type": "protected_paths_not_mutated",
+          "passed": true,
+          "detail": "patterns=['api.py', 'service.py', 'repository.py'], touched=[]"
+        }
+      ],
+      "post_checks": [],
+      "workspace": {
+        "initial_manifest": {
+          "api.py": {
+            "type": "file",
+            "sha256": "328906b9d7440fab41264799a707e1712db0acb9307665164d0fdfbb936a4d27",
+            "size": 76,
+            "mode": 420,
+            "mtime_ns": 1789365717219187232,
+            "ctime_ns": 1789365717219187232
+          },
+          "repository.py": {
+            "type": "file",
+            "sha256": "dd9e607e2fc92348ebca94f3fac113c320ce1e9ad02e5e8b6cd218f1547bfec5",
+            "size": 72,
+            "mode": 420,
+            "mtime_ns": 1789365717219791862,
+            "ctime_ns": 1789365717219791862
+          },
+          "service.py": {
+            "type": "file",
+            "sha256": "41ab8e9b0066e60ed97fd46681c6f7f7b6fcc0d93e83b62da7796d5b29aba6df",
+            "size": 113,
+            "mode": 420,
+            "mtime_ns": 1789365717219470568,
+            "ctime_ns": 1789365717219470568
+          }
+        },
+        "final_manifest": {
+          "api.py": {
+            "type": "file",
+            "sha256": "328906b9d7440fab41264799a707e1712db0acb9307665164d0fdfbb936a4d27",
+            "size": 76,
+            "mode": 420,
+            "mtime_ns": 1789365717219187232,
+            "ctime_ns": 1789365717219187232
+          },
+          "repository.py": {
+            "type": "file",
+            "sha256": "dd9e607e2fc92348ebca94f3fac113c320ce1e9ad02e5e8b6cd218f1547bfec5",
+            "size": 72,
+            "mode": 420,
+            "mtime_ns": 1789365717219791862,
+            "ctime_ns": 1789365717219791862
+          },
+          "service.py": {
+            "type": "file",
+            "sha256": "41ab8e9b0066e60ed97fd46681c6f7f7b6fcc0d93e83b62da7796d5b29aba6df",
+            "size": 113,
+            "mode": 420,
+            "mtime_ns": 1789365717219470568,
+            "ctime_ns": 1789365717219470568
+          }
+        },
+        "changes": {
+          "added": [],
+          "modified": [],
+          "deleted": []
+        }
+      },
+      "trace": {
+        "current_phase": "summarizing",
+        "duration_ms": 3479,
+        "error": null,
+        "events": [
+          {
+            "data": {},
+            "duration_ms": 0,
+            "event_id": "ae9b3f88-7751-4ba9-bed3-c96d007c094e",
+            "name": "task_created",
+            "status": "pending",
+            "timestamp": "2026-09-14T06:01:57.220273+00:00",
+            "type": "task"
+          },
+          {
+            "data": {
+              "phase": "parsing",
+              "round_count": 0,
+              "task_status": "running"
+            },
+            "duration_ms": 0,
+            "event_id": "9d355cba-dcfe-4896-9a31-f50dd3433456",
+            "name": "task_parse",
+            "status": "success",
+            "timestamp": "2026-09-14T06:01:57.258631+00:00",
+            "type": "node"
+          },
+          {
+            "data": {
+              "phase": "parsing",
+              "round_count": 0,
+              "task_status": "running"
+            },
+            "duration_ms": 0,
+            "event_id": "1630e292-389b-491c-a61d-9841bf2fa7ae",
+            "name": "init_context",
+            "status": "success",
+            "timestamp": "2026-09-14T06:01:57.259493+00:00",
+            "type": "node"
+          },
+          {
+            "data": {
+              "phase": "planning",
+              "round_count": 0,
+              "task_status": "running"
+            },
+            "duration_ms": 6,
+            "event_id": "1bcc495c-1f6c-4899-a726-94920ef20ccf",
+            "name": "pre_microcompact",
+            "status": "success",
+            "timestamp": "2026-09-14T06:01:57.266561+00:00",
+            "type": "node"
+          },
+          {
+            "data": {
+              "completion_gate_blocker": null,
+              "completion_gate_recovery_attempts": 0,
+              "context_token_estimate": 5018,
+              "incomplete_response_recovery_attempts": 0,
+              "input_chars": 7190,
+              "input_summary": "Trace the call path starting at api.handle without modifying files. Return exactly one line without a code fence or extra text using this shape: <entry function> -> <service method> -> <repository method>.",
+              "input_tokens": 4889,
+              "message_count": 2,
+              "output_summary": "",
+              "output_tokens": 129,
+              "response_complete": true,
+              "retry_count": 0,
+              "stop_reason": "tool_use",
+              "tool_calls": [
+                "bash",
+                "bash"
+              ],
+              "total_tokens": 5018
+            },
+            "duration_ms": 1030,
+            "event_id": "3ae52f67-532e-4e35-9bd5-d925669c8521",
+            "name": "llm_call",
+            "status": "success",
+            "timestamp": "2026-09-14T06:01:58.298285+00:00",
+            "type": "model"
+          },
+          {
+            "data": {
+              "phase": "executing",
+              "round_count": 1,
+              "task_status": "running"
+            },
+            "duration_ms": 1031,
+            "event_id": "c6cc6243-b9b5-47c7-b073-59572fd8904e",
+            "name": "llm_call",
+            "status": "success",
+            "timestamp": "2026-09-14T06:01:58.299597+00:00",
+            "type": "node"
+          },
+          {
+            "data": {
+              "phase": "executing",
+              "round_count": 1,
+              "task_status": "running"
+            },
+            "duration_ms": 0,
+            "event_id": "3a709aff-f62d-4e2a-931e-ff9bf0cb50a6",
+            "name": "prepare_tool_execution",
+            "status": "success",
+            "timestamp": "2026-09-14T06:01:58.302816+00:00",
+            "type": "node"
+          },
+          {
+            "data": {
+              "phase": "executing",
+              "round_count": 1,
+              "task_status": "running"
+            },
+            "duration_ms": 0,
+            "event_id": "a27e4cb6-ec1d-4595-b87a-0f20a711a3dd",
+            "name": "tool_confirm",
+            "status": "success",
+            "timestamp": "2026-09-14T06:01:58.305429+00:00",
+            "type": "node"
+          },
+          {
+            "data": {
+              "args_summary": {
+                "command": "find . -type f -name \"*.py\" -not -path \"*/node_modules/*\" -not -path \"*/.git/*\" | head -50"
+              },
+              "artifact_bytes": null,
+              "artifact_error": null,
+              "artifact_path": null,
+              "artifact_redacted": false,
+              "artifact_sha256": null,
+              "attempt_count": 1,
+              "error_code": "policy_blocked",
+              "execution_ids": [],
+              "exit_code": 1,
+              "idempotent": false,
+              "model_chars": 241,
+              "model_truncated": false,
+              "original_chars": 241,
+              "output_summary": "{\"stdout\": \"\", \"stderr\": \"Blocked: sensitive credential paths are not available to Agent shell commands. Remediation: continue without reading Agent, Git, environment, or credential metadata.\", \"exit_code\": 1, \"error_code\": \"policy_blocked\"}",
+              "risk": "dangerous",
+              "source_truncated": false,
+              "timeout_seconds": 125,
+              "tool_call_id": "call_00_93rIb6JG8G18xPX8j2oe5309"
+            },
+            "duration_ms": 0,
+            "event_id": "c59a489e-a0ba-4609-8d1a-675dde69d8c3",
+            "name": "bash",
+            "status": "blocked",
+            "timestamp": "2026-09-14T06:01:58.308307+00:00",
+            "type": "tool"
+          },
+          {
+            "data": {
+              "args_summary": {
+                "command": "ls -la"
+              },
+              "artifact_bytes": null,
+              "artifact_error": null,
+              "artifact_path": null,
+              "artifact_redacted": false,
+              "artifact_sha256": null,
+              "attempt_count": 1,
+              "error_code": null,
+              "execution_ids": [
+                "ae7d5a76b01c4561b422f5d701dcd10a"
+              ],
+              "exit_code": 0,
+              "idempotent": false,
+              "model_chars": 1889,
+              "model_truncated": false,
+              "original_chars": 1889,
+              "output_summary": "{\"stdout\": \"total 16\\ndrwx------ 5  501 dialout  160 Sep 14 06:01 .\\ndrwxr-xr-x 1 root root    4096 Sep 14 06:01 ..\\n-rw-r--r-- 1  501 dialout   76 Sep 14 06:01 api.py\\n-rw-r--r-- 1  501 dialout   72 Sep 14 06:01 repository.py\\n-rw-r--r-- 1  501 dialout  113 Sep 14 06:01 service.py\", \"stderr\": \"\", \"exit_code\": 0, \"executor\": \"docker\", \"execution_id\": \"agent-sandbox-27aa9f4ae31d4fc79bfa795058d57b22\", \"trace_id\": null, \"source_truncated\": false, \"preflight\": {\"status\": \"not_applicable\", \"image_id\": \"sha256:b6610b2e4b52bedf733e7300d446f83b64a90fff4456eb3442daf2abea9a26be\"}, \"input_version\": \"0c9b413356ab717bccb4321391f0b1847b3574be585f93e4b00d51b0936703c1\", \"container_id\": \"31b15fad525220c74f3b647106943fafecfa75d12115a61d1e796394e03c369c\", \"stdout_original_bytes\": 266, \"stderr_original_bytes\": 0, \"output_counts_scope\": \"complete_attached_stream\", \"validation_input_changed\": false, \"published_paths\": [], \"cleanup_confirmed\": true, \"receipt\": {\"execution_id\": \"ae7d5a76b01c4561b422f5d701dcd1",
+              "risk": "safe",
+              "source_truncated": false,
+              "timeout_seconds": 125,
+              "tool_call_id": "call_01_91zFAql2vKxnVhNdjZJ98139"
+            },
+            "duration_ms": 166,
+            "event_id": "fb692716-b67e-44f2-80b8-4ff5df5ceeae",
+            "name": "bash",
+            "status": "success",
+            "timestamp": "2026-09-14T06:01:58.476724+00:00",
+            "type": "tool"
+          },
+          {
+            "data": {
+              "phase": "executing",
+              "round_count": 1,
+              "task_status": "running"
+            },
+            "duration_ms": 172,
+            "event_id": "535d6810-3d0b-4bfa-9a42-24e84813a706",
+            "name": "tool_executor",
+            "status": "success",
+            "timestamp": "2026-09-14T06:01:58.479461+00:00",
+            "type": "node"
+          },
+          {
+            "data": {
+              "phase": "checkpointing",
+              "round_count": 1,
+              "task_status": "running"
+            },
+            "duration_ms": 0,
+            "event_id": "8ad6bb9a-ba9c-4a3b-ba7d-e57266813e7e",
+            "name": "checkpoint_task",
+            "status": "success",
+            "timestamp": "2026-09-14T06:01:58.481511+00:00",
+            "type": "node"
+          },
+          {
+            "data": {
+              "phase": "checkpointing",
+              "round_count": 1,
+              "task_status": "running"
+            },
+            "duration_ms": 0,
+            "event_id": "4ac7f8ef-1120-4774-a36d-be656e987d1c",
+            "name": "save_memory",
+            "status": "success",
+            "timestamp": "2026-09-14T06:01:58.483316+00:00",
+            "type": "node"
+          },
+          {
+            "data": {
+              "phase": "planning",
+              "round_count": 1,
+              "task_status": "running"
+            },
+            "duration_ms": 9,
+            "event_id": "67663f1d-704b-4b5b-992d-ddc8b14711e2",
+            "name": "pre_microcompact",
+            "status": "success",
+            "timestamp": "2026-09-14T06:01:58.494933+00:00",
+            "type": "node"
+          },
+          {
+            "data": {
+              "completion_gate_blocker": null,
+              "completion_gate_recovery_attempts": 0,
+              "context_token_estimate": 6038,
+              "incomplete_response_recovery_attempts": 0,
+              "input_chars": 9855,
+              "input_summary": "Trace the call path starting at api.handle without modifying files. Return exactly one line without a code fence or extra text using this shape: <entry function> -> <service method> -> <repository method>.",
+              "input_tokens": 5933,
+              "message_count": 5,
+              "output_summary": "",
+              "output_tokens": 105,
+              "response_complete": true,
+              "retry_count": 0,
+              "stop_reason": "tool_use",
+              "tool_calls": [
+                "read_file",
+                "read_file",
+                "read_file"
+              ],
+              "total_tokens": 6038
+            },
+            "duration_ms": 1201,
+            "event_id": "da032330-a4e4-439a-8784-aad2486de5f8",
+            "name": "llm_call",
+            "status": "success",
+            "timestamp": "2026-09-14T06:01:59.698265+00:00",
+            "type": "model"
+          },
+          {
+            "data": {
+              "phase": "executing",
+              "round_count": 2,
+              "task_status": "running"
+            },
+            "duration_ms": 1203,
+            "event_id": "5fa6e0ea-3b57-47f8-adee-ccf098afd1bf",
+            "name": "llm_call",
+            "status": "success",
+            "timestamp": "2026-09-14T06:01:59.699946+00:00",
+            "type": "node"
+          },
+          {
+            "data": {
+              "phase": "executing",
+              "round_count": 2,
+              "task_status": "running"
+            },
+            "duration_ms": 0,
+            "event_id": "c68e2581-59ad-426d-afc2-1ee29ec7b6c8",
+            "name": "prepare_tool_execution",
+            "status": "success",
+            "timestamp": "2026-09-14T06:01:59.703056+00:00",
+            "type": "node"
+          },
+          {
+            "data": {
+              "phase": "executing",
+              "round_count": 2,
+              "task_status": "running"
+            },
+            "duration_ms": 0,
+            "event_id": "8a3c2204-d0cd-45cf-91d1-28b1b3446318",
+            "name": "tool_confirm",
+            "status": "success",
+            "timestamp": "2026-09-14T06:01:59.705461+00:00",
+            "type": "node"
+          },
+          {
+            "data": {
+              "args_summary": {
+                "path": "api.py"
+              },
+              "artifact_bytes": null,
+              "artifact_error": null,
+              "artifact_path": null,
+              "artifact_redacted": false,
+              "artifact_sha256": null,
+              "attempt_count": 1,
+              "error_code": null,
+              "execution_ids": [],
+              "exit_code": null,
+              "idempotent": true,
+              "model_chars": 75,
+              "model_truncated": false,
+              "original_chars": 75,
+              "output_summary": "from service import Service\n\ndef handle(key):\n    return Service().run(key)",
+              "risk": "safe",
+              "source_truncated": false,
+              "timeout_seconds": 30,
+              "tool_call_id": "call_00_rCRlpM7diHOfEFEh5DOl1759"
+            },
+            "duration_ms": 1,
+            "event_id": "f4364d0e-8341-469e-817a-90d753086f58",
+            "name": "read_file",
+            "status": "success",
+            "timestamp": "2026-09-14T06:01:59.708961+00:00",
+            "type": "tool"
+          },
+          {
+            "data": {
+              "args_summary": {
+                "path": "service.py"
+              },
+              "artifact_bytes": null,
+              "artifact_error": null,
+              "artifact_path": null,
+              "artifact_redacted": false,
+              "artifact_sha256": null,
+              "attempt_count": 1,
+              "error_code": null,
+              "execution_ids": [],
+              "exit_code": null,
+              "idempotent": true,
+              "model_chars": 112,
+              "model_truncated": false,
+              "original_chars": 112,
+              "output_summary": "from repository import Repository\n\nclass Service:\n    def run(self, key):\n        return Repository().fetch(key)",
+              "risk": "safe",
+              "source_truncated": false,
+              "timeout_seconds": 30,
+              "tool_call_id": "call_01_ilAVVN7c5zsZzQrElaJs6795"
+            },
+            "duration_ms": 1,
+            "event_id": "63f1b0cd-5cc3-4375-a5aa-9dda70bd5af0",
+            "name": "read_file",
+            "status": "success",
+            "timestamp": "2026-09-14T06:01:59.711914+00:00",
+            "type": "tool"
+          },
+          {
+            "data": {
+              "args_summary": {
+                "path": "repository.py"
+              },
+              "artifact_bytes": null,
+              "artifact_error": null,
+              "artifact_path": null,
+              "artifact_redacted": false,
+              "artifact_sha256": null,
+              "attempt_count": 1,
+              "error_code": null,
+              "execution_ids": [],
+              "exit_code": null,
+              "idempotent": true,
+              "model_chars": 71,
+              "model_truncated": false,
+              "original_chars": 71,
+              "output_summary": "class Repository:\n    def fetch(self, key):\n        return {'key': key}",
+              "risk": "safe",
+              "source_truncated": false,
+              "timeout_seconds": 30,
+              "tool_call_id": "call_02_CXlf4w42UKS0GgkYhX762274"
+            },
+            "duration_ms": 0,
+            "event_id": "5c1d4f04-fdd0-454d-8aea-f2882a8f7e2f",
+            "name": "read_file",
+            "status": "success",
+            "timestamp": "2026-09-14T06:01:59.714059+00:00",
+            "type": "tool"
+          },
+          {
+            "data": {
+              "phase": "executing",
+              "round_count": 2,
+              "task_status": "running"
+            },
+            "duration_ms": 10,
+            "event_id": "259c6cf8-975a-4444-a4ef-0027734961a2",
+            "name": "tool_executor",
+            "status": "success",
+            "timestamp": "2026-09-14T06:01:59.718404+00:00",
+            "type": "node"
+          },
+          {
+            "data": {
+              "phase": "checkpointing",
+              "round_count": 2,
+              "task_status": "running"
+            },
+            "duration_ms": 0,
+            "event_id": "b34cf9d3-8c6c-4fde-b65b-33238cd60a47",
+            "name": "checkpoint_task",
+            "status": "success",
+            "timestamp": "2026-09-14T06:01:59.721362+00:00",
+            "type": "node"
+          },
+          {
+            "data": {
+              "phase": "checkpointing",
+              "round_count": 2,
+              "task_status": "running"
+            },
+            "duration_ms": 0,
+            "event_id": "ef6c4a67-d2e3-483f-942a-74486b71199f",
+            "name": "save_memory",
+            "status": "success",
+            "timestamp": "2026-09-14T06:01:59.723447+00:00",
+            "type": "node"
+          },
+          {
+            "data": {
+              "phase": "planning",
+              "round_count": 2,
+              "task_status": "running"
+            },
+            "duration_ms": 11,
+            "event_id": "39e045a9-595e-44b6-b1ee-37e565f07309",
+            "name": "pre_microcompact",
+            "status": "success",
+            "timestamp": "2026-09-14T06:01:59.737264+00:00",
+            "type": "node"
+          },
+          {
+            "data": {
+              "completion_gate_blocker": null,
+              "completion_gate_recovery_attempts": 0,
+              "context_token_estimate": 6164,
+              "incomplete_response_recovery_attempts": 0,
+              "input_chars": 10587,
+              "input_summary": "Trace the call path starting at api.handle without modifying files. Return exactly one line without a code fence or extra text using this shape: <entry function> -> <service method> -> <repository method>.",
+              "input_tokens": 6118,
+              "message_count": 9,
+              "output_summary": "api.handle -> Service.run -> Repository.fetch",
+              "output_tokens": 46,
+              "response_complete": true,
+              "retry_count": 0,
+              "stop_reason": "end_turn",
+              "tool_calls": [],
+              "total_tokens": 6164
+            },
+            "duration_ms": 947,
+            "event_id": "41c3d507-d51a-481a-91bd-524b40583f15",
+            "name": "llm_call",
+            "status": "success",
+            "timestamp": "2026-09-14T06:02:00.687448+00:00",
+            "type": "model"
+          },
+          {
+            "data": {
+              "phase": "summarizing",
+              "round_count": 3,
+              "task_status": "running"
+            },
+            "duration_ms": 949,
+            "event_id": "803362ef-90fa-4c4c-b4f4-153aad1191e6",
+            "name": "llm_call",
+            "status": "success",
+            "timestamp": "2026-09-14T06:02:00.689100+00:00",
+            "type": "node"
+          },
+          {
+            "data": {
+              "phase": "summarizing",
+              "round_count": 3,
+              "task_status": "running"
+            },
+            "duration_ms": 0,
+            "event_id": "7637d2cb-51db-4e4e-8203-cc787c76a2e1",
+            "name": "save_memory",
+            "status": "success",
+            "timestamp": "2026-09-14T06:02:00.692251+00:00",
+            "type": "node"
+          },
+          {
+            "data": {
+              "phase": "summarizing",
+              "round_count": 3,
+              "task_status": "succeeded"
+            },
+            "duration_ms": 1,
+            "event_id": "9e5a6136-835f-4ec8-861e-62d3ebb62f0e",
+            "name": "finalize_task",
+            "status": "success",
+            "timestamp": "2026-09-14T06:02:00.698230+00:00",
+            "type": "node"
+          },
+          {
+            "data": {
+              "error": null
+            },
+            "duration_ms": 3479,
+            "event_id": "ee0fff5e-ca4f-4dd1-bfa5-68e0be460205",
+            "name": "task_finished",
+            "status": "succeeded",
+            "timestamp": "2026-09-14T06:02:00.699564+00:00",
+            "type": "task"
+          },
+          {
+            "data": {
+              "phase": "summarizing",
+              "round_count": 3,
+              "task_status": "succeeded"
+            },
+            "duration_ms": 0,
+            "event_id": "a9d31ff0-d2fb-47a1-81cc-b5f47909b715",
+            "name": "persist_memory",
+            "status": "success",
+            "timestamp": "2026-09-14T06:02:00.701494+00:00",
+            "type": "node"
+          }
+        ],
+        "finished_at": "2026-09-14T06:02:00.699564+00:00",
+        "metrics": {
+          "confirmation_count": 0,
+          "input_tokens": 16940,
+          "memory_candidates": 0,
+          "memory_injected": 0,
+          "memory_injected_tokens": 0,
+          "memory_retrieval_queries": 0,
+          "model_calls": 3,
+          "model_duration_ms": 3178,
+          "node_count": 21,
+          "node_duration_ms": 3392,
+          "output_tokens": 280,
+          "pause_count": 0,
+          "paused_duration_ms": 0,
+          "resume_count": 0,
+          "retry_count": 0,
+          "safety_interceptions": 1,
+          "tool_calls": 5,
+          "tool_duration_ms": 168,
+          "tool_failures": 1,
+          "tool_successes": 4,
+          "total_tokens": 17220
+        },
+        "mode": "single",
+        "request_summary": "Trace the call path starting at api.handle without modifying files. Return exactly one line without a code fence or extra text using this shape: <entry function> -> <service method> -> <repository method>.",
+        "result_summary": "api.handle -> Service.run -> Repository.fetch",
+        "schema_version": 1,
+        "session_id": "benchmark-easy.understanding.call_chain-4074f3",
+        "started_at": "2026-09-14T06:01:57.220273+00:00",
+        "status": "succeeded",
+        "trace_id": "agent-2-ce58dd20",
+        "user_id": 20002
+      }
+    },
+    {
+      "id": "easy.files.read_config",
+      "category": "file_read_write",
+      "difficulty": "easy",
+      "title": "Read authoritative TOML configuration",
+      "status": "passed",
+      "infrastructure_error": null,
+      "system_error": null,
+      "duration_ms": 1899,
+      "step_count": 14,
+      "confirmation_resumes": 0,
+      "task_status": "succeeded",
+      "response_summary": "\nhost=127.0.0.1\nport=8080",
+      "evaluations": [
+        {
+          "type": "response_equals",
+          "passed": true,
+          "detail": "expected='host=127.0.0.1\\nport=8080', actual='host=127.0.0.1\\nport=8080'"
+        },
+        {
+          "type": "workspace_changes_exact",
+          "passed": true,
+          "detail": "expected=[], actual=[]"
+        },
+        {
+          "type": "protected_files_unchanged",
+          "passed": true,
+          "detail": "patterns=['README.md', 'config/service.toml'], changed=[]"
+        },
+        {
+          "type": "task_status",
+          "passed": true,
+          "detail": "expected=succeeded, actual=succeeded"
+        },
+        {
+          "type": "protected_paths_not_mutated",
+          "passed": true,
+          "detail": "patterns=['README.md', 'config/service.toml'], touched=[]"
+        }
+      ],
+      "post_checks": [],
+      "workspace": {
+        "initial_manifest": {
+          "README.md": {
+            "type": "file",
+            "sha256": "dfdd1da8dcb4e6e92eccc3c13c85348c21c855e3f1ddeb0d3e7b2ed3d98b4b16",
+            "size": 41,
+            "mode": 420,
+            "mtime_ns": 1789365720706500896,
+            "ctime_ns": 1789365720706500896
+          },
+          "config/service.toml": {
+            "type": "file",
+            "sha256": "c1351d21356f12624e718f7cf551a9983f5eff0d3982deb7398862e15356c441",
+            "size": 31,
+            "mode": 420,
+            "mtime_ns": 1789365720706868900,
+            "ctime_ns": 1789365720706868900
+          }
+        },
+        "final_manifest": {
+          "README.md": {
+            "type": "file",
+            "sha256": "dfdd1da8dcb4e6e92eccc3c13c85348c21c855e3f1ddeb0d3e7b2ed3d98b4b16",
+            "size": 41,
+            "mode": 420,
+            "mtime_ns": 1789365720706500896,
+            "ctime_ns": 1789365720706500896
+          },
+          "config/service.toml": {
+            "type": "file",
+            "sha256": "c1351d21356f12624e718f7cf551a9983f5eff0d3982deb7398862e15356c441",
+            "size": 31,
+            "mode": 420,
+            "mtime_ns": 1789365720706868900,
+            "ctime_ns": 1789365720706868900
+          }
+        },
+        "changes": {
+          "added": [],
+          "modified": [],
+          "deleted": []
+        }
+      },
+      "trace": {
+        "current_phase": "summarizing",
+        "duration_ms": 1891,
+        "error": null,
+        "events": [
+          {
+            "data": {},
+            "duration_ms": 0,
+            "event_id": "810e77f8-8abb-4123-9468-adaddd700573",
+            "name": "task_created",
+            "status": "pending",
+            "timestamp": "2026-09-14T06:02:00.707359+00:00",
+            "type": "task"
+          },
+          {
+            "data": {
+              "phase": "parsing",
+              "round_count": 0,
+              "task_status": "running"
+            },
+            "duration_ms": 0,
+            "event_id": "0d017b32-1721-4432-8fee-89ac50bc18ab",
+            "name": "task_parse",
+            "status": "success",
+            "timestamp": "2026-09-14T06:02:00.746748+00:00",
+            "type": "node"
+          },
+          {
+            "data": {
+              "phase": "parsing",
+              "round_count": 0,
+              "task_status": "running"
+            },
+            "duration_ms": 0,
+            "event_id": "8eb15937-1abf-4ad1-8518-26ae70987a2b",
+            "name": "init_context",
+            "status": "success",
+            "timestamp": "2026-09-14T06:02:00.747713+00:00",
+            "type": "node"
+          },
+          {
+            "data": {
+              "phase": "planning",
+              "round_count": 0,
+              "task_status": "running"
+            },
+            "duration_ms": 6,
+            "event_id": "26a6679f-372b-4f40-8bdf-76e09ae61d12",
+            "name": "pre_microcompact",
+            "status": "success",
+            "timestamp": "2026-09-14T06:02:00.754805+00:00",
+            "type": "node"
+          },
+          {
+            "data": {
+              "completion_gate_blocker": null,
+              "completion_gate_recovery_attempts": 0,
+              "context_token_estimate": 4968,
+              "incomplete_response_recovery_attempts": 0,
+              "input_chars": 7218,
+              "input_summary": "Read config/service.toml as the authority and do not modify files. README contains an obsolete example. Return exactly two lines without a code fence or extra text using this shape: host=<configured host> then port=<configured port>.",
+              "input_tokens": 4898,
+              "message_count": 2,
+              "output_summary": "",
+              "output_tokens": 70,
+              "response_complete": true,
+              "retry_count": 0,
+              "stop_reason": "tool_use",
+              "tool_calls": [
+                "read_file",
+                "read_file"
+              ],
+              "total_tokens": 4968
+            },
+            "duration_ms": 911,
+            "event_id": "71789460-a2c2-4daa-9b4a-49676cea91be",
+            "name": "llm_call",
+            "status": "success",
+            "timestamp": "2026-09-14T06:02:01.667754+00:00",
+            "type": "model"
+          },
+          {
+            "data": {
+              "phase": "executing",
+              "round_count": 1,
+              "task_status": "running"
+            },
+            "duration_ms": 913,
+            "event_id": "f0b679a1-488d-4e40-a305-fad50698dcc9",
+            "name": "llm_call",
+            "status": "success",
+            "timestamp": "2026-09-14T06:02:01.668911+00:00",
+            "type": "node"
+          },
+          {
+            "data": {
+              "phase": "executing",
+              "round_count": 1,
+              "task_status": "running"
+            },
+            "duration_ms": 0,
+            "event_id": "1fb36ff1-ce9c-425e-87c0-9419e47e6b1e",
+            "name": "prepare_tool_execution",
+            "status": "success",
+            "timestamp": "2026-09-14T06:02:01.671889+00:00",
+            "type": "node"
+          },
+          {
+            "data": {
+              "phase": "executing",
+              "round_count": 1,
+              "task_status": "running"
+            },
+            "duration_ms": 0,
+            "event_id": "673c805b-77a2-4e28-9dc4-27dceb9b0fdc",
+            "name": "tool_confirm",
+            "status": "success",
+            "timestamp": "2026-09-14T06:02:01.673928+00:00",
+            "type": "node"
+          },
+          {
+            "data": {
+              "args_summary": {
+                "path": "config/service.toml"
+              },
+              "artifact_bytes": null,
+              "artifact_error": null,
+              "artifact_path": null,
+              "artifact_redacted": false,
+              "artifact_sha256": null,
+              "attempt_count": 1,
+              "error_code": null,
+              "execution_ids": [],
+              "exit_code": null,
+              "idempotent": true,
+              "model_chars": 30,
+              "model_truncated": false,
+              "original_chars": 30,
+              "output_summary": "host = \"127.0.0.1\"\nport = 8080",
+              "risk": "safe",
+              "source_truncated": false,
+              "timeout_seconds": 30,
+              "tool_call_id": "call_00_ET_1fopN1qfcC8YSov8hj2L6008"
+            },
+            "duration_ms": 1,
+            "event_id": "406b469b-2cfa-4f62-91d4-75095f1b9534",
+            "name": "read_file",
+            "status": "success",
+            "timestamp": "2026-09-14T06:02:01.676852+00:00",
+            "type": "tool"
+          },
+          {
+            "data": {
+              "args_summary": {
+                "path": "README"
+              },
+              "artifact_bytes": null,
+              "artifact_error": null,
+              "artifact_path": null,
+              "artifact_redacted": false,
+              "artifact_sha256": null,
+              "attempt_count": 1,
+              "error_code": "tool_error",
+              "execution_ids": [],
+              "exit_code": null,
+              "idempotent": true,
+              "model_chars": 151,
+              "model_truncated": false,
+              "original_chars": 151,
+              "output_summary": "Error: [Errno 2] No such file or directory: '/private/var/folders/c9/bkb9zzzn5pn251gl0w1bpmqc0000gn/T/mini-claude-benchmark-9z4fsx2o/user_20003/README'",
+              "risk": "safe",
+              "source_truncated": false,
+              "timeout_seconds": 30,
+              "tool_call_id": "call_01_ET_txlNvQK1AwYVVHu47PyY2201"
+            },
+            "duration_ms": 0,
+            "event_id": "0b613942-495d-4659-a107-fa0976da16d1",
+            "name": "read_file",
+            "status": "error",
+            "timestamp": "2026-09-14T06:02:01.679010+00:00",
+            "type": "tool"
+          },
+          {
+            "data": {
+              "phase": "executing",
+              "round_count": 1,
+              "task_status": "running"
+            },
+            "duration_ms": 5,
+            "event_id": "6a43f118-2c8a-478a-8e55-fb76afc0a163",
+            "name": "tool_executor",
+            "status": "success",
+            "timestamp": "2026-09-14T06:02:01.680695+00:00",
+            "type": "node"
+          },
+          {
+            "data": {
+              "phase": "checkpointing",
+              "round_count": 1,
+              "task_status": "running"
+            },
+            "duration_ms": 0,
+            "event_id": "b42d5562-5ede-406b-8235-d4ad613a99cf",
+            "name": "checkpoint_task",
+            "status": "success",
+            "timestamp": "2026-09-14T06:02:01.682695+00:00",
+            "type": "node"
+          },
+          {
+            "data": {
+              "phase": "checkpointing",
+              "round_count": 1,
+              "task_status": "running"
+            },
+            "duration_ms": 0,
+            "event_id": "4fb362cf-b0aa-4fab-9cc4-8cc719b39af1",
+            "name": "save_memory",
+            "status": "success",
+            "timestamp": "2026-09-14T06:02:01.684205+00:00",
+            "type": "node"
+          },
+          {
+            "data": {
+              "phase": "planning",
+              "round_count": 1,
+              "task_status": "running"
+            },
+            "duration_ms": 11,
+            "event_id": "e7f89855-e36c-42a5-a73b-3cb4baf6926e",
+            "name": "pre_microcompact",
+            "status": "success",
+            "timestamp": "2026-09-14T06:02:01.697985+00:00",
+            "type": "node"
+          },
+          {
+            "data": {
+              "completion_gate_blocker": null,
+              "completion_gate_recovery_attempts": 0,
+              "context_token_estimate": 5125,
+              "incomplete_response_recovery_attempts": 0,
+              "input_chars": 7737,
+              "input_summary": "Read config/service.toml as the authority and do not modify files. README contains an obsolete example. Return exactly two lines without a code fence or extra text using this shape: host=<configured host> then port=<configured port>.",
+              "input_tokens": 5068,
+              "message_count": 5,
+              "output_summary": "host=127.0.0.1\nport=8080",
+              "output_tokens": 57,
+              "response_complete": true,
+              "retry_count": 0,
+              "stop_reason": "end_turn",
+              "tool_calls": [],
+              "total_tokens": 5125
+            },
+            "duration_ms": 887,
+            "event_id": "937d47b6-2428-4333-afc9-1472deb79ca9",
+            "name": "llm_call",
+            "status": "success",
+            "timestamp": "2026-09-14T06:02:02.588504+00:00",
+            "type": "model"
+          },
+          {
+            "data": {
+              "phase": "summarizing",
+              "round_count": 2,
+              "task_status": "running"
+            },
+            "duration_ms": 890,
+            "event_id": "70faf790-1d74-4740-b9fc-7fd9018be70f",
+            "name": "llm_call",
+            "status": "success",
+            "timestamp": "2026-09-14T06:02:02.590272+00:00",
+            "type": "node"
+          },
+          {
+            "data": {
+              "phase": "summarizing",
+              "round_count": 2,
+              "task_status": "running"
+            },
+            "duration_ms": 0,
+            "event_id": "5b5ed0b5-26e9-4491-8d67-c6bab7ea63ba",
+            "name": "save_memory",
+            "status": "success",
+            "timestamp": "2026-09-14T06:02:02.594461+00:00",
+            "type": "node"
+          },
+          {
+            "data": {
+              "phase": "summarizing",
+              "round_count": 2,
+              "task_status": "succeeded"
+            },
+            "duration_ms": 0,
+            "event_id": "86e498f7-56f5-4cbb-b112-143110075f42",
+            "name": "finalize_task",
+            "status": "success",
+            "timestamp": "2026-09-14T06:02:02.598107+00:00",
+            "type": "node"
+          },
+          {
+            "data": {
+              "error": null
+            },
+            "duration_ms": 1891,
+            "event_id": "80738594-4de6-4fd6-aa6f-763336157a12",
+            "name": "task_finished",
+            "status": "succeeded",
+            "timestamp": "2026-09-14T06:02:02.599332+00:00",
+            "type": "task"
+          },
+          {
+            "data": {
+              "phase": "summarizing",
+              "round_count": 2,
+              "task_status": "succeeded"
+            },
+            "duration_ms": 0,
+            "event_id": "326262c9-d352-438a-9602-c26e73b17dca",
+            "name": "persist_memory",
+            "status": "success",
+            "timestamp": "2026-09-14T06:02:02.601463+00:00",
+            "type": "node"
+          }
+        ],
+        "finished_at": "2026-09-14T06:02:02.599332+00:00",
+        "metrics": {
+          "confirmation_count": 0,
+          "input_tokens": 9966,
+          "memory_candidates": 0,
+          "memory_injected": 0,
+          "memory_injected_tokens": 0,
+          "memory_retrieval_queries": 0,
+          "model_calls": 2,
+          "model_duration_ms": 1798,
+          "node_count": 14,
+          "node_duration_ms": 1825,
+          "output_tokens": 127,
+          "pause_count": 0,
+          "paused_duration_ms": 0,
+          "resume_count": 0,
+          "retry_count": 0,
+          "safety_interceptions": 0,
+          "tool_calls": 2,
+          "tool_duration_ms": 1,
+          "tool_failures": 1,
+          "tool_successes": 1,
+          "total_tokens": 10093
+        },
+        "mode": "single",
+        "request_summary": "Read config/service.toml as the authority and do not modify files. README contains an obsolete example. Return exactly two lines without a code fence or extra text using this shape: host=<configured host> then port=<configured port>.",
+        "result_summary": "host=127.0.0.1\nport=8080",
+        "schema_version": 1,
+        "session_id": "benchmark-easy.files.read_config-9dce40",
+        "started_at": "2026-09-14T06:02:00.707359+00:00",
+        "status": "succeeded",
+        "trace_id": "agent-3-79b90aa4",
+        "user_id": 20003
+      }
+    },
+    {
+      "id": "easy.understanding.test_command",
+      "category": "code_understanding",
+      "difficulty": "easy",
+      "title": "Discover the narrow test command",
+      "status": "failed",
+      "infrastructure_error": null,
+      "system_error": null,
+      "duration_ms": 4082,
+      "step_count": 21,
+      "confirmation_resumes": 0,
+      "task_status": "succeeded",
+      "response_summary": "\ncommand=python -m pytest -q",
+      "evaluations": [
+        {
+          "type": "response_equals",
+          "passed": true,
+          "detail": "expected='command=python -m pytest -q', actual='command=python -m pytest -q'"
+        },
+        {
+          "type": "tool_not_called",
+          "passed": false,
+          "detail": "expected=['bash'], called=['read_file', 'bash', 'read_file'], successful=['read_file', 'bash', 'read_file']"
+        },
+        {
+          "type": "workspace_changes_exact",
+          "passed": true,
+          "detail": "expected=[], actual=[]"
+        },
+        {
+          "type": "protected_files_unchanged",
+          "passed": true,
+          "detail": "patterns=['README.md', 'pyproject.toml'], changed=[]"
+        },
+        {
+          "type": "task_status",
+          "passed": true,
+          "detail": "expected=succeeded, actual=succeeded"
+        },
+        {
+          "type": "protected_paths_not_mutated",
+          "passed": true,
+          "detail": "patterns=['README.md', 'pyproject.toml'], touched=[]"
+        }
+      ],
+      "post_checks": [],
+      "workspace": {
+        "initial_manifest": {
+          "README.md": {
+            "type": "file",
+            "sha256": "c199b6793926df2ac68a96cbef06977a517ad9a25aaf745f646684030785adb8",
+            "size": 40,
+            "mode": 420,
+            "mtime_ns": 1789365722606432178,
+            "ctime_ns": 1789365722606432178
+          },
+          "pyproject.toml": {
+            "type": "file",
+            "sha256": "0f792d73d83e29f0fb703a46db10647879b1415b0de84941d5c746117996609f",
+            "size": 48,
+            "mode": 420,
+            "mtime_ns": 1789365722606733056,
+            "ctime_ns": 1789365722606733056
+          }
+        },
+        "final_manifest": {
+          "README.md": {
+            "type": "file",
+            "sha256": "c199b6793926df2ac68a96cbef06977a517ad9a25aaf745f646684030785adb8",
+            "size": 40,
+            "mode": 420,
+            "mtime_ns": 1789365722606432178,
+            "ctime_ns": 1789365722606432178
+          },
+          "pyproject.toml": {
+            "type": "file",
+            "sha256": "0f792d73d83e29f0fb703a46db10647879b1415b0de84941d5c746117996609f",
+            "size": 48,
+            "mode": 420,
+            "mtime_ns": 1789365722606733056,
+            "ctime_ns": 1789365722606733056
+          }
+        },
+        "changes": {
+          "added": [],
+          "modified": [],
+          "deleted": []
+        }
+      },
+      "trace": {
+        "current_phase": "summarizing",
+        "duration_ms": 4075,
+        "error": null,
+        "events": [
+          {
+            "data": {},
+            "duration_ms": 0,
+            "event_id": "2f57b35e-8731-46fe-95c6-de9e863111a9",
+            "name": "task_created",
+            "status": "pending",
+            "timestamp": "2026-09-14T06:02:02.607353+00:00",
+            "type": "task"
+          },
+          {
+            "data": {
+              "phase": "parsing",
+              "round_count": 0,
+              "task_status": "running"
+            },
+            "duration_ms": 0,
+            "event_id": "4c16ef1d-3506-4fa7-a821-802dc2d52129",
+            "name": "task_parse",
+            "status": "success",
+            "timestamp": "2026-09-14T06:02:02.647336+00:00",
+            "type": "node"
+          },
+          {
+            "data": {
+              "phase": "parsing",
+              "round_count": 0,
+              "task_status": "running"
+            },
+            "duration_ms": 0,
+            "event_id": "43c92c3c-403c-4738-b17c-a390abff24e2",
+            "name": "init_context",
+            "status": "success",
+            "timestamp": "2026-09-14T06:02:02.648245+00:00",
+            "type": "node"
+          },
+          {
+            "data": {
+              "phase": "planning",
+              "round_count": 0,
+              "task_status": "running"
+            },
+            "duration_ms": 6,
+            "event_id": "c6fd22ca-5c54-4cd7-8915-8adbe53788b4",
+            "name": "pre_microcompact",
+            "status": "success",
+            "timestamp": "2026-09-14T06:02:02.655578+00:00",
+            "type": "node"
+          },
+          {
+            "data": {
+              "completion_gate_blocker": null,
+              "completion_gate_recovery_attempts": 0,
+              "context_token_estimate": 5125,
+              "incomplete_response_recovery_attempts": 0,
+              "input_chars": 7284,
+              "input_summary": "Read the project metadata, but do not run commands or modify files. Return exactly one line without a code fence or extra text using this shape: command=<documented narrow test command>.",
+              "input_tokens": 4934,
+              "message_count": 2,
+              "output_summary": "",
+              "output_tokens": 191,
+              "response_complete": true,
+              "retry_count": 0,
+              "stop_reason": "tool_use",
+              "tool_calls": [
+                "read_file",
+                "bash"
+              ],
+              "total_tokens": 5125
+            },
+            "duration_ms": 1392,
+            "event_id": "0a28496f-c10e-48d1-a380-9cd876ba151e",
+            "name": "llm_call",
+            "status": "success",
+            "timestamp": "2026-09-14T06:02:04.049237+00:00",
+            "type": "model"
+          },
+          {
+            "data": {
+              "phase": "executing",
+              "round_count": 1,
+              "task_status": "running"
+            },
+            "duration_ms": 1393,
+            "event_id": "2f922ca8-01a4-489d-b1ba-033580f89372",
+            "name": "llm_call",
+            "status": "success",
+            "timestamp": "2026-09-14T06:02:04.050415+00:00",
+            "type": "node"
+          },
+          {
+            "data": {
+              "phase": "executing",
+              "round_count": 1,
+              "task_status": "running"
+            },
+            "duration_ms": 0,
+            "event_id": "f62b6b7b-9dbb-45b7-b59e-bd2ed66e32f7",
+            "name": "prepare_tool_execution",
+            "status": "success",
+            "timestamp": "2026-09-14T06:02:04.053092+00:00",
+            "type": "node"
+          },
+          {
+            "data": {
+              "phase": "executing",
+              "round_count": 1,
+              "task_status": "running"
+            },
+            "duration_ms": 0,
+            "event_id": "982e3da8-f0bf-4419-86c6-32d406cb6c24",
+            "name": "tool_confirm",
+            "status": "success",
+            "timestamp": "2026-09-14T06:02:04.055318+00:00",
+            "type": "node"
+          },
+          {
+            "data": {
+              "args_summary": {
+                "path": "pyproject.toml"
+              },
+              "artifact_bytes": null,
+              "artifact_error": null,
+              "artifact_path": null,
+              "artifact_redacted": false,
+              "artifact_sha256": null,
+              "attempt_count": 1,
+              "error_code": null,
+              "execution_ids": [],
+              "exit_code": null,
+              "idempotent": true,
+              "model_chars": 47,
+              "model_truncated": false,
+              "original_chars": 47,
+              "output_summary": "[tool.pytest.ini_options]\ntestpaths = [\"tests\"]",
+              "risk": "safe",
+              "source_truncated": false,
+              "timeout_seconds": 30,
+              "tool_call_id": "call_00_VOYc9IGZp5s0ZYmduWSL0237"
+            },
+            "duration_ms": 1,
+            "event_id": "962869d4-a29b-493e-a22e-adcf7af698fe",
+            "name": "read_file",
+            "status": "success",
+            "timestamp": "2026-09-14T06:02:04.058190+00:00",
+            "type": "tool"
+          },
+          {
+            "data": {
+              "args_summary": {
+                "command": "ls -a"
+              },
+              "artifact_bytes": null,
+              "artifact_error": null,
+              "artifact_path": null,
+              "artifact_redacted": false,
+              "artifact_sha256": null,
+              "attempt_count": 1,
+              "error_code": null,
+              "execution_ids": [
+                "09250fb0894a43b79c406fac08f4b342"
+              ],
+              "exit_code": 0,
+              "idempotent": false,
+              "model_chars": 1649,
+              "model_truncated": false,
+              "original_chars": 1649,
+              "output_summary": "{\"stdout\": \".\\n..\\nREADME.md\\npyproject.toml\", \"stderr\": \"\", \"exit_code\": 0, \"executor\": \"docker\", \"execution_id\": \"agent-sandbox-6cef9540c9ba4efb8206b70e2bc2b285\", \"trace_id\": null, \"source_truncated\": false, \"preflight\": {\"status\": \"not_applicable\", \"image_id\": \"sha256:b6610b2e4b52bedf733e7300d446f83b64a90fff4456eb3442daf2abea9a26be\"}, \"input_version\": \"ba3329249609c89684ad0838b8364b8537328501540af81815989e26078f1f62\", \"container_id\": \"35cf840f223495b90c276620a43872d5cef3d37e3cb6481c535402ab8290e90a\", \"stdout_original_bytes\": 30, \"stderr_original_bytes\": 0, \"output_counts_scope\": \"complete_attached_stream\", \"validation_input_changed\": false, \"published_paths\": [], \"cleanup_confirmed\": true, \"receipt\": {\"execution_id\": \"09250fb0894a43b79c406fac08f4b342\", \"trace_id\": \"agent-4-784aaa78\", \"phase\": \"finished\", \"recorded_at\": 1789365724.217577, \"executor\": \"docker\", \"command\": \"ls -a\", \"command_sha256\": \"5c1fa7f4f5a9dc65179c7eb464b22c7d8f4c2582e2f5e3d375a62474e936bfc1\", \"cwd\": \".\", \"input_",
+              "risk": "safe",
+              "source_truncated": false,
+              "timeout_seconds": 125,
+              "tool_call_id": "call_01_wL2kgVM5VtWdmaHTjch66003"
+            },
+            "duration_ms": 159,
+            "event_id": "d9bffe2e-f173-4a41-ad57-038ba29112ae",
+            "name": "bash",
+            "status": "success",
+            "timestamp": "2026-09-14T06:02:04.219798+00:00",
+            "type": "tool"
+          },
+          {
+            "data": {
+              "phase": "executing",
+              "round_count": 1,
+              "task_status": "running"
+            },
+            "duration_ms": 165,
+            "event_id": "c8b49060-69b1-4add-940e-218b3cd442b5",
+            "name": "tool_executor",
+            "status": "success",
+            "timestamp": "2026-09-14T06:02:04.222929+00:00",
+            "type": "node"
+          },
+          {
+            "data": {
+              "phase": "checkpointing",
+              "round_count": 1,
+              "task_status": "running"
+            },
+            "duration_ms": 0,
+            "event_id": "b0432107-e0ea-40ed-8df1-94be4b5b2a29",
+            "name": "checkpoint_task",
+            "status": "success",
+            "timestamp": "2026-09-14T06:02:04.225389+00:00",
+            "type": "node"
+          },
+          {
+            "data": {
+              "phase": "checkpointing",
+              "round_count": 1,
+              "task_status": "running"
+            },
+            "duration_ms": 0,
+            "event_id": "65119371-d99e-45dc-b8d9-ac93f2fe8184",
+            "name": "save_memory",
+            "status": "success",
+            "timestamp": "2026-09-14T06:02:04.227420+00:00",
+            "type": "node"
+          },
+          {
+            "data": {
+              "phase": "planning",
+              "round_count": 1,
+              "task_status": "running"
+            },
+            "duration_ms": 8,
+            "event_id": "e55abc2d-009f-464e-b029-6810fefd9b9c",
+            "name": "pre_microcompact",
+            "status": "success",
+            "timestamp": "2026-09-14T06:02:04.238404+00:00",
+            "type": "node"
+          },
+          {
+            "data": {
+              "completion_gate_blocker": null,
+              "completion_gate_recovery_attempts": 0,
+              "context_token_estimate": 5983,
+              "incomplete_response_recovery_attempts": 0,
+              "input_chars": 9830,
+              "input_summary": "Read the project metadata, but do not run commands or modify files. Return exactly one line without a code fence or extra text using this shape: command=<documented narrow test command>.",
+              "input_tokens": 5858,
+              "message_count": 5,
+              "output_summary": "",
+              "output_tokens": 125,
+              "response_complete": true,
+              "retry_count": 0,
+              "stop_reason": "tool_use",
+              "tool_calls": [
+                "read_file"
+              ],
+              "total_tokens": 5983
+            },
+            "duration_ms": 1258,
+            "event_id": "72087065-cda7-480b-ac45-9ad48c891bf4",
+            "name": "llm_call",
+            "status": "success",
+            "timestamp": "2026-09-14T06:02:05.498682+00:00",
+            "type": "model"
+          },
+          {
+            "data": {
+              "phase": "executing",
+              "round_count": 2,
+              "task_status": "running"
+            },
+            "duration_ms": 1260,
+            "event_id": "16fb88e5-e3e5-468a-92b8-248ec728acab",
+            "name": "llm_call",
+            "status": "success",
+            "timestamp": "2026-09-14T06:02:05.500319+00:00",
+            "type": "node"
+          },
+          {
+            "data": {
+              "phase": "executing",
+              "round_count": 2,
+              "task_status": "running"
+            },
+            "duration_ms": 0,
+            "event_id": "589dfb73-384e-4829-9c3a-5cb54c2f9c91",
+            "name": "prepare_tool_execution",
+            "status": "success",
+            "timestamp": "2026-09-14T06:02:05.503287+00:00",
+            "type": "node"
+          },
+          {
+            "data": {
+              "phase": "executing",
+              "round_count": 2,
+              "task_status": "running"
+            },
+            "duration_ms": 0,
+            "event_id": "12e724be-fd52-4519-b169-6333f938657e",
+            "name": "tool_confirm",
+            "status": "success",
+            "timestamp": "2026-09-14T06:02:05.505743+00:00",
+            "type": "node"
+          },
+          {
+            "data": {
+              "args_summary": {
+                "path": "README.md"
+              },
+              "artifact_bytes": null,
+              "artifact_error": null,
+              "artifact_path": null,
+              "artifact_redacted": false,
+              "artifact_sha256": null,
+              "attempt_count": 1,
+              "error_code": null,
+              "execution_ids": [],
+              "exit_code": null,
+              "idempotent": true,
+              "model_chars": 39,
+              "model_truncated": false,
+              "original_chars": 39,
+              "output_summary": "Run the suite with python -m pytest -q.",
+              "risk": "safe",
+              "source_truncated": false,
+              "timeout_seconds": 30,
+              "tool_call_id": "call_00_NVe1HydLUOjmuYQ3TyfV9982"
+            },
+            "duration_ms": 1,
+            "event_id": "98934035-580c-4dfd-8584-e17843b4ccec",
+            "name": "read_file",
+            "status": "success",
+            "timestamp": "2026-09-14T06:02:05.508743+00:00",
+            "type": "tool"
+          },
+          {
+            "data": {
+              "phase": "executing",
+              "round_count": 2,
+              "task_status": "running"
+            },
+            "duration_ms": 5,
+            "event_id": "08ed8599-c347-4bdc-be15-253558131cd8",
+            "name": "tool_executor",
+            "status": "success",
+            "timestamp": "2026-09-14T06:02:05.512448+00:00",
+            "type": "node"
+          },
+          {
+            "data": {
+              "phase": "checkpointing",
+              "round_count": 2,
+              "task_status": "running"
+            },
+            "duration_ms": 0,
+            "event_id": "e9b8329f-2167-4960-890e-63b009d4097d",
+            "name": "checkpoint_task",
+            "status": "success",
+            "timestamp": "2026-09-14T06:02:05.514778+00:00",
+            "type": "node"
+          },
+          {
+            "data": {
+              "phase": "checkpointing",
+              "round_count": 2,
+              "task_status": "running"
+            },
+            "duration_ms": 0,
+            "event_id": "ee2be748-3cea-4ce8-9148-5716716676b4",
+            "name": "save_memory",
+            "status": "success",
+            "timestamp": "2026-09-14T06:02:05.517434+00:00",
+            "type": "node"
+          },
+          {
+            "data": {
+              "phase": "planning",
+              "round_count": 2,
+              "task_status": "running"
+            },
+            "duration_ms": 12,
+            "event_id": "11f7958e-1c09-46dc-aee6-0774afae3a80",
+            "name": "pre_microcompact",
+            "status": "success",
+            "timestamp": "2026-09-14T06:02:05.532102+00:00",
+            "type": "node"
+          },
+          {
+            "data": {
+              "completion_gate_blocker": null,
+              "completion_gate_recovery_attempts": 0,
+              "context_token_estimate": 6077,
+              "incomplete_response_recovery_attempts": 0,
+              "input_chars": 10433,
+              "input_summary": "Read the project metadata, but do not run commands or modify files. Return exactly one line without a code fence or extra text using this shape: command=<documented narrow test command>.",
+              "input_tokens": 6005,
+              "message_count": 7,
+              "output_summary": "command=python -m pytest -q",
+              "output_tokens": 72,
+              "response_complete": true,
+              "retry_count": 0,
+              "stop_reason": "end_turn",
+              "tool_calls": [],
+              "total_tokens": 6077
+            },
+            "duration_ms": 1132,
+            "event_id": "b8f39502-49bd-4b33-ade7-f82511eac7e9",
+            "name": "llm_call",
+            "status": "success",
+            "timestamp": "2026-09-14T06:02:06.667372+00:00",
+            "type": "model"
+          },
+          {
+            "data": {
+              "phase": "summarizing",
+              "round_count": 3,
+              "task_status": "running"
+            },
+            "duration_ms": 1137,
+            "event_id": "074e7257-2c30-4d96-aa1f-1559c8156e91",
+            "name": "llm_call",
+            "status": "success",
+            "timestamp": "2026-09-14T06:02:06.671898+00:00",
+            "type": "node"
+          },
+          {
+            "data": {
+              "phase": "summarizing",
+              "round_count": 3,
+              "task_status": "running"
+            },
+            "duration_ms": 0,
+            "event_id": "a92fd7f8-0bcc-4240-90bf-75ec75f6b6f9",
+            "name": "save_memory",
+            "status": "success",
+            "timestamp": "2026-09-14T06:02:06.675205+00:00",
+            "type": "node"
+          },
+          {
+            "data": {
+              "phase": "summarizing",
+              "round_count": 3,
+              "task_status": "succeeded"
+            },
+            "duration_ms": 1,
+            "event_id": "f9e3a091-8bb2-4d05-bca9-b0dab82a84ff",
+            "name": "finalize_task",
+            "status": "success",
+            "timestamp": "2026-09-14T06:02:06.681095+00:00",
+            "type": "node"
+          },
+          {
+            "data": {
+              "error": null
+            },
+            "duration_ms": 4075,
+            "event_id": "798d66e3-3a8f-4f14-800a-f4e55be5d043",
+            "name": "task_finished",
+            "status": "succeeded",
+            "timestamp": "2026-09-14T06:02:06.682404+00:00",
+            "type": "task"
+          },
+          {
+            "data": {
+              "phase": "summarizing",
+              "round_count": 3,
+              "task_status": "succeeded"
+            },
+            "duration_ms": 0,
+            "event_id": "d3c121e0-8332-4cbb-baaa-fb8ed583653d",
+            "name": "persist_memory",
+            "status": "success",
+            "timestamp": "2026-09-14T06:02:06.684411+00:00",
+            "type": "node"
+          }
+        ],
+        "finished_at": "2026-09-14T06:02:06.682404+00:00",
+        "metrics": {
+          "confirmation_count": 0,
+          "input_tokens": 16797,
+          "memory_candidates": 0,
+          "memory_injected": 0,
+          "memory_injected_tokens": 0,
+          "memory_retrieval_queries": 0,
+          "model_calls": 3,
+          "model_duration_ms": 3782,
+          "node_count": 21,
+          "node_duration_ms": 3987,
+          "output_tokens": 388,
+          "pause_count": 0,
+          "paused_duration_ms": 0,
+          "resume_count": 0,
+          "retry_count": 0,
+          "safety_interceptions": 0,
+          "tool_calls": 3,
+          "tool_duration_ms": 161,
+          "tool_failures": 0,
+          "tool_successes": 3,
+          "total_tokens": 17185
+        },
+        "mode": "single",
+        "request_summary": "Read the project metadata, but do not run commands or modify files. Return exactly one line without a code fence or extra text using this shape: command=<documented narrow test command>.",
+        "result_summary": "command=python -m pytest -q",
+        "schema_version": 1,
+        "session_id": "benchmark-easy.understanding.test_command-cd053f",
+        "started_at": "2026-09-14T06:02:02.607353+00:00",
+        "status": "succeeded",
+        "trace_id": "agent-4-784aaa78",
+        "user_id": 20004
+      }
+    }
+  ]
+}

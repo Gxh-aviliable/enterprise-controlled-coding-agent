@@ -4,7 +4,7 @@ services:
       context: ..
       dockerfile: docker/Dockerfile
     ports:
-      - "${API_HOST_PORT:-8000}:8000"
+      - "${API_BIND_ADDRESS:-127.0.0.1}:${API_HOST_PORT:-8000}:8000"
     env_file: ../.env
     environment:
       - MYSQL_HOST=mysql
@@ -13,10 +13,27 @@ services:
       - WORKSPACE_BASE=/workspaces
       - CHROMA_PERSIST_DIR=/data/chroma
       - HF_HOME=/data/huggingface
-      - SHARED_SKILLS_DIR=/app/shared_skills
       - MANAGED_SHARED_SKILLS_DIR=/data/shared-skills
+      - SKILL_GIT_HOSTS=${SKILL_GIT_HOSTS:-github.com,gitlab.com}
+      - SKILL_GIT_INTERNAL_HOSTS=${SKILL_GIT_INTERNAL_HOSTS:-}
+      - SKILL_GIT_TIMEOUT_SECONDS=${SKILL_GIT_TIMEOUT_SECONDS:-60}
+      - SKILL_GIT_CA_BUNDLE=${SKILL_GIT_CA_BUNDLE:-}
       - FILE_OPEN_MODE=web-vscode
+      - AGENT_EXECUTOR=docker
+      - SANDBOX_DOCKER_SOCKET=/var/run/docker.sock
+      - SANDBOX_IMAGE=${SANDBOX_IMAGE:-enterprise-agent-sandbox:1}
+      - SANDBOX_NETWORK_ENABLED=${SANDBOX_NETWORK_ENABLED:-true}
+      - SANDBOX_DEPLOYMENT=${SANDBOX_DEPLOYMENT:-enterprise-agent}
+      - SANDBOX_STAGING_BASE=/sandbox-staging
+      - SANDBOX_HOST_STAGING_BASE=${SANDBOX_HOST_STAGING_BASE:-/srv/enterprise-agent/sandbox-staging}
+      - SANDBOX_UID=10001
+      - SANDBOX_GID=10001
+    # Trusted API control plane: socket access is host-administrator equivalent.
+    group_add:
+      - "${DOCKER_SOCKET_GID:-0}"
     volumes:
+      - ${DOCKER_SOCKET_PATH:-/var/run/docker.sock}:/var/run/docker.sock
+      - ${SANDBOX_HOST_STAGING_BASE:-/srv/enterprise-agent/sandbox-staging}:/sandbox-staging
       - workspace_data:/workspaces
       - chroma_data:/data/chroma
       - huggingface_cache:/data/huggingface
@@ -34,12 +51,34 @@ services:
       start_period: 120s
     restart: unless-stopped
 
+  sandbox-reaper:
+    build:
+      context: ..
+      dockerfile: docker/sandbox-reaper.Dockerfile
+    environment:
+      - SANDBOX_DOCKER_SOCKET=/var/run/docker.sock
+      - SANDBOX_DEPLOYMENT=${SANDBOX_DEPLOYMENT:-enterprise-agent}
+      - SANDBOX_STAGING_BASE=/sandbox-staging
+    group_add:
+      - "${DOCKER_SOCKET_GID:-0}"
+    volumes:
+      - ${DOCKER_SOCKET_PATH:-/var/run/docker.sock}:/var/run/docker.sock
+      - ${SANDBOX_HOST_STAGING_BASE:-/srv/enterprise-agent/sandbox-staging}:/sandbox-staging
+    read_only: true
+    cap_drop: [ALL]
+    security_opt: [no-new-privileges:true]
+    network_mode: none
+    mem_limit: 64m
+    pids_limit: 32
+    cpus: 0.25
+    restart: unless-stopped
+
   frontend:
     build:
       context: ..
       dockerfile: docker/frontend.Dockerfile
     ports:
-      - "${FRONTEND_HOST_PORT:-3000}:80"
+      - "${FRONTEND_BIND_ADDRESS:-0.0.0.0}:${FRONTEND_HOST_PORT:-3000}:80"
     depends_on:
       api:
         condition: service_healthy
@@ -54,10 +93,10 @@ services:
   mysql:
     image: mysql:8.0
     environment:
-      - MYSQL_ROOT_PASSWORD=rootpassword
-      - MYSQL_DATABASE=enterprise_agent
-      - MYSQL_USER=agent_user
-      - MYSQL_PASSWORD=agent_password
+      - MYSQL_ROOT_PASSWORD=${MYSQL_ROOT_PASSWORD:-rootpassword}
+      - MYSQL_DATABASE=${MYSQL_DATABASE:-enterprise_agent}
+      - MYSQL_USER=${MYSQL_USER:-agent_user}
+      - MYSQL_PASSWORD=${MYSQL_PASSWORD:-agent_password}
     ports:
       - "127.0.0.1:${MYSQL_HOST_PORT:-3307}:3306"
     volumes:

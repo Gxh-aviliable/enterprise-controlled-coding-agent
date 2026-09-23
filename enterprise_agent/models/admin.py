@@ -108,6 +108,8 @@ class SharedSkill(Base):
     description = Column(String(500), nullable=False, default="")
     status = Column(String(20), nullable=False, default="draft", index=True)
     draft_content = Column(Text, nullable=False, default="")
+    draft_package = Column(JSON, nullable=True)
+    revision = Column(Integer, nullable=False, default=1)
     active_version = Column(Integer, nullable=True)
     created_by = Column(BigInteger, ForeignKey("users.id", ondelete="SET NULL"), nullable=True)
     created_at = Column(TIMESTAMP, nullable=False, default=utcnow)
@@ -129,9 +131,41 @@ class SharedSkillVersion(Base):
     )
     version = Column(Integer, nullable=False)
     content = Column(Text, nullable=False)
+    package = Column(JSON, nullable=True)
     content_path = Column(String(500), nullable=False)
     content_sha256 = Column(String(64), nullable=False, index=True)
     validation_json = Column(JSON, nullable=False)
     changelog = Column(String(500), nullable=False, default="")
     created_by = Column(BigInteger, ForeignKey("users.id", ondelete="SET NULL"), nullable=True)
     published_at = Column(TIMESTAMP, nullable=False, default=utcnow)
+
+
+class SkillInstallation(Base):
+    """User-owned installation; all mutations compare the monotonically increasing version."""
+
+    __tablename__ = "skill_installations"
+    __table_args__ = (UniqueConstraint("user_id", "project", "name", name="uq_skill_install_scope_name"),)
+
+    id = Column(String(36), primary_key=True)
+    user_id = Column(BigInteger, ForeignKey("users.id", ondelete="CASCADE"), nullable=False, index=True)
+    project = Column(String(240), nullable=False, default="")
+    name = Column(String(80), nullable=False)
+    package = Column(JSON, nullable=False)
+    content_sha256 = Column(String(64), nullable=False)
+    source_json = Column(JSON, nullable=False)
+    enabled = Column(Boolean, nullable=False, default=True)
+    implicit_allowed = Column(Boolean, nullable=False, default=True)
+    version = Column(Integer, nullable=False, default=1)
+    installed_at = Column(TIMESTAMP, nullable=False, default=utcnow)
+    updated_at = Column(TIMESTAMP, nullable=False, default=utcnow, onupdate=utcnow)
+
+
+class SkillImportPreview(Base):
+    """Short-lived owner-bound preview, consumed explicitly by candidate index."""
+
+    __tablename__ = "skill_import_previews"
+    id = Column(String(36), primary_key=True)
+    user_id = Column(BigInteger, ForeignKey("users.id", ondelete="CASCADE"), nullable=False, index=True)
+    candidates = Column(JSON, nullable=False)
+    source_json = Column(JSON, nullable=False)
+    expires_at = Column(TIMESTAMP, nullable=False, index=True)

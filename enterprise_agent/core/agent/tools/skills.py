@@ -1,17 +1,8 @@
-"""Skill loader — multi-tenant with global + user-scoped skills.
+"""Bounded Skill catalog and tools.
 
-Skills are stored as SKILL.md files:
-- Global: shared_skills/<name>/SKILL.md (available to all users)
-- User:   user_{id}/.skills/<name>/SKILL.md (personal, overrides global)
-
-Each SKILL.md has YAML frontmatter:
-  ---
-  name: my-skill
-  description: What this skill does
-  ---
-  Skill content in markdown...
-
-Priority: user skill overrides global skill with the same name.
+HTTP requests merge administrator publications and user-owned packages through
+skills.catalog. Each task pins content hashes; direct legacy callers discover
+on-disk Skills afresh. Unique names remain aliases; collisions require IDs.
 """
 
 import hashlib
@@ -19,15 +10,12 @@ import html
 import json
 import logging
 import os
-import re
 import stat
 from collections import deque
 from pathlib import Path
 from typing import Dict
 
 from langchain_core.tools import tool
-
-from enterprise_agent.config.settings import settings
 
 logger = logging.getLogger("enterprise_agent")
 
@@ -176,8 +164,7 @@ def _valid_skill_name(name: str) -> bool:
 class SkillLoader:
     """Multi-source skill loader with user isolation.
 
-    Loads skills from a priority-ordered list of directories.
-    Later directories override earlier ones by skill name.
+    Retains each source under a stable identity, including duplicate names.
     """
 
     def __init__(self, search_dirs):
@@ -186,16 +173,11 @@ class SkillLoader:
             search_dirs = [Path(search_dirs)]
         self.search_dirs = [Path(d) for d in search_dirs]
         self.skills: Dict[str, Dict] = {}
+        self.errors = []
         self._load_all()
 
     def _load_all(self) -> None:
-        """Load skills from all search directories.
-
-        Directories are loaded from lowest to highest priority,
-        so higher-priority skills override lower-priority ones.
-        search_dirs[0] = user (highest), search_dirs[-1] = global (lowest)
-        """
-        # Load from end to start: global first, then user (overwrites)
+        """Discover every configured source; preserve collisions for exact selection."""
         for search_dir in list(reversed(self.search_dirs)):
             try:
                 candidates = _discover_skill_files(search_dir)
@@ -208,73 +190,61 @@ class SkillLoader:
                 self._load_skill_file(skill_file, search_dir)
 
     def _load_skill_file(self, skill_file: Path, search_dir: Path) -> None:
-        """Parse a single SKILL.md file."""
+        from enterprise_agent.skills.packages import read_directory, validate_package
+
         try:
-            text = _read_bounded_regular_text(
-                skill_file,
-                search_dir,
-                MAX_SKILL_FILE_BYTES,
+            evidence = validate_package(read_directory(skill_file.parent), legacy_name=skill_file.parent.name)
+            text, meta, body = evidence["content"], evidence["metadata"], evidence["body"]
+            if len(text.encode()) > MAX_SKILL_FILE_BYTES:
+                raise ValueError("Skill file exceeds the configured byte limit")
+            warnings = evidence["warnings"]
+            source = "personal"
+            version = None
+            relative = skill_file.relative_to(search_dir).as_posix()
+            identity = (
+                source + ":" + hashlib.sha256((str(search_dir.absolute()) + "/" + relative).encode()).hexdigest()[:24]
             )
+            self.add(
+                {
+                    "id": identity,
+                    "name": meta["name"],
+                    "meta": meta,
+                    "body": body,
+                    "path": str(skill_file),
+                    "scope": "personal",
+                    "source": source,
+                    "version": version,
+                    "sha256": evidence["sha256"],
+                    "package": evidence["package"],
+                    "warnings": warnings,
+                    "enabled": True,
+                    "implicit_allowed": True,
+                }
+            )
+        except Exception as exc:
+            self.errors.append({"path": str(skill_file.relative_to(search_dir)), "error": str(exc)})
+            logger.warning("Failed to load Skill %s: %s", skill_file, exc)
 
-            # Parse YAML frontmatter
-            meta = {}
-            body = text
-            match = re.match(r"^---\r?\n(.*?)\r?\n---\r?\n(.*)", text, re.DOTALL)
-            if match:
-                for line in match.group(1).strip().splitlines():
-                    if ":" in line:
-                        key, value = line.split(":", 1)
-                        meta[key.strip()] = value.strip()
-                body = match.group(2).strip()
+    def add(self, skill):
+        name = skill["name"]
+        # Preserve historical dictionary access for unique names, never overwrite a collision.
+        if name in self.skills:
+            previous = self.skills.pop(name)
+            self.skills[previous["id"]] = previous
+        duplicate = any(item.get("name") == name for item in self.skills.values())
+        self.skills[skill["id"] if duplicate else name] = skill
 
-            name = str(meta.get("name", skill_file.parent.name)).strip()
-            if not _valid_skill_name(name):
-                raise ValueError("skill name is empty, oversized, or contains controls")
-
-            # Determine scope: first directory = user/personal (highest priority)
-            # If only one directory, treat as global
-            is_user_dir = len(self.search_dirs) > 1 and search_dir == self.search_dirs[0]
-            scope = "personal" if is_user_dir else "global"
-            is_managed_dir = search_dir.resolve() == Path(settings.MANAGED_SHARED_SKILLS_DIR).resolve()
-            manifest_path = skill_file.parent / ".managed.json"
-            manifest = {}
-            if is_managed_dir and manifest_path.exists():
-                try:
-                    manifest = json.loads(
-                        _read_bounded_regular_text(
-                            manifest_path,
-                            search_dir,
-                            MAX_MANAGED_MANIFEST_BYTES,
-                        )
-                    )
-                    if not isinstance(manifest, dict):
-                        manifest = {}
-                except (OSError, ValueError, json.JSONDecodeError):
-                    logger.warning("Ignoring invalid managed Skill manifest: %s", manifest_path)
-
-            # Override detection: warn if user skill overrides global
-            if name in self.skills and scope == "personal":
-                logger.info("User skill '%s' overrides global skill", name)
-
-            computed_sha256 = hashlib.sha256(text.encode("utf-8")).hexdigest()
-            declared_sha256 = str(manifest.get("sha256") or "").lower()
-            if not re.fullmatch(r"[0-9a-f]{64}", declared_sha256):
-                declared_sha256 = computed_sha256
-            version = manifest.get("version")
-            if version is not None:
-                version = str(version)[:PROMPT_SKILL_METADATA_CHARS]
-
-            self.skills[name] = {
-                "meta": meta,
-                "body": body,
-                "path": str(skill_file),
-                "scope": scope,
-                "source": "managed" if is_managed_dir else scope,
-                "version": version,
-                "sha256": declared_sha256,
-            }
-        except Exception as e:
-            logger.warning("Failed to load skill %s: %s", skill_file, e)
+    def resolve(self, selector):
+        matches = [s for s in self.skills.values() if s.get("id") == selector]
+        if not matches:
+            matches = [s for key, s in self.skills.items() if s.get("name", key) == selector]
+        if not matches:
+            raise ValueError("Unknown or inaccessible Skill: " + selector)
+        if len(matches) != 1:
+            raise ValueError("Ambiguous Skill name; choose a stable ID: " + ", ".join(s["id"] for s in matches))
+        if not matches[0].get("enabled", True):
+            raise ValueError("Skill is disabled: " + selector)
+        return matches[0]
 
     def descriptions(self) -> str:
         """Get formatted skill list for system prompt injection.
@@ -307,7 +277,14 @@ class SkillLoader:
         entries = []
         description_chars = 0
         descriptions_truncated = False
-        ordered_names = sorted(self.skills, key=lambda value: (value.casefold(), value))
+        ordered_names = sorted(
+            (
+                key
+                for key, value in self.skills.items()
+                if value.get("enabled", True) and value.get("implicit_allowed", True)
+            ),
+            key=lambda value: (value.casefold(), value),
+        )
         for name in ordered_names[:PROMPT_SKILL_LIMIT]:
             skill = self.skills[name]
             description = str(skill["meta"].get("description", ""))
@@ -320,7 +297,8 @@ class SkillLoader:
             description_chars += len(bounded_description)
             description_truncated = len(description) > len(bounded_description)
             descriptions_truncated = descriptions_truncated or description_truncated
-            bounded_name = str(name)[:PROMPT_SKILL_NAME_CHARS]
+            display_name = skill.get("name", name) if len(name) <= 128 else name
+            bounded_name = str(display_name)[:PROMPT_SKILL_NAME_CHARS]
             version = skill.get("version")
             bounded_version = None if version is None else str(version)[:PROMPT_SKILL_METADATA_CHARS]
             sha256 = str(skill.get("sha256") or "")
@@ -328,6 +306,7 @@ class SkillLoader:
             entries.append(
                 {
                     "name": bounded_name,
+                    "id": str(skill.get("id", name))[:128],
                     "scope": str(skill["scope"])[:32],
                     "source": str(skill["source"])[:32],
                     "version": bounded_version,
@@ -378,7 +357,7 @@ class SkillLoader:
         return "\n".join(lines)
 
     def load(self, name: str) -> str:
-        """Load a skill by name (user version takes priority).
+        """Load a Skill by stable ID or an unambiguous legacy alias.
 
         Args:
             name: Skill name to load
@@ -386,15 +365,25 @@ class SkillLoader:
         Returns:
             Skill content wrapped in <skill> tags
         """
-        skill = self.skills.get(name)
-        if not skill:
-            available = ", ".join(self.skills.keys()) if self.skills else "none"
-            return f"Error: Unknown skill '{name}'. Available skills: {available}"
+        try:
+            skill = self.resolve(name)
+        except ValueError as exc:
+            return "Error: " + str(exc)
+        if "body" not in skill:
+            from enterprise_agent.skills.packages import validate_package
+            from enterprise_agent.skills.runtime import read_cached_package
 
+            try:
+                evidence = validate_package(read_cached_package(skill["sha256"]))
+                skill = {**skill, "body": evidence["body"]}
+            except ValueError as exc:
+                return "Error: " + str(exc)
+        name = skill.get("name", name)
         scope_note = ""
         if skill["scope"] == "personal":
             scope_note = " (your personal version)"
         version_attr = ""
+        escaped_id = html.escape(str(skill.get("id", name)), quote=True)
         escaped_name = html.escape(name, quote=True)
         escaped_scope = html.escape(str(skill["scope"]), quote=True)
         escaped_source = html.escape(str(skill["source"]), quote=True)
@@ -402,9 +391,11 @@ class SkillLoader:
         if skill.get("version") is not None:
             version_attr = f' version="{html.escape(str(skill["version"]), quote=True)}"'
         return (
-            f'<skill name="{escaped_name}" scope="{escaped_scope}" source="{escaped_source}"'
+            f'<skill id="{escaped_id}" name="{escaped_name}" scope="{escaped_scope}" source="{escaped_source}"'
             f'{version_attr} sha256="{escaped_sha256}">\n'
             f"<!-- {skill['scope']} skill{scope_note} -->\n"
+            f"Resources: /workspace/.skill-resources/{skill['sha256']}/ (sandbox); "
+            f"read_skill_resource with this Skill ID for text resources.\n"
             f"{skill['body']}\n"
             f"</skill>"
         )
@@ -412,47 +403,35 @@ class SkillLoader:
     def reload(self) -> str:
         """Reload all skills from directories."""
         self.skills.clear()
+        self.errors.clear()
         self._load_all()
         global_count = sum(1 for s in self.skills.values() if s["scope"] == "global")
         personal_count = sum(1 for s in self.skills.values() if s["scope"] == "personal")
         return f"Reloaded {len(self.skills)} skills ({global_count} global, {personal_count} personal)"
 
 
-# Per-user SkillLoader cache
+# Legacy cache maintenance hook; new requests do not reuse process-local loaders.
 _skill_loaders: Dict[int, SkillLoader] = {}
 
 
 def get_skill_loader(user_id: int = None) -> SkillLoader:
-    """Get or create SkillLoader for a user.
-
-    Returns a SkillLoader that searches:
-      1. User's personal .skills directory (highest priority)
-      2. Administrator-managed shared skills
-      3. Bundled shared skills (lowest priority)
-
-    Args:
-        user_id: User ID. If None, tries context variable.
-
-    Returns:
-        SkillLoader instance for the user
-    """
+    """Use the task's database snapshot; standalone calls only discover the owner's directory."""
     from enterprise_agent.core.agent.tools.workspace import get_current_user_id, get_workspace_base
 
     if user_id is None:
         user_id = get_current_user_id()
 
-    if user_id not in _skill_loaders:
-        search_dirs = [
-            # User personal skills (highest priority — index 0)
-            get_workspace_base() / f"user_{user_id}" / ".skills",
-            # Administrator-managed shared skills
-            Path(settings.MANAGED_SHARED_SKILLS_DIR),
-            # Shared global skills
-            Path(settings.SHARED_SKILLS_DIR),
-        ]
-        _skill_loaders[user_id] = SkillLoader(search_dirs)
+    from enterprise_agent.skills.runtime import current_loader
 
-    return _skill_loaders[user_id]
+    pinned = current_loader(user_id)
+    if pinned is not None:
+        return pinned
+    # No process-local cache: a new direct caller sees current on-disk legacy Skills.
+    # HTTP/Agent calls use the database catalog pinned to their task instead.
+    search_dirs = []
+    if user_id is not None:
+        search_dirs.insert(0, get_workspace_base() / f"user_{user_id}" / ".skills")
+    return SkillLoader(search_dirs)
 
 
 @tool
@@ -475,7 +454,7 @@ def list_skills() -> str:
 def load_skill(name: str) -> str:
     """Load a skill module to gain expert knowledge.
 
-    Your personal skills override global skills with the same name.
+    Use a stable ID when names collide; ambiguous aliases fail explicitly.
 
     Use when: list_skills() shows a relevant skill for your task.
 
@@ -499,6 +478,10 @@ def reload_skills() -> str:
     Returns:
         Count of skills loaded by scope
     """
+    from enterprise_agent.skills.runtime import _snapshot
+
+    if _snapshot.get():
+        return "This task keeps its pinned Skill versions; start a new request to refresh."
     return get_skill_loader().reload()
 
 
@@ -507,3 +490,39 @@ def reload_all_skill_loaders() -> int:
     for loader in _skill_loaders.values():
         loader.reload()
     return len(_skill_loaders)
+
+
+@tool
+def read_skill_resource(skill_id: str, path: str, offset: int = 0, limit: int = 16000) -> str:
+    """Read bounded UTF-8 references/scripts from a visible pinned Skill by stable ID.
+
+    Does not execute code. Use bash under existing approval and sandbox policy to run scripts.
+    """
+    from enterprise_agent.skills.packages import decode_package, safe_path
+    from enterprise_agent.skills.runtime import read_cached_package
+
+    try:
+        safe_path(path)
+        skill = get_skill_loader().resolve(skill_id)
+        package = skill.get("package") or read_cached_package(skill["sha256"])
+        files = decode_package(package)
+        if path not in files:
+            return "Error: Skill resource not found"
+        if offset < 0 or not 1 <= limit <= 32000:
+            return "Error: Invalid resource read range"
+        text = files[path].decode("utf-8")
+        return json.dumps(
+            {
+                "id": skill["id"],
+                "source": skill["source"],
+                "version": skill["version"],
+                "sha256": skill["sha256"],
+                "path": path,
+                "offset": offset,
+                "total_chars": len(text),
+                "content": text[offset : offset + limit],
+            },
+            ensure_ascii=False,
+        )
+    except (ValueError, UnicodeDecodeError) as exc:
+        return "Error: " + str(exc)

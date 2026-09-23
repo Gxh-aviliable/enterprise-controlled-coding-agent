@@ -34,9 +34,19 @@ class AccessGrantCreate(BaseModel):
 
 
 class SharedSkillDraftRequest(BaseModel):
-    name: str = Field(..., min_length=2, max_length=80)
+    name: str = Field(..., min_length=1, max_length=80)
     description: str = Field(default="", max_length=500)
-    content: str = Field(..., min_length=20, max_length=100_000)
+    content: str = Field(..., min_length=1, max_length=100_000)
+    package: Optional[dict[str, str]] = None
+    expected_revision: Optional[int] = Field(None, ge=1)
+
+    @field_validator("package")
+    @classmethod
+    def validate_package_limits(cls, value):
+        if value is not None:
+            from enterprise_agent.skills.packages import decode_package
+            decode_package(value)
+        return value
 
     @field_validator("name")
     @classmethod
@@ -52,6 +62,7 @@ class SharedSkillDraftRequest(BaseModel):
 class SharedSkillPublishRequest(BaseModel):
     changelog: str = Field(..., min_length=3, max_length=500)
     expected_updated_at: Optional[datetime] = None
+    expected_revision: Optional[int] = Field(None, ge=1)
 
 
 class SharedSkillRollbackRequest(BaseModel):

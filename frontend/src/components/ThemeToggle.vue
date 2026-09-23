@@ -1,5 +1,5 @@
 <template>
-  <button class="theme-toggle" @click="toggle" :title="isDark ? 'Switch to light mode' : 'Switch to dark mode'">
+  <button class="theme-toggle" @click.stop="toggle" :title="isDark ? 'Switch to light mode' : 'Switch to dark mode'">
     <!-- Sun icon (light mode) -->
     <svg v-if="isDark" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round">
       <circle cx="12" cy="12" r="5"/>

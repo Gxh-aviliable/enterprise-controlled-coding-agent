@@ -1,0 +1,14 @@
+{
+  "temporary_normal_account_removed": 14,
+  "rows": {
+    "users": 5,
+    "sessions": 13,
+    "chat_messages": 62,
+    "managed_shared_skills": 4,
+    "managed_shared_skill_versions": 4
+  },
+  "workspace_files": 117,
+  "workspace_sha256": "6b3127e6b78e0be42580368493efcb6633b7485e207b4d87a82f0773999f7277",
+  "normal_user_admin_status": 403,
+  "public_packages_read": 4
+}

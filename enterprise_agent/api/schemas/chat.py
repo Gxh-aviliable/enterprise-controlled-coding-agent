@@ -1,5 +1,5 @@
 from datetime import datetime
-from typing import Any, Dict, List, Literal, Optional
+from typing import Annotated, Any, Dict, List, Literal, Optional
 
 from pydantic import BaseModel, Field
 
@@ -8,6 +8,9 @@ class ChatRequest(BaseModel):
     """Chat request"""
     session_id: Optional[str] = None
     content: str = Field(..., min_length=1, max_length=10000)
+    skill_ids: List[Annotated[str, Field(min_length=1, max_length=128)]] = Field(default_factory=list, max_length=8)
+    project: str = Field(default="", max_length=240)
+    implicit_skills: bool = True
     stream: bool = True
     mode: Literal["single_agent", "multi_agent"] = "single_agent"
 

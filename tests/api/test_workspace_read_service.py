@@ -60,3 +60,19 @@ def test_workspace_read_marks_nul_containing_file_as_binary(monkeypatch, tmp_pat
     assert result["binary"] is True
     assert result["content"] == ""
     assert result["sha256"] == hashlib.sha256(content).hexdigest()
+
+
+@pytest.mark.asyncio
+async def test_browser_read_endpoints_reject_escape_as_client_error(monkeypatch,tmp_path):
+    from fastapi import HTTPException
+
+    from enterprise_agent.api.routes.workspace import download_file, get_open_url, get_tree, read_file
+    monkeypatch.setenv('WORKSPACE_BASE',str(tmp_path))
+    for function,kwargs in [
+        (read_file,{'encoding':'utf-8','offset':0,'limit':500}),
+        (get_tree,{'depth':2,'file_type':'all'}),(download_file,{}),(get_open_url,{}),
+    ]:
+        with pytest.raises(HTTPException) as error:
+            await function(path='../user_2/private.txt',user_id=1,**kwargs)
+        assert error.value.status_code==400
+        assert str(tmp_path) not in error.value.detail

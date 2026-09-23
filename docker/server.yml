@@ -1,0 +1,30 @@
+services:
+  api:
+    image: mini-claude-api:20260911-sandbox
+    build:
+      dockerfile: docker/Dockerfile.server
+    mem_limit: 1500m
+    environment:
+      OMP_NUM_THREADS: "1"
+      MKL_NUM_THREADS: "1"
+      TOKENIZERS_PARALLELISM: "false"
+      HF_HUB_OFFLINE: "1"
+      TRANSFORMERS_OFFLINE: "1"
+    volumes:
+      - ../model-cache:/data/huggingface
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
+  frontend:
+    image: mini-claude-frontend:20260911-sandbox
+    mem_limit: 128m
+  mysql:
+    mem_limit: 600m
+    command: ["--innodb-buffer-pool-size=128M", "--max-connections=40", "--performance-schema=OFF"]
+  redis:
+    mem_limit: 384m
+
+  sandbox-reaper:
+    image: mini-claude-sandbox-reaper:20260911

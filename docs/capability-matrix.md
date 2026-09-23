@@ -1,5 +1,7 @@
 # 当前能力矩阵
 
+> 2026-09-14 Goal交付：主目录源码已更新原本地应用，真实变更/验证收据、Diff恢复、审批范围、断线收敛与可信Trace存储已验证。Single仍为默认；诊断模型25/30及全部失败保留。范围、证据与条件扩展见[逐项交付报告](agent-improvement-delivery-20260914.md)。
+
 当前架构与证据更新日期：2026-08-28；候选源码 commit、验证命令和原始产物汇总见[求职展示版 v1.0 证据清单](release-evidence/portfolio-v1.0.md)。`已验证` 表示存在当前自动化或真实运行证据；`部分完成` 表示实现存在，但生产边界或效果证据仍不完整。
 
 | 领域 | 能力 | 状态 | 当前证据 | 主要边界 |
@@ -12,10 +14,10 @@
 | HITL | 敏感工具中断、批准、拒绝、超时恢复 | 已验证 | typed `tool_confirmation` interrupt、Redis checkpoint、token-owned resume lock、API、前端和超时测试 | 这是唯一可 `Command(resume)` 的中断，并保持原 Trace |
 | Task Control | Stop/Cancel 与新 Trace 重新规划 | 已验证 | Redis active lease、cancel tombstone、runner fence、continuation receipt、API/前端取消失败等确定性协议回归 | Stop 是终态且不回滚副作用；只有服务端确认 cancelled 才解锁新 Trace；benchmark 的 cancel-and-replan 用例不替代协议测试 |
 | 工具 | 文件读写编辑和可恢复删除 | 已验证 | 原子写入、敏感路径、穿越、恢复 manifest 测试 | 不是文件系统级沙箱 |
-| 工具 | Shell 与后台任务 | 部分完成 | 复合解析、风险分级、环境净化、超时、前台进程组取消和托管后台 Trace 终止测试 | 仍是用户态策略防护；无法抢占的操作为 best-effort |
+| 工具 | Shell 与后台任务容器沙箱 | 已验证 MVP | [2026-09-09 真实 Docker 验收](release-evidence/sandbox-mvp.md)：默认断网、资源限额、过滤快照、前后台取消、Trace、独立回收 | API/reaper socket 为管理员边界；无 staging 磁盘硬配额；显式 local 不隔离 |
 | 工具 | Todo、任务板和上下文工具 | 已验证 | 工具级与生命周期回归 | 文件任务板不适合多副本 |
 | 工具 | Shared / personal Skill | 已验证 | loader、版本治理、管理员 API 与测试 | 未实现签名和供应链证明 |
-| Multi-Agent | specialist 委派 | 部分完成 | 工具和权限测试；旧子循环只读并拒绝 review/dangerous 工具 | single/multi 六用例对照待测，写入仍回主 Agent |
+| Multi-Agent | 方案 A：并行只读探索 | 已实现 | 结构化子结果、Redis fence/取消、快照只读、子 Trace；双子任务真实模型与主 Docker 演示通过，见 [证据](multi-agent-plan-a.md) | 子任务无 Shell；正式 single/multi 六用例效果对照待测，写入仍回主 Agent |
 | Memory | Redis checkpoint | 已验证 | 图配置、HITL 恢复/归属 API 测试 | Redis 不是永久聊天正文，取消后的新任务不 resume 旧图 |
 | Memory | MySQL 持久聊天 | 已验证 | history persistence、continuation receipt、迁移、去重裁剪与刷新回归 | 生产备份恢复演练待补 |
 | Memory | Chroma 长期记忆治理 | 已验证 | 准入、Legacy、召回、级联删除和 6/6 评测 | 模型是否正确应用记忆未归因 |
@@ -43,6 +45,6 @@
 
 - 不能把 Platform 30/30 写成 Agent 任务成功率。
 - 不能把 Memory 6/6 写成模型正确使用记忆。
-- 不能把用户态 Shell 策略写成“安全沙箱”。
+- 不能把用户态 Shell 策略、显式 local 执行器或 Python 文件工具写成容器沙箱；不能将 Docker MVP 宣传为绝对安全。
 - 不能声称 Multi-Agent 优于 single-Agent。
 - 不能用 30 个合成任务推导生产通用能力；当前正式分数是 23/30，旧 25/30、旧 Platform 10/10 与旧 v1 8/10 只能作为历史证据，非正式诊断复跑也不能替换当前分数。

@@ -16,47 +16,59 @@ from enterprise_agent.observability.trace_store import get_trace_store
 
 
 async def test_task_parse_starts_pending_task():
-    result = await task_parse_node({
-        "task_status": "pending",
-        "trace_id": "trace-1",
-        "messages": [{"role": "user", "content": "Fix the parser"}],
-    })
+    result = await task_parse_node(
+        {
+            "task_status": "pending",
+            "trace_id": "trace-1",
+            "messages": [{"role": "user", "content": "Fix the parser"}],
+        }
+    )
     assert result["task_status"] == "running"
     assert result["execution_phase"] == "parsing"
     assert result["current_task"]["request"] == "Fix the parser"
 
 
 async def test_sensitive_tool_is_checkpointed_as_waiting_confirmation():
-    result = await prepare_tool_execution_node({
-        "task_status": "running",
-        "pending_tool_calls": [{"id": "1", "name": "write_file", "args": {}}],
-    })
+    result = await prepare_tool_execution_node(
+        {
+            "task_status": "running",
+            "pending_tool_calls": [{"id": "1", "name": "write_file", "args": {}}],
+        }
+    )
     assert result["task_status"] == "waiting_confirmation"
     assert result["confirmation_deadline"] is not None
 
 
-async def test_safe_shell_command_skips_confirmation():
-    result = await prepare_tool_execution_node({
-        "task_status": "running",
-        "pending_tool_calls": [{
-            "id": "safe-shell",
-            "name": "bash",
-            "args": {"command": "pytest -q"},
-        }],
-    })
+async def test_read_only_shell_command_skips_confirmation():
+    result = await prepare_tool_execution_node(
+        {
+            "task_status": "running",
+            "pending_tool_calls": [
+                {
+                    "id": "safe-shell",
+                    "name": "bash",
+                    "args": {"command": "pwd"},
+                }
+            ],
+        }
+    )
     assert result["task_status"] == "running"
     assert result["confirmation_deadline"] is None
 
 
 async def test_review_shell_command_waits_for_confirmation():
-    result = await prepare_tool_execution_node({
-        "task_status": "running",
-        "pending_tool_calls": [{
-            "id": "review-shell",
-            "name": "bash",
-            "args": {"command": "git commit -m test"},
-        }],
-    })
+    result = await prepare_tool_execution_node(
+        {
+            "task_status": "running",
+            "pending_tool_calls": [
+                {
+                    "id": "review-shell",
+                    "name": "bash",
+                    "args": {"command": "git commit -m test"},
+                }
+            ],
+        }
+    )
     assert result["task_status"] == "waiting_confirmation"
     assert result["confirmation_deadline"] is not None
 
@@ -71,11 +83,13 @@ async def test_dangerous_shell_skips_confirmation_and_is_policy_blocked(
         "user_id": 103,
         "permissions": ["tools:shell"],
         "task_status": "running",
-        "pending_tool_calls": [{
-            "id": "dangerous-shell",
-            "name": "bash",
-            "args": {"command": "rm -rf /"},
-        }],
+        "pending_tool_calls": [
+            {
+                "id": "dangerous-shell",
+                "name": "bash",
+                "args": {"command": "rm -rf /"},
+            }
+        ],
     }
     prepared = await prepare_tool_execution_node(state)
     assert prepared["task_status"] == "running"
@@ -93,11 +107,13 @@ async def test_unknown_tool_skips_confirmation_and_reaches_safe_rejection():
         "user_id": 102,
         "permissions": ["tools:all"],
         "task_status": "running",
-        "pending_tool_calls": [{
-            "id": "unknown-1",
-            "name": "run_command",
-            "args": {"command": "echo must-not-run"},
-        }],
+        "pending_tool_calls": [
+            {
+                "id": "unknown-1",
+                "name": "run_command",
+                "args": {"command": "echo must-not-run"},
+            }
+        ],
     }
 
     prepared = await prepare_tool_execution_node(state)
@@ -113,16 +129,20 @@ async def test_unknown_tool_skips_confirmation_and_reaches_safe_rejection():
 
 
 async def test_unverified_code_change_finishes_failed():
-    result = await finalize_task_node({
-        "task_status": "running",
-        "changed_files": ["src/app.py"],
-        "validation_results": [],
-        "todos": [{
-            "content": "Run verification",
-            "status": "in_progress",
-            "activeForm": "Running verification",
-        }],
-    })
+    result = await finalize_task_node(
+        {
+            "task_status": "running",
+            "changed_files": ["src/app.py"],
+            "validation_results": [],
+            "todos": [
+                {
+                    "content": "Run verification",
+                    "status": "in_progress",
+                    "activeForm": "Running verification",
+                }
+            ],
+        }
+    )
     assert result["task_status"] == "failed"
     assert "not successfully validated" in result["failure_reason"]
     assert result["todos"][0]["status"] == "failed"
@@ -130,24 +150,28 @@ async def test_unverified_code_change_finishes_failed():
 
 
 async def test_non_modifying_task_finishes_succeeded():
-    result = await finalize_task_node({
-        "task_status": "running",
-        "changed_files": [],
-        "validation_results": [],
-    })
+    result = await finalize_task_node(
+        {
+            "task_status": "running",
+            "changed_files": [],
+            "validation_results": [],
+        }
+    )
     assert result["task_status"] == "succeeded"
     assert result["failure_reason"] is None
 
 
 async def test_open_todo_cannot_finish_as_success_without_code_changes():
-    result = await finalize_task_node({
-        "task_status": "running",
-        "changed_files": [],
-        "validation_results": [],
-        "messages": [{"role": "assistant", "content": "I am done."}],
-        "todos": [{"content": "write the implementation", "status": "in_progress"}],
-        "has_open_todos": True,
-    })
+    result = await finalize_task_node(
+        {
+            "task_status": "running",
+            "changed_files": [],
+            "validation_results": [],
+            "messages": [{"role": "assistant", "content": "I am done."}],
+            "todos": [{"content": "write the implementation", "status": "in_progress"}],
+            "has_open_todos": True,
+        }
+    )
 
     assert result["task_status"] == "failed"
     assert "pending or in-progress todo" in result["failure_reason"]
@@ -155,80 +179,96 @@ async def test_open_todo_cannot_finish_as_success_without_code_changes():
 
 
 async def test_execution_request_without_execution_evidence_cannot_finish_as_success():
-    result = await finalize_task_node({
-        "task_status": "running",
-        "task_requires_execution": True,
-        "changed_files": [],
-        "validation_results": [],
-        "tool_execution_records": [{
-            "tool_name": "read_file",
-            "tool_call_id": "read-only",
-            "status": "success",
-            "ok": True,
-        }],
-        "messages": [{"role": "assistant", "content": "Implemented."}],
-    })
+    result = await finalize_task_node(
+        {
+            "task_status": "running",
+            "task_requires_execution": True,
+            "changed_files": [],
+            "validation_results": [],
+            "tool_execution_records": [
+                {
+                    "tool_name": "read_file",
+                    "tool_call_id": "read-only",
+                    "status": "success",
+                    "ok": True,
+                }
+            ],
+            "messages": [{"role": "assistant", "content": "Implemented."}],
+        }
+    )
 
     assert result["task_status"] == "failed"
     assert "no successful execution evidence" in result["failure_reason"]
 
 
 async def test_multi_agent_task_cannot_succeed_without_real_delegation():
-    result = await finalize_task_node({
-        "task_status": "running",
-        "execution_mode": "multi_agent",
-        "tool_execution_records": [],
-        "changed_files": [],
-        "validation_results": [],
-    })
+    result = await finalize_task_node(
+        {
+            "task_status": "running",
+            "execution_mode": "multi_agent",
+            "tool_execution_records": [],
+            "changed_files": [],
+            "validation_results": [],
+        }
+    )
     assert result["task_status"] == "failed"
     assert "without a successful delegate_task" in result["failure_reason"]
 
 
 async def test_multi_agent_blocks_workspace_mutation_before_delegation(monkeypatch):
     monkeypatch.setattr(settings, "ENABLE_MULTI_AGENT", True)
-    result = await tool_executor_node({
-        "session_id": "multi-delegation-gate",
-        "user_id": 104,
-        "permissions": ["tools:all"],
-        "execution_mode": "multi_agent",
-        "task_status": "running",
-        "pending_tool_calls": [{
-            "id": "fake-script",
-            "name": "write_file",
-            "args": {"path": "fake_agents.py", "content": "# simulated agents"},
-        }],
-    })
+    result = await tool_executor_node(
+        {
+            "session_id": "multi-delegation-gate",
+            "user_id": 104,
+            "permissions": ["tools:all"],
+            "execution_mode": "multi_agent",
+            "task_status": "running",
+            "pending_tool_calls": [
+                {
+                    "id": "fake-script",
+                    "name": "write_file",
+                    "args": {"path": "fake_agents.py", "content": "# simulated agents"},
+                }
+            ],
+        }
+    )
     record = result["tool_execution_records"][0]
     assert record["status"] == "blocked"
     assert record["error_code"] == "delegation_required"
 
 
 def test_route_requests_verification_before_ending_code_change():
-    route = route_after_tool({
-        "task_status": "running",
-        "should_end_after_save": True,
-        "changed_files": ["frontend/src/App.vue"],
-        "validation_results": [],
-        "verification_attempts": 0,
-        "round_count": 1,
-        "token_count": 10,
-    })
+    route = route_after_tool(
+        {
+            "task_status": "running",
+            "should_end_after_save": True,
+            "changed_files": ["frontend/src/App.vue"],
+            "validation_results": [],
+            "verification_attempts": 0,
+            "round_count": 1,
+            "token_count": 10,
+        }
+    )
     assert route == "verify"
 
 
 async def test_executor_denies_tool_missing_from_jwt_permissions():
-    result = await tool_executor_node({
-        "session_id": "permission-test",
-        "user_id": 100,
-        "permissions": ["tools:basic"],
-        "task_status": "running",
-        "pending_tool_calls": [{
-            "id": "shell-1",
-            "name": "bash",
-            "args": {"command": "echo should-not-run"},
-        }],
-    })
+    result = await tool_executor_node(
+        {
+            "session_id": "permission-test",
+            "user_id": 100,
+            "permissions": ["tools:basic"],
+            "task_status": "running",
+            "pending_tool_calls": [
+                {
+                    "id": "shell-1",
+                    "name": "bash",
+                    "args": {"command": "echo should-not-run"},
+                }
+            ],
+        }
+    )
     assert "Permission denied" in result["tool_results"]["shell-1"]
     record = result["tool_execution_records"][0]
     assert record["ok"] is False
@@ -266,24 +306,23 @@ async def test_executor_checks_cancel_before_each_tool_in_a_batch(monkeypatch):
         fake_cancel_request,
     )
 
-    result = await tool_executor_node({
-        "session_id": "cancel-mid-batch",
-        "trace_id": "trace-cancel-mid-batch",
-        "user_id": 120,
-        "permissions": ["tools:basic"],
-        "task_status": "running",
-        "pending_tool_calls": [
-            {"id": "read-first", "name": "read_file", "args": {"path": "first.txt"}},
-            {"id": "read-second", "name": "read_file", "args": {"path": "second.txt"}},
-        ],
-    })
+    result = await tool_executor_node(
+        {
+            "session_id": "cancel-mid-batch",
+            "trace_id": "trace-cancel-mid-batch",
+            "user_id": 120,
+            "permissions": ["tools:basic"],
+            "task_status": "running",
+            "pending_tool_calls": [
+                {"id": "read-first", "name": "read_file", "args": {"path": "first.txt"}},
+                {"id": "read-second", "name": "read_file", "args": {"path": "second.txt"}},
+            ],
+        }
+    )
 
     assert invocations == ["first.txt"]
     assert result["task_status"] == "cancelled"
-    records = {
-        record["tool_call_id"]: record
-        for record in result["tool_execution_records"]
-    }
+    records = {record["tool_call_id"]: record for record in result["tool_execution_records"]}
     assert records["read-first"]["ok"] is True
     assert records["read-second"]["error_code"] == "task_cancelled"
     assert records["read-second"]["attempt_count"] == 0
@@ -321,18 +360,22 @@ async def test_executor_checks_cancel_before_retry_invocation(monkeypatch):
     )
     monkeypatch.setattr("enterprise_agent.core.agent.nodes.asyncio.sleep", no_retry_delay)
 
-    result = await tool_executor_node({
-        "session_id": "cancel-before-retry",
-        "trace_id": "trace-cancel-before-retry",
-        "user_id": 121,
-        "permissions": ["tools:basic"],
-        "task_status": "running",
-        "pending_tool_calls": [{
-            "id": "retry-read",
-            "name": "read_file",
-            "args": {"path": "unstable.txt"},
-        }],
-    })
+    result = await tool_executor_node(
+        {
+            "session_id": "cancel-before-retry",
+            "trace_id": "trace-cancel-before-retry",
+            "user_id": 121,
+            "permissions": ["tools:basic"],
+            "task_status": "running",
+            "pending_tool_calls": [
+                {
+                    "id": "retry-read",
+                    "name": "read_file",
+                    "args": {"path": "unstable.txt"},
+                }
+            ],
+        }
+    )
 
     assert invocation_count == 1
     assert result["task_status"] == "cancelled"
@@ -343,33 +386,45 @@ async def test_executor_checks_cancel_before_retry_invocation(monkeypatch):
 
 async def test_executor_tracks_code_change_and_successful_validation(monkeypatch, tmp_path):
     monkeypatch.setenv("WORKSPACE_BASE", str(tmp_path))
-    write_result = await tool_executor_node({
-        "session_id": "validation-test",
-        "user_id": 101,
-        "permissions": ["tools:basic"],
-        "task_status": "running",
-        "pending_tool_calls": [{
-            "id": "write-1",
-            "name": "write_file",
-            "args": {"path": "src/example.py", "content": "value = 1\n"},
-        }],
-    })
+    write_result = await tool_executor_node(
+        {
+            "session_id": "validation-test",
+            "user_id": 101,
+            "permissions": ["tools:basic"],
+            "task_status": "running",
+            "pending_tool_calls": [
+                {
+                    "id": "write-1",
+                    "name": "write_file",
+                    "args": {
+                        "path": "src/example.py",
+                        "content": ("import unittest\nclass Checks(unittest.TestCase):\n"
+                                    "    def test_value(self): self.assertEqual(1, 1)\n"),
+                    },
+                }
+            ],
+        }
+    )
     assert write_result["changed_files"] == ["src/example.py"]
 
-    validation_result = await tool_executor_node({
-        "session_id": "validation-test",
-        "user_id": 101,
-        "permissions": ["tools:shell"],
-        "task_status": "running",
-        "pending_tool_calls": [{
-            "id": "validate-1",
-            "name": "bash",
-            "args": {"command": "python -m compileall -q ."},
-        }],
-        "changed_files": write_result["changed_files"],
-        "tool_execution_records": write_result["tool_execution_records"],
-        "tool_call_count": write_result["tool_call_count"],
-    })
+    validation_result = await tool_executor_node(
+        {
+            "session_id": "validation-test",
+            "user_id": 101,
+            "permissions": ["tools:shell"],
+            "task_status": "running",
+            "pending_tool_calls": [
+                {
+                    "id": "validate-1",
+                    "name": "bash",
+                    "args": {"command": "python -m unittest discover -s src -p example.py"},
+                }
+            ],
+            "changed_files": write_result["changed_files"],
+            "tool_execution_records": write_result["tool_execution_records"],
+            "tool_call_count": write_result["tool_call_count"],
+        }
+    )
     assert validation_result["validation_results"][0]["ok"] is True
 
     final = await finalize_task_node(validation_result)
@@ -380,32 +435,29 @@ async def test_py_compile_exit_zero_is_recorded_as_code_validation(monkeypatch, 
     """A narrow Python syntax check is valid evidence when its exit code is zero."""
     monkeypatch.setenv("WORKSPACE_BASE", str(tmp_path))
 
-    class SuccessfulBash:
-        name = "bash"
+    from enterprise_agent.core.agent.tools.workspace import get_user_workspace
 
-        async def ainvoke(self, _tool_input):
-            return {"stdout": "", "stderr": "", "exit_code": 0}
+    root = get_user_workspace(109)
+    (root / "src").mkdir()
+    (root / "src/example.py").write_text("value = 1\n")
 
-    fake_bash = SuccessfulBash()
-    monkeypatch.setattr("enterprise_agent.core.agent.nodes.ALL_TOOLS", [fake_bash])
-    monkeypatch.setattr(
-        "enterprise_agent.core.agent.nodes.get_tools_for_permissions",
-        lambda *_args, **_kwargs: [fake_bash],
+    result = await tool_executor_node(
+        {
+            "session_id": "py-compile-success",
+            "user_id": 109,
+            "permissions": ["tools:shell"],
+            "task_status": "running",
+            "changed_files": ["src/example.py"],
+            "pending_tool_calls": [
+                {
+                    "id": "validate-py-success",
+                    "name": "bash",
+                    "args": {"command": "python -m py_compile src/example.py"},
+                }
+            ],
+            "messages": [],
+        }
     )
-
-    result = await tool_executor_node({
-        "session_id": "py-compile-success",
-        "user_id": 109,
-        "permissions": ["tools:shell"],
-        "task_status": "running",
-        "changed_files": ["src/example.py"],
-        "pending_tool_calls": [{
-            "id": "validate-py-success",
-            "name": "bash",
-            "args": {"command": "python -m py_compile src/example.py"},
-        }],
-        "messages": [],
-    })
 
     assert len(result["validation_results"]) == 1
     validation = result["validation_results"][0]
@@ -413,46 +465,40 @@ async def test_py_compile_exit_zero_is_recorded_as_code_validation(monkeypatch, 
     assert validation["ok"] is True
     assert validation["status"] == "success"
     assert validation["exit_code"] == 0
-    assert validation["duration_ms"] >= 0
-    final = await finalize_task_node(result)
+    assert validation["kind"] == "syntax"
+    final = await finalize_task_node({**result, "user_id": 109})
     assert final["task_status"] == "succeeded"
-    assert final["failure_reason"] is None
+    assert final["validation_scope"] == ["syntax"]
+    assert final["behavioral_validation"] is False
 
 
 async def test_py_compile_nonzero_exit_is_failed_validation_evidence(monkeypatch, tmp_path):
     """Recognizing py_compile must never turn a non-zero exit into success."""
     monkeypatch.setenv("WORKSPACE_BASE", str(tmp_path))
 
-    class FailedBash:
-        name = "bash"
+    from enterprise_agent.core.agent.tools.workspace import get_user_workspace
 
-        async def ainvoke(self, _tool_input):
-            return {
-                "stdout": "",
-                "stderr": "SyntaxError: invalid syntax",
-                "exit_code": 1,
-            }
+    root = get_user_workspace(110)
+    (root / "src").mkdir()
+    (root / "src/broken.py").write_text("def broken(:\n")
 
-    fake_bash = FailedBash()
-    monkeypatch.setattr("enterprise_agent.core.agent.nodes.ALL_TOOLS", [fake_bash])
-    monkeypatch.setattr(
-        "enterprise_agent.core.agent.nodes.get_tools_for_permissions",
-        lambda *_args, **_kwargs: [fake_bash],
+    result = await tool_executor_node(
+        {
+            "session_id": "py-compile-failure",
+            "user_id": 110,
+            "permissions": ["tools:shell"],
+            "task_status": "running",
+            "changed_files": ["src/broken.py"],
+            "pending_tool_calls": [
+                {
+                    "id": "validate-py-failure",
+                    "name": "bash",
+                    "args": {"command": "python -m py_compile src/broken.py"},
+                }
+            ],
+            "messages": [],
+        }
     )
-
-    result = await tool_executor_node({
-        "session_id": "py-compile-failure",
-        "user_id": 110,
-        "permissions": ["tools:shell"],
-        "task_status": "running",
-        "changed_files": ["src/broken.py"],
-        "pending_tool_calls": [{
-            "id": "validate-py-failure",
-            "name": "bash",
-            "args": {"command": "python -m py_compile src/broken.py"},
-        }],
-        "messages": [],
-    })
 
     assert len(result["validation_results"]) == 1
     assert result["validation_results"][0]["ok"] is False
@@ -476,21 +522,15 @@ async def test_successful_delegate_execution_and_final_trace_status_agree(
         async def ainvoke(self, _tool_input):
             return "Independent reviewer confirmed the proposed design."
 
-    class FakeWrite:
-        name = "write_file"
-
-        async def ainvoke(self, _tool_input):
-            return "Successfully wrote src/demo.py"
-
-    class FakeBash:
-        name = "bash"
-
-        async def ainvoke(self, _tool_input):
-            return {"stdout": "", "stderr": "", "exit_code": 0}
+    from enterprise_agent.core.agent.tools.file_ops import write_file
+    from enterprise_agent.core.agent.tools.shell import bash
 
     delegate = FakeDelegate()
-    writer = FakeWrite()
-    bash = FakeBash()
+    writer = write_file
+    # Exercise the real child runtime; only the external model is replaced.
+    from tests.core.execution.test_children import Model
+
+    monkeypatch.setattr("enterprise_agent.core.execution.children.get_llm", Model)
     executable_tools = [delegate, writer, bash]
     monkeypatch.setattr("enterprise_agent.core.agent.nodes.ALL_TOOLS", executable_tools)
     monkeypatch.setattr(
@@ -524,19 +564,30 @@ async def test_successful_delegate_execution_and_final_trace_status_agree(
             {
                 "id": "write-demo",
                 "name": "write_file",
-                "args": {"path": "src/demo.py", "content": "VALUE = 1\n"},
+                "args": {
+                    "path": "src/demo.py",
+                    "content": ("import unittest\nclass Checks(unittest.TestCase):\n"
+                                    "    def test_value(self): self.assertEqual(1, 1)\n"),
+                },
             },
             {
                 "id": "validate-demo",
                 "name": "bash",
-                "args": {"command": "python3 -m py_compile src/demo.py"},
+                "args": {"command": "python3 -m unittest discover -s src -p demo.py"},
             },
         ],
         "messages": [{"role": "assistant", "content": "Specialist review incorporated."}],
         "changed_files": [],
         "validation_results": [],
     }
-    executed = await tool_executor_node(base_state)
+    delegated = await tool_executor_node({**base_state, "pending_tool_calls": base_state["pending_tool_calls"][:1]})
+    executed = await tool_executor_node(
+        {
+            **base_state,
+            **delegated,
+            "pending_tool_calls": base_state["pending_tool_calls"][1:],
+        }
+    )
     records = {record["tool_name"]: record for record in executed["tool_execution_records"]}
     assert records["delegate_task"]["ok"] is True
     assert records["write_file"]["ok"] is True
@@ -548,9 +599,7 @@ async def test_successful_delegate_execution_and_final_trace_status_agree(
     finalized = await _traced_node("finalize_task", finalize_task_node)(final_state)
     trace = store.get_trace(user_id, trace_id)
     delegate_event = next(
-        event
-        for event in trace["events"]
-        if event["type"] == "tool" and event["name"] == "delegate_task"
+        event for event in trace["events"] if event["type"] == "tool" and event["name"] == "delegate_task"
     )
 
     assert finalized["task_status"] == "succeeded"
@@ -572,11 +621,13 @@ async def test_long_failed_shell_output_is_normalized_before_artifact_preview(
         name = "bash"
 
         async def ainvoke(self, _tool_input):
-            return json.dumps({
-                "stdout": "x" * 20_000,
-                "stderr": "FACT_FAILURE=tests failed at the tail",
-                "exit_code": 2,
-            })
+            return json.dumps(
+                {
+                    "stdout": "x" * 20_000,
+                    "stderr": "FACT_FAILURE=tests failed at the tail",
+                    "exit_code": 2,
+                }
+            )
 
     fake_bash = FakeBash()
     monkeypatch.setattr(
@@ -588,19 +639,23 @@ async def test_long_failed_shell_output_is_normalized_before_artifact_preview(
         lambda *_args, **_kwargs: [fake_bash],
     )
 
-    result = await tool_executor_node({
-        "session_id": "long-shell",
-        "trace_id": "trace-long-shell",
-        "user_id": 106,
-        "permissions": ["tools:shell"],
-        "task_status": "running",
-        "pending_tool_calls": [{
-            "id": "long-call",
-            "name": "bash",
-            "args": {"command": "pytest -q"},
-        }],
-        "messages": [],
-    })
+    result = await tool_executor_node(
+        {
+            "session_id": "long-shell",
+            "trace_id": "trace-long-shell",
+            "user_id": 106,
+            "permissions": ["tools:shell"],
+            "task_status": "running",
+            "pending_tool_calls": [
+                {
+                    "id": "long-call",
+                    "name": "bash",
+                    "args": {"command": "pytest -q"},
+                }
+            ],
+            "messages": [],
+        }
+    )
 
     record = result["tool_execution_records"][0]
     assert record["ok"] is False
@@ -632,19 +687,23 @@ async def test_dict_tool_result_preserves_nonzero_exit_semantics(monkeypatch, tm
         lambda *_args, **_kwargs: [fake_bash],
     )
 
-    result = await tool_executor_node({
-        "session_id": "dict-shell",
-        "trace_id": "trace-dict-shell",
-        "user_id": 107,
-        "permissions": ["tools:shell"],
-        "task_status": "running",
-        "pending_tool_calls": [{
-            "id": "dict-call",
-            "name": "bash",
-            "args": {"command": "pytest -q"},
-        }],
-        "messages": [],
-    })
+    result = await tool_executor_node(
+        {
+            "session_id": "dict-shell",
+            "trace_id": "trace-dict-shell",
+            "user_id": 107,
+            "permissions": ["tools:shell"],
+            "task_status": "running",
+            "pending_tool_calls": [
+                {
+                    "id": "dict-call",
+                    "name": "bash",
+                    "args": {"command": "pytest -q"},
+                }
+            ],
+            "messages": [],
+        }
+    )
 
     record = result["tool_execution_records"][0]
     assert record["status"] == "error"
@@ -676,19 +735,23 @@ async def test_large_output_fails_closed_when_artifact_write_fails(
         lambda *_args, **_kwargs: [fake_read],
     )
 
-    result = await tool_executor_node({
-        "session_id": "artifact-failure",
-        "trace_id": "trace-artifact-failure",
-        "user_id": 108,
-        "permissions": ["tools:basic"],
-        "task_status": "running",
-        "pending_tool_calls": [{
-            "id": "failed-artifact",
-            "name": "read_file",
-            "args": {"path": "large.log"},
-        }],
-        "messages": [],
-    })
+    result = await tool_executor_node(
+        {
+            "session_id": "artifact-failure",
+            "trace_id": "trace-artifact-failure",
+            "user_id": 108,
+            "permissions": ["tools:basic"],
+            "task_status": "running",
+            "pending_tool_calls": [
+                {
+                    "id": "failed-artifact",
+                    "name": "read_file",
+                    "args": {"path": "large.log"},
+                }
+            ],
+            "messages": [],
+        }
+    )
 
     record = result["tool_execution_records"][0]
     assert result["task_status"] == "failed"
@@ -710,31 +773,35 @@ async def test_search_memory_tool_records_the_same_retrieval_trace(monkeypatch, 
 
     class FakeMemory:
         async def search_conversations(self, **kwargs):
-            return [{
-                "id": "rejected-memory",
-                "content": "unrelated",
-                "metadata": {"memory_type": "task_outcome"},
-                "rank": 2,
-                "distance": 0.9,
-                "eligible": False,
-                "filter_reason": "distance_above_threshold",
-                "retrieval_strategy": "semantic_top_k",
-            }]
+            return [
+                {
+                    "id": "rejected-memory",
+                    "content": "unrelated",
+                    "metadata": {"memory_type": "task_outcome"},
+                    "rank": 2,
+                    "distance": 0.9,
+                    "eligible": False,
+                    "filter_reason": "distance_above_threshold",
+                    "retrieval_strategy": "semantic_top_k",
+                }
+            ]
 
         async def search_patterns(self, **kwargs):
-            return [{
-                "id": "pattern-uv",
-                "text": 'preference: package_manager = {"value":"uv"}',
-                "pattern_type": "preference",
-                "pattern_key": "package_manager",
-                "confidence": 1.0,
-                "value": '{"value":"uv"}',
-                "rank": 1,
-                "distance": 0.1,
-                "eligible": True,
-                "filter_reason": "eligible",
-                "retrieval_strategy": "semantic_top_k",
-            }]
+            return [
+                {
+                    "id": "pattern-uv",
+                    "text": 'preference: package_manager = {"value":"uv"}',
+                    "pattern_type": "preference",
+                    "pattern_key": "package_manager",
+                    "confidence": 1.0,
+                    "value": '{"value":"uv"}',
+                    "rank": 1,
+                    "distance": 0.1,
+                    "eligible": True,
+                    "filter_reason": "eligible",
+                    "retrieval_strategy": "semantic_top_k",
+                }
+            ]
 
         async def update_access_count(self, memory_id):
             raise AssertionError(f"rejected memory was counted: {memory_id}")
@@ -755,28 +822,29 @@ async def test_search_memory_tool_records_the_same_retrieval_trace(monkeypatch, 
         lambda: FakeTraceStore(),
     )
 
-    result = await tool_executor_node({
-        "session_id": "memory-tool-trace",
-        "trace_id": "trace-memory-tool",
-        "user_id": 105,
-        "permissions": ["tools:memory"],
-        "task_status": "running",
-        "pending_tool_calls": [{
-            "id": "memory-search-1",
-            "name": "search_memory",
-            "args": {"query": "Python dependency management preference"},
-        }],
-    })
+    result = await tool_executor_node(
+        {
+            "session_id": "memory-tool-trace",
+            "trace_id": "trace-memory-tool",
+            "user_id": 105,
+            "permissions": ["tools:memory"],
+            "task_status": "running",
+            "pending_tool_calls": [
+                {
+                    "id": "memory-search-1",
+                    "name": "search_memory",
+                    "args": {"query": "Python dependency management preference"},
+                }
+            ],
+        }
+    )
 
     assert result["tool_execution_records"][0]["ok"] is True
     assert result["tool_execution_records"][0]["artifact_path"] is None
     assert "artifact" not in result["messages"][0]
     assert accessed_patterns == ["pattern-uv"]
     memory_event = next(
-        event
-        for event in events
-        if event["event_type"] == "memory"
-        and event["name"] == "memory_retrieval"
+        event for event in events if event["event_type"] == "memory" and event["name"] == "memory_retrieval"
     )
     assert memory_event["data"]["source"] == "search_memory_tool"
     assert memory_event["data"]["injected_ids"] == ["pattern-uv"]
@@ -794,22 +862,24 @@ async def test_search_memory_tool_records_the_same_retrieval_trace(monkeypatch, 
         "enterprise_agent.memory.long_term.get_long_term_memory",
         lambda user_id: EmptyMemory(),
     )
-    await tool_executor_node({
-        "session_id": "empty-memory-tool-trace",
-        "trace_id": "trace-empty-memory-tool",
-        "user_id": 105,
-        "permissions": ["tools:memory"],
-        "task_status": "running",
-        "pending_tool_calls": [{
-            "id": "empty-memory-search",
-            "name": "search_memory",
-            "args": {"query": "a preference that does not exist"},
-        }],
-    })
-
-    empty_event = next(
-        event for event in events if event["event_type"] == "memory"
+    await tool_executor_node(
+        {
+            "session_id": "empty-memory-tool-trace",
+            "trace_id": "trace-empty-memory-tool",
+            "user_id": 105,
+            "permissions": ["tools:memory"],
+            "task_status": "running",
+            "pending_tool_calls": [
+                {
+                    "id": "empty-memory-search",
+                    "name": "search_memory",
+                    "args": {"query": "a preference that does not exist"},
+                }
+            ],
+        }
     )
+
+    empty_event = next(event for event in events if event["event_type"] == "memory")
     assert empty_event["data"]["injected_count"] == 0
     assert empty_event["data"]["injected_characters"] == 0
     assert empty_event["data"]["injected_tokens"] == 0
@@ -831,53 +901,54 @@ async def test_artifact_recovery_is_non_recursive_and_blocks_duplicate_or_eof_re
         f"sha256={receipt.sha256}; original_chars={receipt.original_chars}]"
     )
 
-    result = await tool_executor_node({
-        "session_id": "artifact-read-guards",
-        "trace_id": "trace-artifact-read-guards",
-        "user_id": 109,
-        "permissions": ["tools:context"],
-        "task_status": "running",
-        "messages": [{
-            "role": "tool",
-            "tool_call_id": "source-call",
-            "content": visible_handle,
-            "artifact": receipt.to_dict(),
-        }],
-        "pending_tool_calls": [
-            {
-                "id": "read-first",
-                "name": "read_tool_artifact",
-                "args": {
-                    "path": receipt.path,
-                    "sha256": receipt.sha256,
-                    "offset_bytes": 0,
+    result = await tool_executor_node(
+        {
+            "session_id": "artifact-read-guards",
+            "trace_id": "trace-artifact-read-guards",
+            "user_id": 109,
+            "permissions": ["tools:context"],
+            "task_status": "running",
+            "messages": [
+                {
+                    "role": "tool",
+                    "tool_call_id": "source-call",
+                    "content": visible_handle,
+                    "artifact": receipt.to_dict(),
+                }
+            ],
+            "pending_tool_calls": [
+                {
+                    "id": "read-first",
+                    "name": "read_tool_artifact",
+                    "args": {
+                        "path": receipt.path,
+                        "sha256": receipt.sha256,
+                        "offset_bytes": 0,
+                    },
                 },
-            },
-            {
-                "id": "read-duplicate",
-                "name": "read_tool_artifact",
-                "args": {
-                    "path": receipt.path,
-                    "sha256": receipt.sha256,
-                    "offset_bytes": 0,
+                {
+                    "id": "read-duplicate",
+                    "name": "read_tool_artifact",
+                    "args": {
+                        "path": receipt.path,
+                        "sha256": receipt.sha256,
+                        "offset_bytes": 0,
+                    },
                 },
-            },
-            {
-                "id": "read-after-eof",
-                "name": "read_tool_artifact",
-                "args": {
-                    "path": receipt.path,
-                    "sha256": receipt.sha256,
-                    "offset_bytes": receipt.stored_bytes,
+                {
+                    "id": "read-after-eof",
+                    "name": "read_tool_artifact",
+                    "args": {
+                        "path": receipt.path,
+                        "sha256": receipt.sha256,
+                        "offset_bytes": receipt.stored_bytes,
+                    },
                 },
-            },
-        ],
-    })
+            ],
+        }
+    )
 
-    records = {
-        record["tool_call_id"]: record
-        for record in result["tool_execution_records"]
-    }
+    records = {record["tool_call_id"]: record for record in result["tool_execution_records"]}
     assert records["read-first"]["ok"] is True
     assert records["read-first"]["artifact_path"] is None
     assert records["read-duplicate"]["error_code"] == "artifact_duplicate_read"

@@ -380,3 +380,16 @@ def test_pattern_context_records_never_stringify_reasoning_blocks():
     serialized = json.dumps(records)
     assert "PRIVATE_REASONING" not in serialized
     assert "PRIVATE_THINKING_ONLY" not in serialized
+
+
+@pytest.mark.parametrize('user_request', [
+    '修复 Python 项目，但不要保存到长期记忆。',
+    'Fix the Python project. Do not save this to memory.',
+    "Fix the code but don't remember this.",
+])
+def test_explicit_opt_out_blocks_even_verified_high_importance_task(user_request):
+    from enterprise_agent.memory.policy import has_explicit_memory_intent
+    decision=MemoryAdmissionPolicy().decide(user_request=user_request,task_status='succeeded',importance=1.0,
+                                           changed_files=['a.py'],validation_results=[{'ok':True}])
+    assert not decision.accepted and decision.reason=='explicit_memory_opt_out'
+    assert not has_explicit_memory_intent(user_request)

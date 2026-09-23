@@ -1,0 +1,17 @@
+{
+  "release": "20260911-sandbox",
+  "source_package_sha256": "fe8894a6ee089a7422b102a2e2cfd3d0247b8f63b053e8d22bde35565bdda333",
+  "source_base_commit": "0648e72dad083e21a70eb8811e1e0dc890bd5714",
+  "source_branch": "feature/container-agent-sandbox",
+  "includes_uncommitted": true,
+  "runtime_verification": {
+    "verified_runtime_files": 96,
+    "mismatches": []
+  },
+  "images": {
+    "mini-claude-api:20260911-sandbox": "sha256:c95192d82250bf9db5bd4b6004b094417737f8927f07d3b9b45d097c5a52e201",
+    "mini-claude-frontend:20260911-sandbox": "sha256:dc08f43123125f43620076b9b1d8f260786c51aa45cc942672346f315b517bb5",
+    "mini-claude-executor:20260911": "sha256:2f62f296465ea336c4ff9ee852947c503e6465e52f674476e03a651377d75515",
+    "mini-claude-sandbox-reaper:20260911": "sha256:f5c0dbc81071cbebf4b7d3d2d9010b52ad6eded0e1dcda0a9c21f02eb251a20f"
+  }
+}

@@ -1,0 +1,29 @@
+{
+  "release": "/home/ubuntu/mini-claude-releases/20260923-skills-ui",
+  "image": "mini-claude-frontend:20260923-skills-ui",
+  "image_id": "sha256:d2ca68cfe1c83c87b358371e401fd1fc9ef4fdb4754a29e1b2d258f1daf004ef",
+  "frontend_version": {
+    "build_id": "2026-09-22T19:33:00.048Z"
+  },
+  "api_health": {
+    "status": "healthy",
+    "version": "0.1.0",
+    "build": {
+      "source_sha256": "e1f33eb48dd008ff1517723f002abf8fc638432dc1cddb2021eba8a56858859c",
+      "qualification": "diagnostic-snapshot",
+      "git": {
+        "commit": "0648e72dad083e21a70eb8811e1e0dc890bd5714",
+        "branch": "feature/enterprise-skills",
+        "dirty": true
+      }
+    },
+    "name": "Enterprise Agent",
+    "checks": {
+      "mysql": "ok",
+      "redis": "ok"
+    }
+  },
+  "api_mysql_redis_reaper_unchanged": true,
+  "previous_frontend": "mini-claude-frontend:20260923-skills",
+  "source_sha256": "6a66d782b40a2bc13303ce30c543c67d1b5016cf50897e47fdf29506de27555c"
+}

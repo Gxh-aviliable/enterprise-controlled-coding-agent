@@ -5,6 +5,7 @@ WORKDIR /app
 # Install system dependencies
 RUN apt-get update && apt-get install -y --no-install-recommends \
     gcc \
+    git ca-certificates \
     && rm -rf /var/lib/apt/lists/*
 
 # Install uv
@@ -20,12 +21,11 @@ RUN --mount=type=cache,target=/root/.cache/uv \
 # Chowning the full /app/.venv after every source edit traversed the large
 # PyTorch dependency layer and made small rebuilds take several minutes.
 RUN useradd --create-home --uid 10001 agent && \
-    mkdir -p /workspaces /data/chroma /data/huggingface && \
+    mkdir -p /workspaces /data/chroma /data/huggingface /data/shared-skills && \
     chown -R agent:agent /workspaces /data
 
 # Copy and install only the local project after the reusable dependency layer.
 COPY enterprise_agent ./enterprise_agent
-COPY shared_skills ./shared_skills
 COPY migrations ./migrations
 COPY alembic.ini ./alembic.ini
 RUN --mount=type=cache,target=/root/.cache/uv \
@@ -37,7 +37,6 @@ ENV PYTHONUNBUFFERED=1 \
     WORKSPACE_BASE=/workspaces \
     CHROMA_PERSIST_DIR=/data/chroma \
     HF_HOME=/data/huggingface \
-    SHARED_SKILLS_DIR=/app/shared_skills \
     MANAGED_SHARED_SKILLS_DIR=/data/shared-skills
 
 USER agent

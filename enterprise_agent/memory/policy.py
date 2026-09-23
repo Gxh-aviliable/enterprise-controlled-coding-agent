@@ -124,9 +124,17 @@ def _contains_any(text: str, markers: Iterable[str]) -> bool:
     return any(marker in lowered for marker in markers)
 
 
+def has_memory_opt_out(text: str) -> bool:
+    return bool(re.search(
+        r"(?:do not|don't|never)\s+(?:remember|(?:save|store).{0,24}\bmemory\b)|"
+        r"(?:不要|不必|无需|禁止|不).{0,16}(?:记住|保存.{0,6}记忆|存入.{0,6}记忆)",
+        text or "", re.IGNORECASE,
+    ))
+
+
 def has_explicit_memory_intent(user_request: str) -> bool:
     """Return whether the user explicitly asked for durable storage."""
-    return _contains_any(user_request or "", _EXPLICIT_MEMORY_MARKERS)
+    return not has_memory_opt_out(user_request) and _contains_any(user_request or "", _EXPLICIT_MEMORY_MARKERS)
 
 
 def has_durable_pattern_signal(user_request: str) -> bool:
@@ -137,6 +145,8 @@ def has_durable_pattern_signal(user_request: str) -> bool:
     language such as "from now on", "by default", or "remember".
     """
     text = user_request or ""
+    if has_memory_opt_out(text):
+        return False
     if not _contains_any(text, _DURABLE_PREFERENCE_MARKERS):
         return False
     if _contains_any(text, _ONE_OFF_MARKERS) and not _contains_any(
@@ -178,6 +188,8 @@ class MemoryAdmissionPolicy:
     ) -> MemoryAdmissionDecision:
         """Decide whether one finalized task should become durable memory."""
         request = (user_request or "").strip()
+        if has_memory_opt_out(request):
+            return MemoryAdmissionDecision(False, "task_outcome", "explicit_memory_opt_out")
         if task_status != "succeeded":
             return MemoryAdmissionDecision(False, "task_outcome", "task_not_succeeded")
 

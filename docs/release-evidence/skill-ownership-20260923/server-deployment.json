@@ -1,0 +1,55 @@
+{
+  "release": "/home/ubuntu/mini-claude-releases/20260923-skill-ownership",
+  "previous_release": "/home/ubuntu/mini-claude-releases/20260923-skills",
+  "backup": "/home/ubuntu/mini-claude-backup-20260923-skill-ownership-r2",
+  "health": {
+    "status": "healthy",
+    "version": "0.1.0",
+    "build": {
+      "source_sha256": "6e791f36c9459a50e6135bed9f79a75951d646827b4d4232d1244a11c451305c",
+      "qualification": "diagnostic-snapshot",
+      "git": {
+        "commit": "0648e72dad083e21a70eb8811e1e0dc890bd5714",
+        "branch": "feature/enterprise-skills",
+        "dirty": true
+      }
+    },
+    "name": "Enterprise Agent",
+    "checks": {
+      "mysql": "ok",
+      "redis": "ok"
+    }
+  },
+  "data_before": {
+    "existing_skills": {},
+    "rows": {
+      "users": 5,
+      "sessions": 13,
+      "chat_messages": 62,
+      "managed_shared_skills": 0,
+      "managed_shared_skill_versions": 0
+    },
+    "workspace_files": 117,
+    "workspace_sha256": "6b3127e6b78e0be42580368493efcb6633b7485e207b4d87a82f0773999f7277"
+  },
+  "data_after": {
+    "existing_skills": {
+      "agent-interviewer": "8af65de19f2f8f4a34da1677842212582dc66e273f53fe56b3a5cdcbf806a273",
+      "fastapi": "1e78777d38f82b3bfc2d7ffc9afba6435e2f5fb073a5ea41ebf7f98ef31c3356",
+      "langgraph": "9e9dc0f30a1e5a2e46518d2a92de3b94674cfcc648019de0021c3bec30dd9832",
+      "python": "c66183194e3b04af64a0eed1206cf46e297a2dd6583690ae72c420c85389a6a6"
+    },
+    "rows": {
+      "users": 5,
+      "sessions": 13,
+      "chat_messages": 62,
+      "managed_shared_skills": 4,
+      "managed_shared_skill_versions": 4
+    },
+    "workspace_files": 117,
+    "workspace_sha256": "6b3127e6b78e0be42580368493efcb6633b7485e207b4d87a82f0773999f7277"
+  },
+  "database_revision": "20260923_0008",
+  "mysql_redis_reaper_unchanged": true,
+  "migrated_public_packages": 4
+}

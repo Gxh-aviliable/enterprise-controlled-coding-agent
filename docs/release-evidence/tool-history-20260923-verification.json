@@ -1,0 +1,62 @@
+{
+  "source_sha256": "37f4369dad96f386d96bf80e7693dc133ab851111c0d44b8a803a98b14bc6275",
+  "full_backend": {
+    "passed": 853,
+    "deselected": 25
+  },
+  "additional_legacy_node_regression": {
+    "passed": 1
+  },
+  "new_helper_and_test_files_ruff": "passed",
+  "preexisting_lint_findings": [
+    {
+      "file": "enterprise_agent/api/routes/chat.py",
+      "baseline_lint": "enterprise_agent/api/routes/chat.py:1:1: I001 [*] Import block is un-sorted or un-formatted\nenterprise_agent/api/routes/chat.py:2478:121: E501 Line too long (126 > 120)\nFound 2 errors.\n[*] 1 fixable with the `--fix` option.\n"
+    },
+    {
+      "file": "enterprise_agent/core/agent/nodes.py",
+      "baseline_lint": "enterprise_agent/core/agent/nodes.py:27:1: I001 [*] Import block is un-sorted or un-formatted\nFound 1 error.\n[*] 1 fixable with the `--fix` option.\n"
+    }
+  ],
+  "synthetic_model_probe": {
+    "request_accepted": true,
+    "missing_results_added": 2,
+    "tools_executed": 0
+  },
+  "synthetic_http_probe": {
+    "http_status": 200,
+    "legacy_checkpoint_followup_completed": true,
+    "sse_errors": 0,
+    "real_model_used": true,
+    "tools_executed": 0,
+    "temporary_account_and_checkpoint_removed": true,
+    "business_row_counts_preserved": true
+  },
+  "runtime_files_verified": 112,
+  "uv_lock_original_hash_verified": true,
+  "public_health": {
+    "status": "healthy",
+    "version": "0.1.0",
+    "build": {
+      "source_sha256": "37f4369dad96f386d96bf80e7693dc133ab851111c0d44b8a803a98b14bc6275",
+      "qualification": "diagnostic-snapshot",
+      "git": {
+        "commit": "0648e72dad083e21a70eb8811e1e0dc890bd5714",
+        "branch": "feature/verified-agent-delivery",
+        "dirty": true
+      }
+    },
+    "name": "Enterprise Agent",
+    "checks": {
+      "mysql": "ok",
+      "redis": "ok"
+    }
+  },
+  "user_workspace_files_verified": 79,
+  "user_workspace_unchanged": true,
+  "backup_files_mode_0600": true,
+  "database_revision": "20260914_0006",
+  "task_files_still_match_deployed_snapshot": true,
+  "local_workspace_changed_concurrently_after_package": true,
+  "concurrent_skill_package_changes_deployed": false
+}

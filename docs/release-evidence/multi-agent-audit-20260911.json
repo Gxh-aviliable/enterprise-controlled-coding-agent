@@ -1,0 +1,55 @@
+{
+  "normalization": [
+    {
+      "raw": "Subagent error: controlled audit failure",
+      "ok": true,
+      "status": "success"
+    },
+    {
+      "raw": "(no summary)",
+      "ok": true,
+      "status": "success"
+    },
+    {
+      "raw": "Error initializing LLM: controlled",
+      "ok": true,
+      "status": "success"
+    },
+    {
+      "raw": "Subagent cancelled by the parent task Stop request.",
+      "ok": true,
+      "status": "success"
+    }
+  ],
+  "failed_delegate_opens_write_gate": {
+    "fake_write_invoked": true,
+    "records": [
+      {
+        "tool": "delegate_task",
+        "ok": true,
+        "error_code": null
+      },
+      {
+        "tool": "write_file",
+        "ok": true,
+        "error_code": null
+      }
+    ]
+  },
+  "duplicate_spawn": {
+    "response": "Error: 'reviewer' is already running (status: working)",
+    "handle_replaced": true,
+    "original_still_running_after_replacement_stop": true
+  },
+  "cross_session_namespace": {
+    "same_manager": true,
+    "same_bus": true,
+    "B_drained_A_message": true
+  },
+  "claim_overwrites_owner": true,
+  "read_only_risk_labels": {
+    "pytest -q": "safe",
+    "python3 -m py_compile sample.py": "safe",
+    "npm test": "safe"
+  }
+}

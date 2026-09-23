@@ -30,6 +30,7 @@ dependencies = [
     "pydantic-settings>=2.0.0",
     # Utils
     "python-dotenv>=1.0.0",
+    "PyYAML>=6.0.2",
     "filelock>=3.16.0",
     "langgraph-checkpoint-redis>=0.4.1",
     "bcrypt<4.1",
@@ -77,6 +78,7 @@ markers = [
     "asyncio: mark test as async test",
     "integration: mark test as integration test (requires external services)",
     "slow: mark test as slow running",
+    "docker_sandbox: real Docker isolation tests (explicit opt-in)",
 ]
 
 [tool.ruff]
@@ -87,6 +89,7 @@ select = ["E", "F", "I", "N"]
 
 [dependency-groups]
 dev = [
+    "aiosqlite>=0.22.1",
     "pytest-asyncio>=0.25.0",
     "pytest-cov>=7.1.0",
     "pytest-mock>=3.15.1",

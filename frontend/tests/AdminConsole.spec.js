@@ -5,6 +5,8 @@ import AdminConsole from '../src/components/admin/AdminConsole.vue'
 import * as api from '../src/api/client.js'
 
 vi.mock('../src/api/client.js', () => ({
+  previewSkillZip: vi.fn(),
+  getSkillImportCandidate: vi.fn(),
   getAdminOverview: vi.fn(),
   listAdminUsers: vi.fn(),
   getAdminUser: vi.fn(),
@@ -103,4 +105,66 @@ describe('AdminConsole', () => {
     expect(wrapper.text()).toContain('print("safe")')
     wrapper.unmount()
   })
+  it('opens the new draft editor and carries a complete imported package into publication', async () => {
+    const content = '---\nname: zip-demo\ndescription: Full package\n---\nUse the reference.'
+    const packageFiles = { 'SKILL.md': 'c2tpbGw=', 'references/guide.md': 'cmVm', 'scripts/check.py': 'cHJpbnQoMSk=' }
+    api.previewSkillZip.mockResolvedValue({ preview_id: 'preview-1', candidates: [{ valid: true, metadata: { name: 'zip-demo' }, path: 'zip-demo' }] })
+    api.getSkillImportCandidate.mockResolvedValue({ valid: true, metadata: { name: 'zip-demo', description: 'Full package' }, content, package: packageFiles })
+    api.saveAdminSkillDraft.mockResolvedValue({ status: 'draft', revision: 1, updated_at: '2026-09-23T00:00:00', validation: { valid: true } })
+    api.publishAdminSkill.mockResolvedValue({ name: 'zip-demo', version: 1 })
+    const wrapper = mount(AdminConsole)
+    await flushPromises()
+    await wrapper.findAll('button').find(b => b.text().includes('公共 Skills')).trigger('click')
+    await flushPromises()
+    await wrapper.findAll('button').find(b => b.text() === '新建公共 Skill').trigger('click')
+    expect(wrapper.find('.skill-editor textarea').exists()).toBe(true)
+    const upload = wrapper.find('input[type=file]')
+    Object.defineProperty(upload.element, 'files', { value: [new File(['zip'], 'skill.zip')] })
+    await upload.trigger('change'); await flushPromises()
+    await wrapper.findAll('button').find(b => b.text() === '预览候选到草稿编辑器').trigger('click')
+    await flushPromises()
+    expect(wrapper.text()).toContain('references/guide.md')
+    await wrapper.findAll('button').find(b => b.text() === '保存草稿').trigger('click')
+    await flushPromises()
+    expect(api.saveAdminSkillDraft).toHaveBeenCalledWith(expect.objectContaining({ name: 'zip-demo', content, package: packageFiles }))
+    await wrapper.find('input[placeholder="说明本次修改"]').setValue('Publish entire package')
+    await wrapper.findAll('button').find(b => b.text() === '发布版本').trigger('click')
+    await flushPromises()
+    expect(api.publishAdminSkill).toHaveBeenCalledWith('zip-demo', 'Publish entire package', '2026-09-23T00:00:00', 1)
+    wrapper.unmount()
+  })
+
+  it('loads an existing public skill body and allows editing, publication and retirement', async () => {
+    const content = '---\nname: python\ndescription: Python guidance\n---\nOriginal guidance.'
+    const detail = { name: 'python', description: 'Python guidance', draft_content: content, status: 'published', active_version: 1, revision: 1, versions: [] }
+    api.listAdminSkills.mockResolvedValue({ items: [{ name: 'python', source: 'managed', status: 'published' }] })
+    api.getAdminSkill.mockResolvedValue(detail)
+    api.saveAdminSkillDraft.mockResolvedValue({ status: 'published', revision: 2, updated_at: '2026-09-23T01:00:00', validation: { valid: true } })
+    api.publishAdminSkill.mockResolvedValue({ name: 'python', version: 2 })
+    api.retireAdminSkill.mockResolvedValue({ name: 'python', status: 'retired' })
+    const wrapper = mount(AdminConsole)
+    await flushPromises()
+    await wrapper.findAll('button').find(b => b.text().includes('公共 Skills')).trigger('click')
+    await flushPromises()
+    expect(api.getAdminSkill).toHaveBeenCalledWith('python')
+    const editor = wrapper.find('.skill-editor textarea')
+    expect(editor.element.value).toBe(content)
+    expect(editor.element.disabled).toBe(false)
+    expect(wrapper.text()).not.toContain('BUILTIN')
+    const edited = content.replace('Original', 'Updated')
+    await editor.setValue(edited)
+    await wrapper.findAll('button').find(b => b.text() === '保存草稿').trigger('click')
+    await flushPromises()
+    expect(api.saveAdminSkillDraft).toHaveBeenCalledWith(expect.objectContaining({ name: 'python', content: edited, expected_revision: 1 }))
+    await wrapper.find('input[placeholder="说明本次修改"]').setValue('Update Python guidance')
+    await wrapper.findAll('button').find(b => b.text() === '发布版本').trigger('click')
+    await flushPromises()
+    expect(api.publishAdminSkill).toHaveBeenCalledWith('python', 'Update Python guidance', '2026-09-23T01:00:00', 2)
+    await wrapper.find('input[placeholder="说明本次修改"]').setValue('No longer needed')
+    await wrapper.findAll('button').find(b => b.text() === '下架').trigger('click')
+    await flushPromises()
+    expect(api.retireAdminSkill).toHaveBeenCalledWith('python', 'No longer needed')
+    wrapper.unmount()
+  })
+
 })

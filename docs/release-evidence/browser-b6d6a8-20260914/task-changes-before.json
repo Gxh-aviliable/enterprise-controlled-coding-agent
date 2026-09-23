@@ -1,0 +1,73 @@
+{
+  "trace_id": "c37f76bb-4577-4432-92fa-363497174856",
+  "version": "da1dfefd3175848d62ed2ffdb603e8231b9ab7e1a422f32585771f87a48d8827",
+  "files": [
+    {
+      "path": "calculator.py",
+      "before": [
+        "d5ef0469661a81c7af6a7e032965e51bd28e2bbf43146a95ae7166027df65a79",
+        420
+      ],
+      "after": [
+        "1c3eafab9aa411fd3674bb233f9447d5e0d8b808c79c2b22fe7d721729c30f46",
+        420
+      ],
+      "operation": "modified",
+      "continuous": true,
+      "restorable": true,
+      "conflict": false,
+      "supported": true,
+      "reason": null,
+      "diff": "--- before/calculator.py\n+++ after/calculator.py\n@@ -1 +1 @@\n-def add(a, b): return a - b\n+def add(a, b): return a + b\n"
+    }
+  ],
+  "validations": [
+    {
+      "execution_id": "f3988eb9e23b4c0ab36f31a2d5ddb531",
+      "trace_id": "c37f76bb-4577-4432-92fa-363497174856",
+      "phase": "finished",
+      "recorded_at": 1789366800.4202073,
+      "executor": "docker",
+      "command": "python -B -m pytest -q",
+      "command_sha256": "2b429f6e4b9a9c65b6db30c8ba856f333c9b246dc1098ba8f1c539078509abe2",
+      "cwd": ".",
+      "input_version": "07118d00200c82f7141ac60f55e4e766d7addd4e92df5d41a69373a63cd06d0d",
+      "input_stamp": "9d5309f4f4d6aefbc07b92234c4c71816e1463f8016b040e434f62243e8df425",
+      "output_version": "07118d00200c82f7141ac60f55e4e766d7addd4e92df5d41a69373a63cd06d0d",
+      "output_stamp": "9d5309f4f4d6aefbc07b92234c4c71816e1463f8016b040e434f62243e8df425",
+      "changes": [],
+      "snapshot_status": "available",
+      "exit_code": 0,
+      "error_code": null,
+      "cancelled": false,
+      "timed_out": false,
+      "output_sha256": "4bcefcc9f6c645923b9993ccf73ad92e6b400ca25458ea14e095857fc2131342",
+      "validation": {
+        "kind": "test",
+        "runner": "pytest",
+        "argv": [
+          "python",
+          "-B",
+          "-m",
+          "pytest",
+          "-q"
+        ],
+        "cwd": "."
+      },
+      "fresh": true,
+      "ok": true,
+      "tool_call_id": "call_00_ET_2XBcJHGvtXran9qFUC4w1210",
+      "seq": 6,
+      "current": true
+    }
+  ],
+  "pending_execution": false,
+  "restore": null,
+  "coverage": {
+    "max_file_bytes": 262144,
+    "max_task_bytes": 4194304,
+    "max_files": 100,
+    "retention_days": 7,
+    "scope": "UTF-8 text files only; excludes sensitive paths, detected secrets and links. External effects are not restored."
+  }
+}

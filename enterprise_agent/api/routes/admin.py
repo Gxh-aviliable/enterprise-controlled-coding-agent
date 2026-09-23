@@ -7,17 +7,11 @@ from pathlib import Path
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request, status
 from sqlalchemy import func, or_, select
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from enterprise_agent.admin.audit import add_audit_event
 from enterprise_agent.admin.quotas import period_usage_from_traces
-from enterprise_agent.admin.skills import (
-    managed_skill_path,
-    materialize_skill,
-    retire_materialized_skill,
-    validate_skill_content,
-    validation_json,
-)
 from enterprise_agent.api.middleware.auth import require_admin
 from enterprise_agent.api.schemas.admin import (
     AccessGrantCreate,
@@ -31,7 +25,6 @@ from enterprise_agent.api.schemas.admin import (
 from enterprise_agent.api.services.workspace_read import get_workspace_tree, read_workspace_text
 from enterprise_agent.auth.permissions import Permission
 from enterprise_agent.config.settings import settings
-from enterprise_agent.core.agent.tools.skills import reload_all_skill_loaders
 from enterprise_agent.core.agent.tools.workspace import get_user_workspace
 from enterprise_agent.db.mysql import get_db
 from enterprise_agent.db.redis import get_redis
@@ -46,6 +39,8 @@ from enterprise_agent.models.admin import (
 from enterprise_agent.models.api_key import APIKey
 from enterprise_agent.models.user import User
 from enterprise_agent.observability.trace_store import get_trace_store
+from enterprise_agent.skills.packages import SkillError, validate_package
+from enterprise_agent.skills.registry import content_package, historical_package, package_validation, publish
 
 router = APIRouter(prefix="/admin", tags=["admin"])
 
@@ -113,10 +108,7 @@ async def _usage_payload(db: AsyncSession, user_id: int) -> dict:
     )
     period["daily_tasks"] = max(period["daily_tasks"], int(daily_row.task_count if daily_row else 0))
     usage.update(period)
-    usage["total_tokens"] = sum(
-        int((trace.get("metrics") or {}).get("total_tokens") or 0)
-        for trace in traces
-    )
+    usage["total_tokens"] = sum(int((trace.get("metrics") or {}).get("total_tokens") or 0) for trace in traces)
     usage["tracking_window"] = "latest_500_traces"
     return usage
 
@@ -223,9 +215,12 @@ async def update_user_status(
     if target.id == admin.id and not payload.is_active:
         raise HTTPException(status_code=409, detail="Administrators cannot disable their own account")
     if target.is_superuser and not payload.is_active:
-        active_admins = await db.scalar(
-            select(func.count()).select_from(User).where(User.is_superuser.is_(True), User.is_active.is_(True))
-        ) or 0
+        active_admins = (
+            await db.scalar(
+                select(func.count()).select_from(User).where(User.is_superuser.is_(True), User.is_active.is_(True))
+            )
+            or 0
+        )
         if active_admins <= 1:
             raise HTTPException(status_code=409, detail="Cannot disable the last active administrator")
 
@@ -474,37 +469,43 @@ async def list_shared_skills(
     db: AsyncSession = Depends(get_db),
 ):
     managed = list((await db.scalars(select(SharedSkill).order_by(SharedSkill.name))).all())
-    managed_names = {skill.name for skill in managed}
     items = [
         {
             "id": skill.id,
             "name": skill.name,
             "description": skill.description,
+            "draft_description": skill.description,
+            "stable_id": f"managed:{skill.id}",
             "status": skill.status,
             "active_version": skill.active_version,
+            "revision": skill.revision,
             "source": "managed",
             "updated_at": _iso(skill.updated_at),
         }
         for skill in managed
     ]
-    bundled_root = Path(settings.SHARED_SKILLS_DIR)
-    if bundled_root.exists():
-        for path in sorted(bundled_root.glob("*/SKILL.md")):
-            if path.parent.name in managed_names:
-                continue
-            validation = validate_skill_content(path.parent.name, path.read_text(encoding="utf-8"))
-            items.append(
-                {
-                    "id": None,
-                    "name": path.parent.name,
-                    "description": validation["metadata"].get("description", ""),
-                    "status": "builtin",
-                    "active_version": None,
-                    "source": "builtin",
-                    "sha256": validation["sha256"],
-                }
+    active = (
+        await db.scalars(
+            select(SharedSkillVersion)
+            .join(
+                SharedSkill,
+                (SharedSkill.id == SharedSkillVersion.skill_id)
+                & (SharedSkill.active_version == SharedSkillVersion.version),
             )
-    items.sort(key=lambda item: item["name"])
+            .where(SharedSkill.status == "published")
+        )
+    ).all()
+    active_by_id = {version.skill_id: version for version in active}
+    for item in items:
+        version = active_by_id.get(item["id"])
+        if version is None and item["status"] == "published":
+            item["unavailable_reason"] = "Published Skill version is missing"
+        if version:
+            try:
+                evidence = validate_package(historical_package(version))
+                item.update(description=evidence["metadata"]["description"], sha256=evidence["sha256"])
+            except SkillError as exc:
+                item["unavailable_reason"] = str(exc)
     return {"items": items}
 
 
@@ -515,12 +516,16 @@ async def save_shared_skill_draft(
     admin: User = Depends(require_admin(Permission.ADMIN_SKILLS_PUBLISH.value)),
     db: AsyncSession = Depends(get_db),
 ):
-    skill = await db.scalar(select(SharedSkill).where(SharedSkill.name == payload.name))
+    skill = await db.scalar(select(SharedSkill).where(SharedSkill.name == payload.name).with_for_update())
     before = None
     if skill:
+        if payload.expected_revision is not None and payload.expected_revision != skill.revision:
+            raise HTTPException(409, "Skill draft changed; reload before saving")
         before = {"description": skill.description, "status": skill.status}
+        skill.revision += 1
         skill.description = payload.description
         skill.draft_content = payload.content
+        skill.draft_package = content_package(payload.content, payload.package or skill.draft_package)
         if skill.status == "retired":
             skill.status = "draft"
     else:
@@ -528,11 +533,12 @@ async def save_shared_skill_draft(
             name=payload.name,
             description=payload.description,
             draft_content=payload.content,
+            draft_package=content_package(payload.content, payload.package),
             status="draft",
             created_by=admin.id,
         )
         db.add(skill)
-    validation = validate_skill_content(payload.name, payload.content)
+    validation = package_validation(payload.name, payload.content, skill.draft_package)
     add_audit_event(
         db,
         actor_user_id=admin.id,
@@ -543,9 +549,19 @@ async def save_shared_skill_draft(
         after={"description": payload.description, "validation": validation},
         request=request,
     )
-    await db.commit()
+    try:
+        await db.commit()
+    except IntegrityError as exc:
+        await db.rollback()
+        raise HTTPException(409, "Concurrent Skill draft creation; reload before saving") from exc
     await db.refresh(skill)
-    return {"name": skill.name, "status": skill.status, "validation": validation, "updated_at": _iso(skill.updated_at)}
+    return {
+        "name": skill.name,
+        "status": skill.status,
+        "validation": validation,
+        "updated_at": _iso(skill.updated_at),
+        "revision": skill.revision,
+    }
 
 
 @router.get("/skills/{name}")
@@ -571,9 +587,11 @@ async def get_shared_skill(
         "description": skill.description,
         "status": skill.status,
         "draft_content": skill.draft_content,
+        "package": skill.draft_package,
+        "revision": skill.revision,
         "active_version": skill.active_version,
         "updated_at": _iso(skill.updated_at),
-        "validation": validate_skill_content(skill.name, skill.draft_content),
+        "validation": package_validation(skill.name, skill.draft_content, skill.draft_package),
         "versions": [
             {
                 "version": version.version,
@@ -595,7 +613,7 @@ async def validate_shared_skill(
     skill = await db.scalar(select(SharedSkill).where(SharedSkill.name == name))
     if not skill:
         raise HTTPException(status_code=404, detail="Managed Shared Skill not found")
-    return validate_skill_content(skill.name, skill.draft_content)
+    return package_validation(skill.name, skill.draft_content, skill.draft_package)
 
 
 @router.post("/skills/{name}/publish")
@@ -606,62 +624,15 @@ async def publish_shared_skill(
     admin: User = Depends(require_admin(Permission.ADMIN_SKILLS_PUBLISH.value)),
     db: AsyncSession = Depends(get_db),
 ):
-    skill = await db.scalar(select(SharedSkill).where(SharedSkill.name == name))
-    if not skill:
-        raise HTTPException(status_code=404, detail="Managed Shared Skill not found")
-    if payload.expected_updated_at and skill.updated_at != payload.expected_updated_at:
-        raise HTTPException(status_code=409, detail="Skill draft was changed by another administrator")
-    validation = validate_skill_content(skill.name, skill.draft_content)
-    if not validation["valid"]:
-        raise HTTPException(status_code=422, detail={"message": "Skill validation failed", **validation})
-
-    previous = managed_skill_path(name)
-    previous_content = previous.read_text(encoding="utf-8") if previous.exists() else None
-    previous_active_version = skill.active_version
-    max_version = await db.scalar(
-        select(func.max(SharedSkillVersion.version)).where(SharedSkillVersion.skill_id == skill.id)
-    ) or 0
-    version_number = int(max_version) + 1
-    target = materialize_skill(name, skill.draft_content, version_number)
-    try:
-        version = SharedSkillVersion(
-            skill_id=skill.id,
-            version=version_number,
-            content=skill.draft_content,
-            content_path=str(target),
-            content_sha256=validation["sha256"],
-            validation_json=validation_json(validation),
-            changelog=payload.changelog,
-            created_by=admin.id,
-        )
-        db.add(version)
-        skill.status = "published"
-        skill.active_version = version_number
-        add_audit_event(
-            db,
-            actor_user_id=admin.id,
-            action="shared_skill.publish",
-            target_type="shared_skill",
-            target_id=name,
-            reason=payload.changelog,
-            after={"version": version_number, "sha256": validation["sha256"]},
-            request=request,
-        )
-        await db.commit()
-    except Exception:
-        if previous_content is None:
-            retire_materialized_skill(name)
-        else:
-            materialize_skill(name, previous_content, previous_active_version)
-        raise
-    refreshed = reload_all_skill_loaders()
-    return {
-        "name": name,
-        "status": "published",
-        "version": version_number,
-        "sha256": validation["sha256"],
-        "loaders_refreshed": refreshed,
-    }
+    return await publish(
+        db,
+        name,
+        admin.id,
+        request,
+        changelog=payload.changelog,
+        expected_revision=payload.expected_revision,
+        expected_updated_at=payload.expected_updated_at,
+    )
 
 
 @router.post("/skills/{name}/retire")
@@ -672,34 +643,24 @@ async def retire_shared_skill(
     admin: User = Depends(require_admin(Permission.ADMIN_SKILLS_PUBLISH.value)),
     db: AsyncSession = Depends(get_db),
 ):
-    skill = await db.scalar(select(SharedSkill).where(SharedSkill.name == name))
+    skill = await db.scalar(select(SharedSkill).where(SharedSkill.name == name).with_for_update())
     if not skill:
-        raise HTTPException(status_code=404, detail="Managed Shared Skill not found")
-    active_path = managed_skill_path(name)
-    previous_content = active_path.read_text(encoding="utf-8") if active_path.exists() else None
-    previous_version = skill.active_version
-    retire_materialized_skill(name)
-    try:
-        skill.status = "retired"
-        skill.active_version = None
-        add_audit_event(
-            db,
-            actor_user_id=admin.id,
-            action="shared_skill.retire",
-            target_type="shared_skill",
-            target_id=name,
-            reason=reason,
-            before={"active_version": previous_version},
-            after={"status": "retired"},
-            request=request,
-        )
-        await db.commit()
-    except Exception:
-        if previous_content is not None:
-            materialize_skill(name, previous_content, previous_version)
-        raise
-    refreshed = reload_all_skill_loaders()
-    return {"name": name, "status": "retired", "loaders_refreshed": refreshed}
+        raise HTTPException(404, "Managed Shared Skill not found")
+    skill.status = "retired"
+    skill.active_version = None
+    skill.revision += 1
+    add_audit_event(
+        db,
+        actor_user_id=admin.id,
+        action="shared_skill.retire",
+        target_type="shared_skill",
+        target_id=name,
+        reason=reason,
+        after={"status": "retired"},
+        request=request,
+    )
+    await db.commit()
+    return {"name": name, "status": "retired", "loaders_refreshed": 0}
 
 
 @router.post("/skills/{name}/rollback")
@@ -710,75 +671,14 @@ async def rollback_shared_skill(
     admin: User = Depends(require_admin(Permission.ADMIN_SKILLS_PUBLISH.value)),
     db: AsyncSession = Depends(get_db),
 ):
-    """Publish a new immutable version using a historical version's body."""
-    skill = await db.scalar(select(SharedSkill).where(SharedSkill.name == name))
-    if not skill:
-        raise HTTPException(status_code=404, detail="Managed Shared Skill not found")
-    source_version = await db.scalar(
-        select(SharedSkillVersion).where(
-            SharedSkillVersion.skill_id == skill.id,
-            SharedSkillVersion.version == payload.version,
-        )
+    return await publish(
+        db,
+        name,
+        admin.id,
+        request,
+        changelog=f"Rollback to v{payload.version}: {payload.reason}",
+        rollback_version=payload.version,
     )
-    if not source_version:
-        raise HTTPException(status_code=404, detail="Shared Skill version not found")
-    validation = validate_skill_content(name, source_version.content)
-    if not validation["valid"]:
-        raise HTTPException(status_code=422, detail="Historical Skill version no longer passes validation")
-
-    active_path = managed_skill_path(name)
-    previous_content = active_path.read_text(encoding="utf-8") if active_path.exists() else None
-    previous_active_version = skill.active_version
-    max_version = await db.scalar(
-        select(func.max(SharedSkillVersion.version)).where(SharedSkillVersion.skill_id == skill.id)
-    ) or 0
-    version_number = int(max_version) + 1
-    target = materialize_skill(name, source_version.content, version_number)
-    try:
-        db.add(SharedSkillVersion(
-            skill_id=skill.id,
-            version=version_number,
-            content=source_version.content,
-            content_path=str(target),
-            content_sha256=validation["sha256"],
-            validation_json=validation_json(validation),
-            changelog=f"Rollback to v{payload.version}: {payload.reason}",
-            created_by=admin.id,
-        ))
-        skill.draft_content = source_version.content
-        skill.status = "published"
-        skill.active_version = version_number
-        add_audit_event(
-            db,
-            actor_user_id=admin.id,
-            action="shared_skill.rollback",
-            target_type="shared_skill",
-            target_id=name,
-            reason=payload.reason,
-            before={"active_version": previous_active_version},
-            after={
-                "active_version": version_number,
-                "source_version": payload.version,
-                "sha256": validation["sha256"],
-            },
-            request=request,
-        )
-        await db.commit()
-    except Exception:
-        if previous_content is None:
-            retire_materialized_skill(name)
-        else:
-            materialize_skill(name, previous_content, previous_active_version)
-        raise
-    refreshed = reload_all_skill_loaders()
-    return {
-        "name": name,
-        "status": "published",
-        "version": version_number,
-        "source_version": payload.version,
-        "sha256": validation["sha256"],
-        "loaders_refreshed": refreshed,
-    }
 
 
 @router.get("/tasks")
@@ -870,9 +770,7 @@ async def list_audit_logs(
     total = await db.scalar(count_query) or 0
     rows = list(
         (
-            await db.scalars(
-                query.order_by(AdminAuditLog.created_at.desc()).offset((page - 1) * limit).limit(limit)
-            )
+            await db.scalars(query.order_by(AdminAuditLog.created_at.desc()).offset((page - 1) * limit).limit(limit))
         ).all()
     )
     return {

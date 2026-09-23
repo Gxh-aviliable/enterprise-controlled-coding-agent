@@ -141,7 +141,7 @@ def test_token_estimator_is_conservative_for_emoji_and_high_entropy(tmp_path):
 def _tool_messages(count=8):
     return [
         ToolMessage(
-            content=f"FACT_TOOL_{index}=" + (str(index) * 3000),
+            content=f"FACT_TOOL_{index}=" + (str(index) * 5000),
             tool_call_id=f"call-{index}",
             id=f"message-{index}",
         )
@@ -195,7 +195,7 @@ async def test_microcompact_node_traces_content_change_without_message_count_cha
         transcript_manager=TranscriptManager(tmp_path / "user_9"),
     )
     monkeypatch.setattr(nodes, "get_context_manager", lambda: manager)
-    messages = _tool_messages()
+    messages = _tool_messages(settings.MICROCOMPACT_KEEP_LAST + 2)
 
     update = await nodes.pre_llm_microcompact_node(
         {
@@ -218,6 +218,7 @@ async def test_microcompact_node_traces_content_change_without_message_count_cha
         messages,
     )
     assert update["token_count"] < uncompacted_estimate
+    assert update["execution_phase"] == "planning"
     assert update["token_count"] == nodes._estimate_next_llm_context(
         {
             "trace_id": "trace-micro-node",
@@ -321,6 +322,7 @@ async def test_noop_microcompact_refreshes_full_next_context_estimate(
 
     assert "messages" not in update
     assert update["token_count"] > manager.estimate_tokens([message])
+    assert update["execution_phase"] == "planning"
 
 
 async def test_full_compaction_replaces_history_and_keeps_deterministic_facts(
@@ -463,7 +465,7 @@ async def test_manual_compaction_replaces_history_and_continues(monkeypatch, tmp
 
     assert len(reduced) == 1
     assert reduced[0].id not in {"old-user", "old-ai"}
-    assert update["should_end"] is False
+    assert "should_end" not in update
     assert update["should_end_after_save"] is False
     assert update["task_token_count"] == 35
     assert update["session_token_count"] == 45
@@ -823,3 +825,27 @@ def test_continuation_transcript_handle_supports_bounded_utf8_paging(monkeypatch
         ).startswith("Error: Transcript read rejected")
     finally:
         set_current_user_id(None)
+
+
+def test_token_estimator_never_loads_inherited_gpt2_tokenizer(monkeypatch, tmp_path):
+    from unittest.mock import Mock
+
+    from langchain_core.language_models import base
+    from langchain_core.language_models.fake_chat_models import FakeListChatModel
+
+    download = Mock(side_effect=RuntimeError("Unexpected tokenizer network access"))
+    monkeypatch.setattr(base, "get_tokenizer", download)
+    manager = ContextManager(
+        llm=FakeListChatModel(responses=["unused"]),
+        transcript_manager=TranscriptManager(tmp_path),
+    )
+    assert manager.estimate_tokens([{"role": "user", "content": "中" * 100}]) >= 150
+    download.assert_not_called()
+
+
+def test_token_estimator_preserves_explicit_custom_counter(tmp_path):
+    from langchain_core.language_models.fake_chat_models import FakeListChatModel
+
+    llm = FakeListChatModel(responses=["unused"], custom_get_token_ids=lambda text: [1] * 1234)
+    manager = ContextManager(llm=llm, transcript_manager=TranscriptManager(tmp_path))
+    assert manager.estimate_tokens([{"role": "user", "content": "hello"}]) == 1238

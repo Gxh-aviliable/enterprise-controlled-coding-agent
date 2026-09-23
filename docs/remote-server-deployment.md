@@ -187,7 +187,15 @@ M 系列 Mac 通常是 arm64，云服务器通常是 linux/amd64。不要默认�
 
     DEBUG=false
 
+    API_BIND_ADDRESS=127.0.0.1
+    API_HOST_PORT=8000
+    FRONTEND_BIND_ADDRESS=0.0.0.0
+    FRONTEND_HOST_PORT=80
+
     JWT_SECRET_KEY=<至少32字符的随机密钥>
+
+    MYSQL_ROOT_PASSWORD=<独立的强随机密码>
+    MYSQL_PASSWORD=<独立的强随机密码>
 
     LLM_PROVIDER=<实际提供商>
     LLM_API_KEY=<真实密钥>
@@ -213,20 +221,16 @@ M 系列 Mac 通常是 arm64，云服务器通常是 linux/amd64。不要默认�
 
 ### 6.3 当前 Compose 上公网前必须处理的配置
 
-当前 [docker-compose.yml](../docker/docker-compose.yml) 是已通过本地验收的演示基线，但仍有以下生产差距：
+当前 [docker-compose.yml](../docker/docker-compose.yml) 是已通过本地验收的演示基线。它已经支持通过 `.env` 配置宿主机监听地址和 MySQL 密码，但模板为了本地开箱运行仍保留示例默认值。
 
-1. MySQL root 和应用密码仍是示例值并写在 Compose 中；
-2. API 和前端端口默认绑定所有宿主机网卡；
-3. 没有独立的生产 Compose 文件；
-4. 没有密钥管理系统。
+公网服务器必须显式设置：
 
-公网部署前应：
-
-- 将 MySQL root、应用用户密码改为服务器环境变量或 secret；
-- 将前端端口绑定到 127.0.0.1:3000，由宿主机反向代理访问；
-- 将 API 绑定到 127.0.0.1:8000，或取消 API 的宿主机端口，仅允许前端容器通过 Docker 网络访问；
+- 将 MySQL root、应用用户密码改为独立强随机值；
+- 将 API 保持绑定到 `127.0.0.1:8000`；
+- 无域名的初次验收可将前端绑定到 `0.0.0.0:80`，通过安全组限制来源；配置域名和 HTTPS 后，再将前端绑定到 `127.0.0.1:3000` 交给宿主机反向代理；
 - 保持 MySQL、Redis 仅绑定回环地址；
-- 不要继续使用 rootpassword 和 agent_password。
+- 不要继续使用 `rootpassword` 和 `agent_password`；
+- `.env` 中的 `MYSQL_PASSWORD` 必须同时供 API 和 MySQL 容器使用，不能配置成两个不同值。
 
 如果只是临时在受控内网演示，也至少应替换所有示例密码，并通过安全组限制来源 IP。
 
@@ -482,3 +486,7 @@ Docker 会复用未变化的镜像层，命名卷不会因为重新构建容器�
 - [架构说明](../ARCHITECTURE.md)
 - [能力矩阵](capability-matrix.md)
 - [文档总入口](README.md)
+
+## Agent Shell 独立执行沙箱
+
+企业 Compose 现在默认使用 Docker 执行器。升级前必须预构建执行镜像、创建 UID/GID 10001 的 staging 目录并配置 Docker socket GID；保留原 workspace 命名卷。API 容器化本身不代表 Agent Shell 隔离。详见 [沙箱架构、部署及排障](agent-sandbox.md) 和 [演示验证](sandbox-demo.md)。

@@ -118,9 +118,36 @@ def _command_positions(tokens: list[str]) -> set[int]:
 
 
 def validate_command(command: str) -> Optional[str]:
-    """Fail closed on commands that can escape the reviewable workspace boundary."""
+    """Select policy only from the server's executor setting, shared by all callers."""
     if not command or not command.strip():
         return _blocked("empty command", "provide one workspace-scoped command")
+    if settings.AGENT_EXECUTOR == "docker":
+        return _validate_docker_command(command)
+    return _validate_local_command(command)
+
+
+def _validate_docker_command(command: str) -> Optional[str]:
+    """Finite accident guard, not a Shell interpreter or an isolation boundary."""
+    tokens, _ = _tokenize_command(command)
+    for index, token in enumerate(tokens):
+        binary = Path(token).name.lower()
+        if binary in {"shutdown", "reboot", "halt", "poweroff", "mkfs", "dd", "format", "fdisk"} or binary.startswith(
+            "mkfs."
+        ):
+            return _blocked(f"destructive system command '{binary}' is not allowed.")
+        if binary == "rm":
+            for argument in tokens[index + 1:]:
+                if argument in CONTROL_OPERATORS:
+                    break
+                if argument.rstrip("/") in {"", "*", ".", "..", "/*", "/workspace", "/workspace/*"}:
+                    return _blocked("whole-root/workspace deletion is not allowed; use exact temporary file targets.")
+    if ":(){ :|:& };:" in command:
+        return _blocked("fork bomb is not allowed.")
+    return None
+
+
+def _validate_local_command(command: str) -> Optional[str]:
+    """Retain the strict legacy policy for explicit host development mode."""
     if "\n" in command or "\r" in command:
         return _blocked(
             "multi-line shell commands are not allowed.",
@@ -349,30 +376,10 @@ def _foreground_cancel_requested() -> bool:
         return False
 
 
-@tool
-def bash(command: str) -> str:
-    """Run a command in workspace using Bash on POSIX or cmd.exe on Windows.
-
-    Commands inherit PYTHONIOENCODING=utf-8 automatically to avoid
-    UnicodeEncodeError on Windows (GBK console).
-
-    Args:
-        command: Workspace-relative shell command to execute
-
-    Returns:
-        JSON with stdout, stderr, exit_code fields for structured parsing
-    """
-    error = validate_command(command)
-    if error:
-        return json.dumps({
-            "stdout": "",
-            "stderr": error,
-            "exit_code": 1,
-            "error_code": "policy_blocked",
-        }, ensure_ascii=False)
-
+def _run_local(request, cancelled_check) -> dict:
+    """Host subprocess implementation: explicit development mode only."""
     try:
-        workdir = get_user_workspace()
+        workdir = request.workspace
         # Auto-set UTF-8 encoding so Python tools don't crash on
         # Unicode characters (emoji, Chinese) in Windows GBK consoles
         env = _safe_subprocess_environment(workdir)
@@ -386,7 +393,7 @@ def bash(command: str) -> str:
                 else {"start_new_session": True}
             )
             process = subprocess.Popen(
-                command,
+                request.command,
                 cwd=workdir,
                 stdout=stdout_file,
                 stderr=stderr_file,
@@ -394,12 +401,12 @@ def bash(command: str) -> str:
                 **_shell_execution_kwargs(),
                 **process_group_args,
             )
-            deadline = time.monotonic() + settings.COMMAND_TIMEOUT_SECONDS
+            deadline = time.monotonic() + request.timeout
             cancelled = False
             timed_out = False
             termination_mode = None
             while process.poll() is None:
-                if _foreground_cancel_requested():
+                if cancelled_check():
                     cancelled = True
                     termination_mode = _terminate_process_group(process)
                     break
@@ -434,14 +441,31 @@ def bash(command: str) -> str:
             })
         elif timed_out:
             payload.update({
-                "stderr": stderr or f"Command timed out ({settings.COMMAND_TIMEOUT_SECONDS}s limit)",
+                "stderr": stderr or f"Command timed out ({request.timeout}s limit)",
                 "error_code": "tool_timeout",
                 "termination_mode": termination_mode,
             })
-        return json.dumps(payload, ensure_ascii=False)
+        payload["executor"] = "local"
+        return payload
     except Exception as e:
-        return json.dumps({
-            "stdout": "",
-            "stderr": str(e),
-            "exit_code": -1,
-        }, ensure_ascii=False)
+        return {"stdout": "", "stderr": str(e), "exit_code": -1, "executor": "local"}
+
+
+@tool
+def bash(command: str) -> str:
+    """Execute a command from workspace root using the configured execution boundary.
+
+    Docker is the default. Local mode is explicitly unisolated development only.
+    """
+    error = validate_command(command)
+    if error:
+        return json.dumps({"stdout": "", "stderr": error, "exit_code": 1,
+                           "error_code": "policy_blocked"}, ensure_ascii=False)
+    from enterprise_agent.core.agent.tools.workspace import get_current_user_id
+    from enterprise_agent.core.execution.interrupt_control import get_current_task_control_identity
+    from enterprise_agent.sandbox.executor import ExecutionRequest, execute
+
+    identity = get_current_task_control_identity()
+    request = ExecutionRequest(command, get_user_workspace(), get_current_user_id(),
+                               identity[2] if identity else None, settings.COMMAND_TIMEOUT_SECONDS)
+    return json.dumps(execute(request, _foreground_cancel_requested), ensure_ascii=False)

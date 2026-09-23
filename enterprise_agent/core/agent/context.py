@@ -20,6 +20,8 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Dict, List
 
+from langchain_core.language_models.base import BaseLanguageModel
+
 from enterprise_agent.config.settings import settings
 from enterprise_agent.core.agent.llm_factory import get_llm
 from enterprise_agent.core.agent.message_content import extract_visible_text
@@ -470,6 +472,18 @@ class ContextManager:
             Estimated token count
         """
 
+        # LangChain's inherited counter loads GPT-2 from Hugging Face on first
+        # use. Calling it synchronously here can block the entire API event loop
+        # before any model request, even when only an estimate is needed.
+        count_tokens = getattr(self.llm, "get_num_tokens", None)
+        token_ids = getattr(self.llm, "get_token_ids", None)
+        if (
+            getattr(count_tokens, "__func__", None) is BaseLanguageModel.get_num_tokens
+            and getattr(token_ids, "__func__", None) is BaseLanguageModel.get_token_ids
+            and getattr(self.llm, "custom_get_token_ids", None) is None
+        ):
+            count_tokens = None
+
         total_tokens = 0
         for msg in messages:
             try:
@@ -486,7 +500,6 @@ class ContextManager:
             total_tokens += 4  # Message overhead (role marker, formatting)
 
             provider_count = 0
-            count_tokens = getattr(self.llm, "get_num_tokens", None)
             if callable(count_tokens):
                 try:
                     provider_count = max(0, int(count_tokens(text)))

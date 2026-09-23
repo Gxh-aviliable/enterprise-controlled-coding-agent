@@ -1,0 +1,46 @@
+{
+  "backup_directory": "logs/goal-backups/20260914-142539",
+  "checksums_verified": true,
+  "archives_readable": true,
+  "private_permissions": true,
+  "quiesced": true,
+  "files": {
+    "docker_workspace_data.tar": {
+      "sha256": "1a2e913260c90e9383546c72174107e904bc3966e2d6dd7b8f5158e82ad75cac",
+      "bytes": 41461760,
+      "members": 1387
+    },
+    "mysql.sql": {
+      "sha256": "6d3d84567fc0cf1cabd428723749349dfdc1ecbe14ecda8e4607de987e9cc1b7",
+      "bytes": 597360
+    },
+    "docker_redis_data.tar": {
+      "sha256": "fd437c5b02faa667739c586ab65efc8f80ea1f605f60c81d78ae97eac37786b1",
+      "bytes": 10240,
+      "members": 3
+    },
+    "images.json": {
+      "sha256": "40a2929955c279b9eefd4e0ac22e7fbc2d6bf3c2e002a26bbb7335da86cb9d1b",
+      "bytes": 352
+    },
+    "docker_chroma_data.tar": {
+      "sha256": "ebbe198e67069f519e16c0f92dcf6c2db43c03632e2fd3fe423152e409df999b",
+      "bytes": 942080,
+      "members": 12
+    },
+    "containers.private.json": {
+      "sha256": "27660a270e86cb224a6f202fac44b450a8eccf2574214eaa3f061be7cf146d51",
+      "bytes": 40658
+    },
+    "docker_managed_shared_skills.tar": {
+      "sha256": "03e2edaeffb290add05b8597e960d463dfbb6d4dd5cab997c218ff8a097688a0",
+      "bytes": 10240,
+      "members": 1
+    },
+    "rollback.private.compose.json": {
+      "sha256": "8f888350e0a84adb69be8b2366bbe57a959618b76359e22df963e8ef442bab4c",
+      "bytes": 9067
+    }
+  },
+  "first_attempt": "20260914-142225 incomplete; retained, not recovery source"
+}

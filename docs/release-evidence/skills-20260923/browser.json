@@ -1,0 +1,15 @@
+{
+  "browser": "Chrome headless",
+  "api": "real Skill routes + disposable MySQL",
+  "identity": "test dependency override; not production auth",
+  "checks": [
+    "template preview/install",
+    "disable/enable",
+    "admin draft/publish",
+    "next catalog sees public version",
+    "chat stable-ID selection",
+    "1024x768 dialog"
+  ],
+  "model_call": false,
+  "page_errors": []
+}

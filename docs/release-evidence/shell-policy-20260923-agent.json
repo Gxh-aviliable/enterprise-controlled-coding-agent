@@ -1,0 +1,1067 @@
+{
+  "id": "shell-policy.synthetic",
+  "category": "bug_fix",
+  "difficulty": "easy",
+  "title": "Docker syntax then repair a synthetic arithmetic function",
+  "status": "passed",
+  "infrastructure_error": null,
+  "system_error": null,
+  "duration_ms": 6823,
+  "step_count": 31,
+  "confirmation_resumes": 3,
+  "task_status": "succeeded",
+  "response_summary": "\nAll steps completed.\n\n## Results\n\n**1. Sanity command** — ran exactly `python -c \"print(1 + 1)\"` → stdout `2`, exit code 0. Confirmed.\n\n**2. Files read**\n- `math_utils.py`: `def subtract(a, b): return a + b` — bug: subtraction implemented as addition.\n- `tests/test_math_utils.py`: `assert subtract(7, 4) == 3` (test left untouched).\n\n**3. Smallest fix** — one-line change in `math_utils.py`:\n- `return a + b` → `return a - b`\n\n**4. Validation** — ran exactly `cd /workspace && python -m pytest -q 2>&1`:\n```\n.                                                                        [100%]\n1 passed in 0.01s\n```\nExit code 0.\n\n## Summary\n| Item | Status |\n|---|---|\n| Sanity print command | ✅ printed `2` |\n| `math_utils.py` edited | ✅ `a + b` → `a - b` (1 line) |\n| Tests modified | ❌ none (as required) |\n| `pytest -q` | ✅ `1 passed` |\n\n**Changed files:** `math_utils.py` only.\n**Validation:** real pytest run, 1 passed.\n**Remaining risk:** None meaningful — the fix is minimal and the test's case (",
+  "task_budget": {
+    "limit_tokens": 40000,
+    "used_tokens": 24373,
+    "remaining_tokens": 15627,
+    "limit_tool_calls": 12,
+    "used_tool_calls": 5,
+    "child_tasks": {}
+  },
+  "evaluations": [
+    {
+      "type": "file_contains",
+      "passed": true,
+      "detail": "path=math_utils.py, missing=[]"
+    },
+    {
+      "type": "workspace_changes_exact",
+      "passed": true,
+      "detail": "expected=['math_utils.py'], actual=['math_utils.py']"
+    },
+    {
+      "type": "protected_files_unchanged",
+      "passed": true,
+      "detail": "patterns=['tests/test_math_utils.py'], changed=[]"
+    },
+    {
+      "type": "task_status",
+      "passed": true,
+      "detail": "expected=succeeded, actual=succeeded"
+    },
+    {
+      "type": "protected_paths_not_mutated",
+      "passed": true,
+      "detail": "patterns=['tests/test_math_utils.py'], touched=[]"
+    }
+  ],
+  "post_checks": [],
+  "workspace": {
+    "initial_manifest": {
+      "math_utils.py": {
+        "type": "file",
+        "sha256": "78b8b342977c53c6d91082b433a3443988f48099eca0e05efe151cc0b8f62861",
+        "size": 37,
+        "mode": 420,
+        "mtime_ns": 1790143397994234602,
+        "ctime_ns": 1790143397994234602
+      },
+      "tests/test_math_utils.py": {
+        "type": "file",
+        "sha256": "25eb1d726b1c7a70da68a37db11d2431a7e3954dc442f6d5b306a4eb92470d8a",
+        "size": 80,
+        "mode": 420,
+        "mtime_ns": 1790143397994466019,
+        "ctime_ns": 1790143397994466019
+      }
+    },
+    "final_manifest": {
+      "math_utils.py": {
+        "type": "file",
+        "sha256": "1c3752902e3c25dbf44409955d96315a96a8e102f18177505969713da587e2d6",
+        "size": 37,
+        "mode": 420,
+        "mtime_ns": 1790143401539748346,
+        "ctime_ns": 1790143401539867471
+      },
+      "tests/test_math_utils.py": {
+        "type": "file",
+        "sha256": "25eb1d726b1c7a70da68a37db11d2431a7e3954dc442f6d5b306a4eb92470d8a",
+        "size": 80,
+        "mode": 420,
+        "mtime_ns": 1790143397994466019,
+        "ctime_ns": 1790143397994466019
+      }
+    },
+    "changes": {
+      "added": [],
+      "modified": [
+        "math_utils.py"
+      ],
+      "deleted": []
+    }
+  },
+  "trace": {
+    "current_phase": "summarizing",
+    "duration_ms": 6817,
+    "error": null,
+    "events": [
+      {
+        "data": {},
+        "duration_ms": 0,
+        "event_id": "17c157b3-4219-4c36-be4c-8f47bce31550",
+        "name": "task_created",
+        "status": "pending",
+        "timestamp": "2026-09-23T06:03:17.994843+00:00",
+        "type": "task"
+      },
+      {
+        "data": {
+          "phase": "parsing",
+          "round_count": 0,
+          "task_status": "running"
+        },
+        "duration_ms": 0,
+        "event_id": "f2bab112-6f5c-4216-83f7-fa324f1b1031",
+        "name": "task_parse",
+        "status": "success",
+        "timestamp": "2026-09-23T06:03:18.039563+00:00",
+        "type": "node"
+      },
+      {
+        "data": {
+          "phase": "parsing",
+          "round_count": 0,
+          "task_status": "running"
+        },
+        "duration_ms": 327,
+        "event_id": "347afad0-4598-4da6-aeef-b0a66c01f6f9",
+        "name": "init_context",
+        "status": "success",
+        "timestamp": "2026-09-23T06:03:18.368100+00:00",
+        "type": "node"
+      },
+      {
+        "data": {
+          "phase": "planning",
+          "round_count": 0,
+          "task_status": "running"
+        },
+        "duration_ms": 7,
+        "event_id": "4bcfbc30-5142-4f43-9ab1-1a9285cddfe7",
+        "name": "pre_microcompact",
+        "status": "success",
+        "timestamp": "2026-09-23T06:03:18.377493+00:00",
+        "type": "node"
+      },
+      {
+        "data": {
+          "completion_gate_blocker": null,
+          "completion_gate_recovery_attempts": 0,
+          "context_token_estimate": 5004,
+          "incomplete_response_recovery_attempts": 0,
+          "input_chars": 7111,
+          "input_summary": "This is an isolated synthetic acceptance task. First use bash to execute exactly python -c \"print(1 + 1)\" and confirm output 2. Then read math_utils.py and tests/test_math_utils.py, fix subtract with the smallest edit, and run exactly cd /workspace && python -m pytest -q 2>&1. Do not change tests. Finish with actual results. Use single-agent tools only.",
+          "input_tokens": 4868,
+          "message_count": 2,
+          "output_summary": "I'll start with the exact command, then inspect the files.",
+          "output_tokens": 136,
+          "response_complete": true,
+          "retry_count": 0,
+          "stop_reason": "tool_use",
+          "tool_calls": [
+            "bash",
+            "read_file",
+            "read_file"
+          ],
+          "total_tokens": 5004
+        },
+        "duration_ms": 1229,
+        "event_id": "20ba8b47-7b57-459e-8808-1677c58c493c",
+        "name": "llm_call",
+        "status": "success",
+        "timestamp": "2026-09-23T06:03:19.608938+00:00",
+        "type": "model"
+      },
+      {
+        "data": {
+          "phase": "executing",
+          "round_count": 1,
+          "task_status": "running"
+        },
+        "duration_ms": 1230,
+        "event_id": "b01dfc7e-8662-410d-b164-c25569d46d81",
+        "name": "llm_call",
+        "status": "success",
+        "timestamp": "2026-09-23T06:03:19.609595+00:00",
+        "type": "node"
+      },
+      {
+        "data": {
+          "deadline": "2026-09-23T06:08:19.611371+00:00",
+          "tools": [
+            {
+              "name": "bash",
+              "risk": "review"
+            }
+          ]
+        },
+        "duration_ms": 0,
+        "event_id": "74c04f6b-4b19-4b0b-bcea-e15b501cb2f8",
+        "name": "confirmation_requested",
+        "status": "waiting",
+        "timestamp": "2026-09-23T06:03:19.612413+00:00",
+        "type": "confirmation"
+      },
+      {
+        "data": {
+          "phase": "executing",
+          "round_count": 1,
+          "task_status": "waiting_confirmation"
+        },
+        "duration_ms": 1,
+        "event_id": "3012010d-494d-42d9-a1f5-9318ee0b3a39",
+        "name": "prepare_tool_execution",
+        "status": "success",
+        "timestamp": "2026-09-23T06:03:19.613601+00:00",
+        "type": "node"
+      },
+      {
+        "data": {
+          "phase": "executing",
+          "task_status": "waiting_confirmation"
+        },
+        "duration_ms": 0,
+        "event_id": "bc2f5f56-7bd6-4103-9b0b-f55b99159e13",
+        "name": "tool_confirm",
+        "status": "interrupted",
+        "timestamp": "2026-09-23T06:03:19.615225+00:00",
+        "type": "node"
+      },
+      {
+        "data": {
+          "approved": true,
+          "approved_ids": [
+            "call_00_R57X1LJDsm9kE9JJvbAa9766"
+          ],
+          "reason": null
+        },
+        "duration_ms": 0,
+        "event_id": "3432b105-5fe0-4738-8eda-28b7215e17e8",
+        "name": "confirmation_approved",
+        "status": "success",
+        "timestamp": "2026-09-23T06:03:19.617324+00:00",
+        "type": "confirmation"
+      },
+      {
+        "data": {
+          "phase": "executing",
+          "round_count": 1,
+          "task_status": "running"
+        },
+        "duration_ms": 0,
+        "event_id": "6a0ca75a-6a74-4008-aefd-d00a9eba363d",
+        "name": "tool_confirm",
+        "status": "success",
+        "timestamp": "2026-09-23T06:03:19.617830+00:00",
+        "type": "node"
+      },
+      {
+        "data": {
+          "args_summary": {
+            "command": "python -c \"print(1 + 1)\""
+          },
+          "artifact_bytes": 1808,
+          "artifact_error": null,
+          "artifact_path": ".agent/tool-artifacts/agent-923-8adcabf1/call_00_R57X1LJDsm9kE9JJvbAa9766-944c88bce1d4d778.txt",
+          "artifact_redacted": false,
+          "artifact_sha256": "944c88bce1d4d778ab12c733ea91458a5b2328304acb7ea15001f9c1764a04ed",
+          "attempt_count": 1,
+          "error_code": null,
+          "execution_ids": [
+            "a0b10477720e4a8b8e1855001b4a73da"
+          ],
+          "exit_code": 0,
+          "idempotent": false,
+          "model_chars": 1849,
+          "model_truncated": false,
+          "original_chars": 1808,
+          "output_summary": "[tool-result status=success exit_code=0]\n{\"stdout\": \"2\", \"stderr\": \"\", \"exit_code\": 0, \"executor\": \"docker\", \"execution_id\": \"agent-sandbox-0b8e27e75f9e45218762b2efde3b7c3a\", \"trace_id\": null, \"source_truncated\": false, \"preflight\": {\"status\": \"available\", \"image_id\": \"sha256:b6610b2e4b52bedf733e7300d446f83b64a90fff4456eb3442daf2abea9a26be\", \"required\": [\"python\"], \"available\": [\"module:pytest\", \"pytest\", \"python\", \"python3\"], \"probe_scope\": \"empty container; no workspace mounts\"}, \"input_version\": \"38e288d913ab101ba6d32b149501bd034c86f57cfd3eb55c0f9f53d25fac002d\", \"container_id\": \"f26642754ef9af5e00bad00f80567624481fe7323ca7c2d15470f537669566e1\", \"stdout_original_bytes\": 2, \"stderr_original_bytes\": 0, \"output_counts_scope\": \"complete_attached_stream\", \"validation_input_changed\": false, \"published_paths\": [], \"cleanup_confirmed\": true, \"receipt\": {\"execution_id\": \"a0b10477720e4a8b8e1855001b4a73da\", \"trace_id\": \"agent-923-8adcabf1\", \"phase\": \"finished\", \"recorded_at\": 1790143400.232079,",
+          "risk": "review",
+          "source_truncated": false,
+          "timeout_seconds": 125,
+          "tool_call_id": "call_00_R57X1LJDsm9kE9JJvbAa9766"
+        },
+        "duration_ms": 613,
+        "event_id": "48897fb2-da5a-441e-8402-03d2e0937189",
+        "name": "bash",
+        "status": "success",
+        "timestamp": "2026-09-23T06:03:20.234378+00:00",
+        "type": "tool"
+      },
+      {
+        "data": {
+          "args_summary": {
+            "path": "math_utils.py"
+          },
+          "artifact_bytes": 36,
+          "artifact_error": null,
+          "artifact_path": ".agent/tool-artifacts/agent-923-8adcabf1/call_01_OrqpnAt4FJuuQlcNSXLk8793-bceca3c61e67eb4d.txt",
+          "artifact_redacted": false,
+          "artifact_sha256": "bceca3c61e67eb4d624abad542d3e096943399c7b1b4642a5b27cd41209324ac",
+          "attempt_count": 1,
+          "error_code": null,
+          "execution_ids": [],
+          "exit_code": null,
+          "idempotent": true,
+          "model_chars": 65,
+          "model_truncated": false,
+          "original_chars": 36,
+          "output_summary": "[tool-result status=success]\ndef subtract(a, b):\n    return a + b",
+          "risk": "safe",
+          "source_truncated": false,
+          "timeout_seconds": 30,
+          "tool_call_id": "call_01_OrqpnAt4FJuuQlcNSXLk8793"
+        },
+        "duration_ms": 0,
+        "event_id": "e5991458-863c-40e6-a1a7-14d5303a8043",
+        "name": "read_file",
+        "status": "success",
+        "timestamp": "2026-09-23T06:03:20.244762+00:00",
+        "type": "tool"
+      },
+      {
+        "data": {
+          "args_summary": {
+            "path": "tests/test_math_utils.py"
+          },
+          "artifact_bytes": 79,
+          "artifact_error": null,
+          "artifact_path": ".agent/tool-artifacts/agent-923-8adcabf1/call_02_eNBsDTQFuxNMDqOCjKbs2712-541581ca5ea20191.txt",
+          "artifact_redacted": false,
+          "artifact_sha256": "541581ca5ea20191588695bf4a737eb8f2a48b8433fdec597abf45952820bb27",
+          "attempt_count": 1,
+          "error_code": null,
+          "execution_ids": [],
+          "exit_code": null,
+          "idempotent": true,
+          "model_chars": 108,
+          "model_truncated": false,
+          "original_chars": 79,
+          "output_summary": "[tool-result status=success]\nfrom math_utils import subtract\ndef test_subtract(): assert subtract(7, 4) == 3",
+          "risk": "safe",
+          "source_truncated": false,
+          "timeout_seconds": 30,
+          "tool_call_id": "call_02_eNBsDTQFuxNMDqOCjKbs2712"
+        },
+        "duration_ms": 2,
+        "event_id": "fe11ada0-8497-4022-8884-385a237dbc9f",
+        "name": "read_file",
+        "status": "success",
+        "timestamp": "2026-09-23T06:03:20.249866+00:00",
+        "type": "tool"
+      },
+      {
+        "data": {
+          "phase": "executing",
+          "round_count": 1,
+          "task_status": "running"
+        },
+        "duration_ms": 632,
+        "event_id": "94a32f3e-c0d2-4bf9-8d73-c57b49dd6732",
+        "name": "tool_executor",
+        "status": "success",
+        "timestamp": "2026-09-23T06:03:20.251834+00:00",
+        "type": "node"
+      },
+      {
+        "data": {
+          "phase": "checkpointing",
+          "round_count": 1,
+          "task_status": "running"
+        },
+        "duration_ms": 0,
+        "event_id": "6e575cff-9822-4188-888d-59b02905db5e",
+        "name": "checkpoint_task",
+        "status": "success",
+        "timestamp": "2026-09-23T06:03:20.253422+00:00",
+        "type": "node"
+      },
+      {
+        "data": {
+          "phase": "checkpointing",
+          "round_count": 1,
+          "task_status": "running"
+        },
+        "duration_ms": 6,
+        "event_id": "2041f9c0-42e2-411f-a946-c20a1b4774af",
+        "name": "save_memory",
+        "status": "success",
+        "timestamp": "2026-09-23T06:03:20.261577+00:00",
+        "type": "node"
+      },
+      {
+        "data": {
+          "phase": "planning",
+          "round_count": 1,
+          "task_status": "running"
+        },
+        "duration_ms": 9,
+        "event_id": "c2c847eb-26b4-4439-8e70-fd6cf801858b",
+        "name": "pre_microcompact",
+        "status": "success",
+        "timestamp": "2026-09-23T06:03:20.274117+00:00",
+        "type": "node"
+      },
+      {
+        "data": {
+          "completion_gate_blocker": null,
+          "completion_gate_recovery_attempts": 0,
+          "context_token_estimate": 5985,
+          "incomplete_response_recovery_attempts": 0,
+          "input_chars": 9761,
+          "input_summary": "This is an isolated synthetic acceptance task. First use bash to execute exactly python -c \"print(1 + 1)\" and confirm output 2. Then read math_utils.py and tests/test_math_utils.py, fix subtract with the smallest edit, and run exactly cd /workspace && python -m pytest -q 2>&1. Do not change tests. Finish with actual results. Use single-agent tools only.",
+          "input_tokens": 5847,
+          "message_count": 6,
+          "output_summary": "Confirmed `python -c \"print(1 + 1)\"` printed `2`. Now the smallest fix to `subtract` (it incorrectly returns `a + b`):",
+          "output_tokens": 138,
+          "response_complete": true,
+          "retry_count": 0,
+          "stop_reason": "tool_use",
+          "tool_calls": [
+            "edit_file"
+          ],
+          "total_tokens": 5985
+        },
+        "duration_ms": 1246,
+        "event_id": "35565319-a451-474a-9333-2bce1f4b4824",
+        "name": "llm_call",
+        "status": "success",
+        "timestamp": "2026-09-23T06:03:21.523246+00:00",
+        "type": "model"
+      },
+      {
+        "data": {
+          "phase": "executing",
+          "round_count": 2,
+          "task_status": "running"
+        },
+        "duration_ms": 1247,
+        "event_id": "5adc044f-f9ee-46ef-8037-fe16ff661375",
+        "name": "llm_call",
+        "status": "success",
+        "timestamp": "2026-09-23T06:03:21.524248+00:00",
+        "type": "node"
+      },
+      {
+        "data": {
+          "deadline": "2026-09-23T06:08:21.526293+00:00",
+          "tools": [
+            {
+              "name": "edit_file",
+              "risk": "review"
+            }
+          ]
+        },
+        "duration_ms": 0,
+        "event_id": "0aa0c8ed-0648-410c-8f17-96bad9f6032f",
+        "name": "confirmation_requested",
+        "status": "waiting",
+        "timestamp": "2026-09-23T06:03:21.527197+00:00",
+        "type": "confirmation"
+      },
+      {
+        "data": {
+          "phase": "executing",
+          "round_count": 2,
+          "task_status": "waiting_confirmation"
+        },
+        "duration_ms": 1,
+        "event_id": "07290874-0628-43db-99dd-e5f6963e7928",
+        "name": "prepare_tool_execution",
+        "status": "success",
+        "timestamp": "2026-09-23T06:03:21.527749+00:00",
+        "type": "node"
+      },
+      {
+        "data": {
+          "phase": "executing",
+          "task_status": "waiting_confirmation"
+        },
+        "duration_ms": 0,
+        "event_id": "e5403bf9-9dd1-4e71-849e-24b1bac84c65",
+        "name": "tool_confirm",
+        "status": "interrupted",
+        "timestamp": "2026-09-23T06:03:21.529404+00:00",
+        "type": "node"
+      },
+      {
+        "data": {
+          "approved": true,
+          "approved_ids": [
+            "call_00_BA2dIAHo5FjJ0cFgVRck1304"
+          ],
+          "reason": null
+        },
+        "duration_ms": 0,
+        "event_id": "7c53f148-4e2a-4ed6-a2c1-737a28275bbf",
+        "name": "confirmation_approved",
+        "status": "success",
+        "timestamp": "2026-09-23T06:03:21.533916+00:00",
+        "type": "confirmation"
+      },
+      {
+        "data": {
+          "phase": "executing",
+          "round_count": 2,
+          "task_status": "running"
+        },
+        "duration_ms": 2,
+        "event_id": "2df4d5e3-35a3-4ba3-b548-1317323efa37",
+        "name": "tool_confirm",
+        "status": "success",
+        "timestamp": "2026-09-23T06:03:21.534894+00:00",
+        "type": "node"
+      },
+      {
+        "data": {
+          "args_summary": {
+            "new_text": "    return a - b",
+            "old_text": "    return a + b",
+            "path": "math_utils.py"
+          },
+          "artifact_bytes": 94,
+          "artifact_error": null,
+          "artifact_path": ".agent/tool-artifacts/agent-923-8adcabf1/call_00_BA2dIAHo5FjJ0cFgVRck1304-ae17c60b1c3ae2ae.txt",
+          "artifact_redacted": false,
+          "artifact_sha256": "ae17c60b1c3ae2ae6b5e6bf81256693910cbb93b98ab80a27fbb4071392e288c",
+          "attempt_count": 1,
+          "error_code": null,
+          "execution_ids": [
+            "518c93a7a87e4b1ab31a08c9e92661b1"
+          ],
+          "exit_code": null,
+          "idempotent": false,
+          "model_chars": 123,
+          "model_truncated": false,
+          "original_chars": 94,
+          "output_summary": "[tool-result status=success]\nEdited math_utils.py\n\nVerified content around edit:\n1: def subtract(a, b):\n2:     return a - b",
+          "risk": "review",
+          "source_truncated": false,
+          "timeout_seconds": 30,
+          "tool_call_id": "call_00_BA2dIAHo5FjJ0cFgVRck1304"
+        },
+        "duration_ms": 4,
+        "event_id": "61787370-eee8-4c4d-bd74-b3aafbc804f9",
+        "name": "edit_file",
+        "status": "success",
+        "timestamp": "2026-09-23T06:03:21.543194+00:00",
+        "type": "tool"
+      },
+      {
+        "data": {
+          "phase": "executing",
+          "round_count": 2,
+          "task_status": "running"
+        },
+        "duration_ms": 9,
+        "event_id": "468d5965-f875-4a5e-a634-e3292f955acb",
+        "name": "tool_executor",
+        "status": "success",
+        "timestamp": "2026-09-23T06:03:21.545815+00:00",
+        "type": "node"
+      },
+      {
+        "data": {
+          "phase": "checkpointing",
+          "round_count": 2,
+          "task_status": "running"
+        },
+        "duration_ms": 0,
+        "event_id": "9fb452ef-b3a9-4c8e-8cad-0b39a26b5b42",
+        "name": "checkpoint_task",
+        "status": "success",
+        "timestamp": "2026-09-23T06:03:21.548363+00:00",
+        "type": "node"
+      },
+      {
+        "data": {
+          "phase": "checkpointing",
+          "round_count": 2,
+          "task_status": "running"
+        },
+        "duration_ms": 0,
+        "event_id": "049ba58d-efd3-4dcf-bd82-20017c1a6b5f",
+        "name": "save_memory",
+        "status": "success",
+        "timestamp": "2026-09-23T06:03:21.549967+00:00",
+        "type": "node"
+      },
+      {
+        "data": {
+          "phase": "planning",
+          "round_count": 2,
+          "task_status": "running"
+        },
+        "duration_ms": 14,
+        "event_id": "ea36eaf5-ab07-47b0-9036-c6005ca99efa",
+        "name": "pre_microcompact",
+        "status": "success",
+        "timestamp": "2026-09-23T06:03:21.566526+00:00",
+        "type": "node"
+      },
+      {
+        "data": {
+          "completion_gate_blocker": null,
+          "completion_gate_recovery_attempts": 0,
+          "context_token_estimate": 6086,
+          "incomplete_response_recovery_attempts": 0,
+          "input_chars": 10378,
+          "input_summary": "This is an isolated synthetic acceptance task. First use bash to execute exactly python -c \"print(1 + 1)\" and confirm output 2. Then read math_utils.py and tests/test_math_utils.py, fix subtract with the smallest edit, and run exactly cd /workspace && python -m pytest -q 2>&1. Do not change tests. Finish with actual results. Use single-agent tools only.",
+          "input_tokens": 6029,
+          "message_count": 8,
+          "output_summary": "Now running the exact pytest command:",
+          "output_tokens": 57,
+          "response_complete": true,
+          "retry_count": 0,
+          "stop_reason": "tool_use",
+          "tool_calls": [
+            "bash"
+          ],
+          "total_tokens": 6086
+        },
+        "duration_ms": 633,
+        "event_id": "de4d96fe-74b6-4960-9e74-e483a2f33c37",
+        "name": "llm_call",
+        "status": "success",
+        "timestamp": "2026-09-23T06:03:22.201980+00:00",
+        "type": "model"
+      },
+      {
+        "data": {
+          "phase": "executing",
+          "round_count": 3,
+          "task_status": "running"
+        },
+        "duration_ms": 634,
+        "event_id": "842913ff-8004-467a-bbc5-e906870597b4",
+        "name": "llm_call",
+        "status": "success",
+        "timestamp": "2026-09-23T06:03:22.203299+00:00",
+        "type": "node"
+      },
+      {
+        "data": {
+          "deadline": "2026-09-23T06:08:22.205639+00:00",
+          "tools": [
+            {
+              "name": "bash",
+              "risk": "review"
+            }
+          ]
+        },
+        "duration_ms": 0,
+        "event_id": "155d2aea-b470-4486-801f-542cdc6a07b5",
+        "name": "confirmation_requested",
+        "status": "waiting",
+        "timestamp": "2026-09-23T06:03:22.206549+00:00",
+        "type": "confirmation"
+      },
+      {
+        "data": {
+          "phase": "executing",
+          "round_count": 3,
+          "task_status": "waiting_confirmation"
+        },
+        "duration_ms": 1,
+        "event_id": "c0bc3218-6035-4343-ad6c-11d9d5e4f7ee",
+        "name": "prepare_tool_execution",
+        "status": "success",
+        "timestamp": "2026-09-23T06:03:22.207180+00:00",
+        "type": "node"
+      },
+      {
+        "data": {
+          "phase": "executing",
+          "task_status": "waiting_confirmation"
+        },
+        "duration_ms": 0,
+        "event_id": "15ac37b8-ac97-4505-8603-55da51f744a5",
+        "name": "tool_confirm",
+        "status": "interrupted",
+        "timestamp": "2026-09-23T06:03:22.208366+00:00",
+        "type": "node"
+      },
+      {
+        "data": {
+          "approved": true,
+          "approved_ids": [
+            "call_00_ET_xrwRrlgv5lWBXfAYryyT5598"
+          ],
+          "reason": null
+        },
+        "duration_ms": 0,
+        "event_id": "a288a306-a47f-4c8d-9662-b52e0e41f1c3",
+        "name": "confirmation_approved",
+        "status": "success",
+        "timestamp": "2026-09-23T06:03:22.211360+00:00",
+        "type": "confirmation"
+      },
+      {
+        "data": {
+          "phase": "executing",
+          "round_count": 3,
+          "task_status": "running"
+        },
+        "duration_ms": 1,
+        "event_id": "ceecdb43-6c80-4194-9e15-b54489657dc3",
+        "name": "tool_confirm",
+        "status": "success",
+        "timestamp": "2026-09-23T06:03:22.212059+00:00",
+        "type": "node"
+      },
+      {
+        "data": {
+          "args_summary": {
+            "command": "cd /workspace && python -m pytest -q 2>&1"
+          },
+          "artifact_bytes": 2142,
+          "artifact_error": null,
+          "artifact_path": ".agent/tool-artifacts/agent-923-8adcabf1/call_00_ET_xrwRrlgv5lWBXfAYryyT5598-d8af238648a379af.txt",
+          "artifact_redacted": false,
+          "artifact_sha256": "d8af238648a379afd58b6315c64adddd19df004a05d220c62feb85487e4c90f4",
+          "attempt_count": 1,
+          "error_code": null,
+          "execution_ids": [
+            "f304f09cf25147aab56f9903c0a600c6"
+          ],
+          "exit_code": 0,
+          "idempotent": false,
+          "model_chars": 2183,
+          "model_truncated": false,
+          "original_chars": 2142,
+          "output_summary": "[tool-result status=success exit_code=0]\n{\"stdout\": \".                                                                        [100%]\\n1 passed in 0.01s\", \"stderr\": \"\", \"exit_code\": 0, \"executor\": \"docker\", \"execution_id\": \"agent-sandbox-e0d890e59bd14eb588e1af9b05dcdf44\", \"trace_id\": null, \"source_truncated\": false, \"preflight\": {\"status\": \"available\", \"image_id\": \"sha256:b6610b2e4b52bedf733e7300d446f83b64a90fff4456eb3442daf2abea9a26be\", \"required\": [\"module:pytest\", \"python\"], \"available\": [\"module:pytest\", \"pytest\", \"python\", \"python3\"], \"probe_scope\": \"empty container; no workspace mounts\"}, \"input_version\": \"8a4175c3e4158b049c258043c7329ba6edea1ba087fa1a19d3359a87c980f106\", \"container_id\": \"6389ad5a2d0359bf607991fba7d78bbc1ea2af6a3cd0dcc9dff99a0969b1e1fa\", \"stdout_original_bytes\": 98, \"stderr_original_bytes\": 0, \"output_counts_scope\": \"complete_attached_stream\", \"validation_input_changed\": false, \"published_paths\": [\".pytest_cache/.gitignore\", \".pytest_cache/CACHEDIR.TAG\", \".pytest_",
+          "risk": "review",
+          "source_truncated": false,
+          "timeout_seconds": 125,
+          "tool_call_id": "call_00_ET_xrwRrlgv5lWBXfAYryyT5598"
+        },
+        "duration_ms": 618,
+        "event_id": "f8e96183-85ee-40c6-8d87-835efa95a0e0",
+        "name": "bash",
+        "status": "success",
+        "timestamp": "2026-09-23T06:03:22.834809+00:00",
+        "type": "tool"
+      },
+      {
+        "data": {
+          "phase": "executing",
+          "round_count": 3,
+          "task_status": "running"
+        },
+        "duration_ms": 623,
+        "event_id": "3ead2740-56f1-414b-8e2a-1a9eb536e004",
+        "name": "tool_executor",
+        "status": "success",
+        "timestamp": "2026-09-23T06:03:22.837806+00:00",
+        "type": "node"
+      },
+      {
+        "data": {
+          "phase": "checkpointing",
+          "round_count": 3,
+          "task_status": "running"
+        },
+        "duration_ms": 0,
+        "event_id": "ca5b4f04-9e91-4fcc-b811-cf65e385475d",
+        "name": "checkpoint_task",
+        "status": "success",
+        "timestamp": "2026-09-23T06:03:22.839456+00:00",
+        "type": "node"
+      },
+      {
+        "data": {
+          "phase": "checkpointing",
+          "round_count": 3,
+          "task_status": "running"
+        },
+        "duration_ms": 0,
+        "event_id": "ab820261-48ae-4df8-a478-6619376dd62e",
+        "name": "save_memory",
+        "status": "success",
+        "timestamp": "2026-09-23T06:03:22.840568+00:00",
+        "type": "node"
+      },
+      {
+        "data": {
+          "phase": "planning",
+          "round_count": 3,
+          "task_status": "running"
+        },
+        "duration_ms": 11,
+        "event_id": "f320ae12-bdfe-4b36-b8e2-245ff5e9778e",
+        "name": "pre_microcompact",
+        "status": "success",
+        "timestamp": "2026-09-23T06:03:22.853804+00:00",
+        "type": "node"
+      },
+      {
+        "data": {
+          "completion_gate_blocker": null,
+          "completion_gate_recovery_attempts": 0,
+          "context_token_estimate": 7298,
+          "incomplete_response_recovery_attempts": 0,
+          "input_chars": 12869,
+          "input_summary": "This is an isolated synthetic acceptance task. First use bash to execute exactly python -c \"print(1 + 1)\" and confirm output 2. Then read math_utils.py and tests/test_math_utils.py, fix subtract with the smallest edit, and run exactly cd /workspace && python -m pytest -q 2>&1. Do not change tests. Finish with actual results. Use single-agent tools only.",
+          "input_tokens": 6965,
+          "message_count": 10,
+          "output_summary": "All steps completed.\n\n## Results\n\n**1. Sanity command** — ran exactly `python -c \"print(1 + 1)\"` → stdout `2`, exit code 0. Confirmed.\n\n**2. Files read**\n- `math_utils.py`: `def subtract(a, b): return a + b` — bug: subtraction implemented as addition.\n- `tests/test_math_utils.py`: `assert subtract(7, 4) == 3` (test left untouched).\n\n**3. Smallest fix** — one-line change in `math_utils.py`:\n- `return a + b` → `return a - b`\n\n**4. Validation** — ran exactly `cd /workspace && python -m pytest -q 2>&1`:\n```\n.                                                                        [100%]\n1 passed in 0.01s\n```\nExit code 0.\n\n## Summary\n| Item | Status |\n|---|---|\n| Sanity print command | ✅ printed `2` |\n| `math_utils.py` edited | ✅ `a + b` → `a - b` (1 line) |\n| Tests modified | ❌ none (as required) |\n| `pytest -q` | ✅ `1 passed` |\n\n**Changed files:** `math_utils.py` only.\n**Validation:** real pytest run, 1 passed.\n**Remaining risk:** None meaningful — the fix is minimal and the test's case (7",
+          "output_tokens": 333,
+          "response_complete": true,
+          "retry_count": 0,
+          "stop_reason": "end_turn",
+          "tool_calls": [],
+          "total_tokens": 7298
+        },
+        "duration_ms": 1940,
+        "event_id": "d9ea447d-b6f5-4236-b444-2e6b3deab1cd",
+        "name": "llm_call",
+        "status": "success",
+        "timestamp": "2026-09-23T06:03:24.796535+00:00",
+        "type": "model"
+      },
+      {
+        "data": {
+          "phase": "summarizing",
+          "round_count": 4,
+          "task_status": "running"
+        },
+        "duration_ms": 1942,
+        "event_id": "b759ce3b-2199-4613-af36-734794a1c483",
+        "name": "llm_call",
+        "status": "success",
+        "timestamp": "2026-09-23T06:03:24.797955+00:00",
+        "type": "node"
+      },
+      {
+        "data": {
+          "phase": "summarizing",
+          "round_count": 4,
+          "task_status": "running"
+        },
+        "duration_ms": 0,
+        "event_id": "bd674ce6-3f4a-4edc-8083-beede06a6e8b",
+        "name": "save_memory",
+        "status": "success",
+        "timestamp": "2026-09-23T06:03:24.801710+00:00",
+        "type": "node"
+      },
+      {
+        "data": {
+          "phase": "summarizing",
+          "round_count": 4,
+          "task_status": "succeeded"
+        },
+        "duration_ms": 4,
+        "event_id": "7b1005a1-88b8-4ad6-997f-a46eb0007741",
+        "name": "finalize_task",
+        "status": "success",
+        "timestamp": "2026-09-23T06:03:24.811012+00:00",
+        "type": "node"
+      },
+      {
+        "data": {
+          "error": null
+        },
+        "duration_ms": 6817,
+        "event_id": "6963b30f-62e8-4246-b1b5-5cc7da898946",
+        "name": "task_finished",
+        "status": "succeeded",
+        "timestamp": "2026-09-23T06:03:24.811912+00:00",
+        "type": "task"
+      },
+      {
+        "data": {
+          "phase": "summarizing",
+          "round_count": 4,
+          "task_status": "succeeded"
+        },
+        "duration_ms": 0,
+        "event_id": "2e8408dd-7a48-4826-b988-3c9f6220a23b",
+        "name": "persist_memory",
+        "status": "success",
+        "timestamp": "2026-09-23T06:03:24.813676+00:00",
+        "type": "node"
+      }
+    ],
+    "finished_at": "2026-09-23T06:03:24.811912+00:00",
+    "metrics": {
+      "confirmation_count": 3,
+      "input_tokens": 23709,
+      "memory_candidates": 0,
+      "memory_injected": 0,
+      "memory_injected_tokens": 0,
+      "memory_retrieval_queries": 0,
+      "model_calls": 4,
+      "model_duration_ms": 5048,
+      "node_count": 31,
+      "node_duration_ms": 6701,
+      "output_tokens": 664,
+      "pause_count": 0,
+      "paused_duration_ms": 0,
+      "resume_count": 0,
+      "retry_count": 0,
+      "safety_interceptions": 0,
+      "tool_calls": 5,
+      "tool_duration_ms": 1237,
+      "tool_failures": 0,
+      "tool_successes": 5,
+      "total_tokens": 24373
+    },
+    "mode": "single",
+    "request_summary": "This is an isolated synthetic acceptance task. First use bash to execute exactly python -c \"print(1 + 1)\" and confirm output 2. Then read math_utils.py and tests/test_math_utils.py, fix subtract with the smallest edit, and run exactly cd /workspace && python -m pytest -q 2>&1. Do not change tests. Finish with actual results. Use single-agent tools only.",
+    "result_summary": "All steps completed.\n\n## Results\n\n**1. Sanity command** — ran exactly `python -c \"print(1 + 1)\"` → stdout `2`, exit code 0. Confirmed.\n\n**2. Files read**\n- `math_utils.py`: `def subtract(a, b): return a + b` — bug: subtraction implemented as addition.\n- `tests/test_math_utils.py`: `assert subtract(7, 4) == 3` (test left untouched).\n\n**3. Smallest fix** — one-line change in `math_utils.py`:\n- `return a + b` → `return a - b`\n\n**4. Validation** — ran exactly `cd /workspace && python -m pytest -q 2>&1`:\n```\n.                                                                        [100%]\n1 passed in 0.01s\n```\nExit code 0.\n\n## Summary\n| Item | Status |\n|---|---|\n| Sanity print command | ✅ printed `2` |\n| `math_utils.py` edited | ✅ `a + b` → `a - b` (1 line) |\n| Tests modified | ❌ none (as required) |\n| `pytest -q` | ✅ `1 passed` |\n\n**Changed files:** `math_utils.py` only.\n**Validation:** real pytest run, 1 passed.\n**Remaining risk:** None meaningful — the fix is minimal and the test's case (7−4=3) fails under the old `a + b` behavior (would give 11), so the test genuinely exercises the corrected logic.",
+    "schema_version": 1,
+    "session_id": "benchmark-shell-policy.synthetic-9578c0",
+    "started_at": "2026-09-23T06:03:17.994843+00:00",
+    "status": "succeeded",
+    "storage_trust": "service_control",
+    "trace_id": "agent-923-8adcabf1",
+    "user_id": 20923
+  },
+  "executions": [
+    {
+      "stdout": "2",
+      "stderr": "",
+      "exit_code": 0,
+      "executor": "docker",
+      "execution_id": "agent-sandbox-0b8e27e75f9e45218762b2efde3b7c3a",
+      "trace_id": null,
+      "source_truncated": false,
+      "preflight": {
+        "status": "available",
+        "image_id": "sha256:b6610b2e4b52bedf733e7300d446f83b64a90fff4456eb3442daf2abea9a26be",
+        "required": [
+          "python"
+        ],
+        "available": [
+          "module:pytest",
+          "pytest",
+          "python",
+          "python3"
+        ],
+        "probe_scope": "empty container; no workspace mounts"
+      },
+      "input_version": "38e288d913ab101ba6d32b149501bd034c86f57cfd3eb55c0f9f53d25fac002d",
+      "container_id": "f26642754ef9af5e00bad00f80567624481fe7323ca7c2d15470f537669566e1",
+      "stdout_original_bytes": 2,
+      "stderr_original_bytes": 0,
+      "output_counts_scope": "complete_attached_stream",
+      "validation_input_changed": false,
+      "published_paths": [],
+      "cleanup_confirmed": true,
+      "receipt": {
+        "execution_id": "a0b10477720e4a8b8e1855001b4a73da",
+        "trace_id": "agent-923-8adcabf1",
+        "phase": "finished",
+        "recorded_at": 1790143400.232079,
+        "executor": "docker",
+        "command": "python -c \"print(1 + 1)\"",
+        "command_sha256": "7b9647dcf5d832716e4e39f940e6803af6027f2eafc7cafda5c255aa2f0de5d8",
+        "cwd": ".",
+        "input_version": "38e288d913ab101ba6d32b149501bd034c86f57cfd3eb55c0f9f53d25fac002d",
+        "input_stamp": "8bc929ce7ec889dc2cdefa30b3e33dcb04ffe62654fb66fb1dd63dfaa832cc73",
+        "output_version": "38e288d913ab101ba6d32b149501bd034c86f57cfd3eb55c0f9f53d25fac002d",
+        "output_stamp": "8bc929ce7ec889dc2cdefa30b3e33dcb04ffe62654fb66fb1dd63dfaa832cc73",
+        "changes": [],
+        "dependencies_changed": false,
+        "snapshot_status": "available",
+        "exit_code": 0,
+        "error_code": null,
+        "cancelled": false,
+        "timed_out": false,
+        "output_sha256": "53c234e5e8472b6ac51c1ae1cab3fe06fad053beb8ebfd8977b010655bfdd3c3",
+        "validation": null,
+        "fresh": true,
+        "ok": false,
+        "tool_call_id": "call_00_R57X1LJDsm9kE9JJvbAa9766",
+        "seq": 2
+      }
+    },
+    {
+      "stdout": ".                                                                        [100%]\n1 passed in 0.01s",
+      "stderr": "",
+      "exit_code": 0,
+      "executor": "docker",
+      "execution_id": "agent-sandbox-e0d890e59bd14eb588e1af9b05dcdf44",
+      "trace_id": null,
+      "source_truncated": false,
+      "preflight": {
+        "status": "available",
+        "image_id": "sha256:b6610b2e4b52bedf733e7300d446f83b64a90fff4456eb3442daf2abea9a26be",
+        "required": [
+          "module:pytest",
+          "python"
+        ],
+        "available": [
+          "module:pytest",
+          "pytest",
+          "python",
+          "python3"
+        ],
+        "probe_scope": "empty container; no workspace mounts"
+      },
+      "input_version": "8a4175c3e4158b049c258043c7329ba6edea1ba087fa1a19d3359a87c980f106",
+      "container_id": "6389ad5a2d0359bf607991fba7d78bbc1ea2af6a3cd0dcc9dff99a0969b1e1fa",
+      "stdout_original_bytes": 98,
+      "stderr_original_bytes": 0,
+      "output_counts_scope": "complete_attached_stream",
+      "validation_input_changed": false,
+      "published_paths": [
+        ".pytest_cache/.gitignore",
+        ".pytest_cache/CACHEDIR.TAG",
+        ".pytest_cache/README.md",
+        ".pytest_cache/v/cache/nodeids"
+      ],
+      "cleanup_confirmed": true,
+      "receipt": {
+        "execution_id": "f304f09cf25147aab56f9903c0a600c6",
+        "trace_id": "agent-923-8adcabf1",
+        "phase": "finished",
+        "recorded_at": 1790143402.832648,
+        "executor": "docker",
+        "command": "cd /workspace && python -m pytest -q 2>&1",
+        "command_sha256": "86f326567f550158d1989f3a116f85e6747333de799779c3c23f47c68d6b66c4",
+        "cwd": ".",
+        "input_version": "8a4175c3e4158b049c258043c7329ba6edea1ba087fa1a19d3359a87c980f106",
+        "input_stamp": "9211ec7d32797a47a6569e0cd595346a58051da2631046f50b2a3ee7a7c4320d",
+        "output_version": "8a4175c3e4158b049c258043c7329ba6edea1ba087fa1a19d3359a87c980f106",
+        "output_stamp": "9211ec7d32797a47a6569e0cd595346a58051da2631046f50b2a3ee7a7c4320d",
+        "changes": [],
+        "dependencies_changed": false,
+        "snapshot_status": "available",
+        "exit_code": 0,
+        "error_code": null,
+        "cancelled": false,
+        "timed_out": false,
+        "output_sha256": "4bcefcc9f6c645923b9993ccf73ad92e6b400ca25458ea14e095857fc2131342",
+        "validation": {
+          "kind": "test",
+          "runner": "pytest",
+          "argv": [
+            "python",
+            "-m",
+            "pytest",
+            "-q"
+          ],
+          "cwd": "."
+        },
+        "fresh": true,
+        "ok": true,
+        "tool_call_id": "call_00_ET_xrwRrlgv5lWBXfAYryyT5598",
+        "seq": 6
+      }
+    }
+  ],
+  "docker_checks": {
+    "real_containers": true,
+    "cleaned": true,
+    "no_containers_remain": true,
+    "approval_resumed": true,
+    "inline_then_tests": true
+  },
+  "source_sha256": "3e74b7ca32ee253e5c6313447415a59d92a13467874edf59aeb03d7b41998017",
+  "model": "deepseek-v4-flash",
+  "qualification": "synthetic-diagnostic-not-benchmark-score"
+}

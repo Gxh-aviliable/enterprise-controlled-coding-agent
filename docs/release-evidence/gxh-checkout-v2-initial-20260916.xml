@@ -1,0 +1,74 @@
+<?xml version="1.0" encoding="utf-8"?><testsuites name="pytest tests"><testsuite name="pytest" errors="0" failures="8" skipped="0" tests="24" time="0.090" timestamp="2026-09-16T06:09:45.661265+08:00" hostname="GXHdeMacBook-Air.local"><testcase classname="" name="test_order_without_coupon" time="0.001" /><testcase classname="" name="test_coupon_uses_line_amount_including_quantity" time="0.000" /><testcase classname="" name="test_ineligible_goods_do_not_dilute_coupon" time="0.000"><failure message="AssertionError: assert [Decimal('12....cimal('0.00')] == [Decimal('20....cimal('0.00')]&#10;  &#10;  At index 0 diff: Decimal('12.00') != Decimal('20.00')&#10;  Use -v to get more diff">def test_ineligible_goods_do_not_dilute_coupon():
+        order = checkout([item("BOOK", "60"), item("GIFT", "40", eligible=False)], "20")
+&gt;       assert discounts(order) == [Decimal("20.00"), Decimal("0.00")]
+E       AssertionError: assert [Decimal('12....cimal('0.00')] == [Decimal('20....cimal('0.00')]
+E         
+E         At index 0 diff: Decimal('12.00') != Decimal('20.00')
+E         Use -v to get more diff
+
+test_checkout.py:31: AssertionError</failure></testcase><testcase classname="" name="test_coupon_is_capped_by_eligible_amount" time="0.000"><failure message="AssertionError: assert [Decimal('0.9...cimal('0.00')] == [Decimal('10....cimal('0.00')]&#10;  &#10;  At index 0 diff: Decimal('0.91') != Decimal('10.00')&#10;  Use -v to get more diff">def test_coupon_is_capped_by_eligible_amount():
+        order = checkout([item("BOOK", "10"), item("GIFT", "100", eligible=False)], "80")
+&gt;       assert discounts(order) == [Decimal("10.00"), Decimal("0.00")]
+E       AssertionError: assert [Decimal('0.9...cimal('0.00')] == [Decimal('10....cimal('0.00')]
+E         
+E         At index 0 diff: Decimal('0.91') != Decimal('10.00')
+E         Use -v to get more diff
+
+test_checkout.py:37: AssertionError</failure></testcase><testcase classname="" name="test_all_goods_ineligible" time="0.000" /><testcase classname="" name="test_rounding_preserves_the_full_coupon" time="0.000"><failure message="AssertionError: assert [Decimal('0.3...cimal('0.33')] == [Decimal('0.3...cimal('0.33')]&#10;  &#10;  At index 0 diff: Decimal('0.33') != Decimal('0.34')&#10;  Use -v to get more diff">def test_rounding_preserves_the_full_coupon():
+        order = checkout([item("A", "10"), item("B", "10"), item("C", "10")], "1")
+&gt;       assert discounts(order) == [Decimal("0.34"), Decimal("0.33"), Decimal("0.33")]
+E       AssertionError: assert [Decimal('0.3...cimal('0.33')] == [Decimal('0.3...cimal('0.33')]
+E         
+E         At index 0 diff: Decimal('0.33') != Decimal('0.34')
+E         Use -v to get more diff
+
+test_checkout.py:49: AssertionError</failure></testcase><testcase classname="" name="test_rounding_never_exceeds_coupon_budget" time="0.000"><failure message="AssertionError: assert [Decimal('0.0...cimal('0.01')] == [Decimal('0.0...cimal('0.00')]&#10;  &#10;  At index 2 diff: Decimal('0.01') != Decimal('0.00')&#10;  Use -v to get more diff">def test_rounding_never_exceeds_coupon_budget():
+        order = checkout([item("A", "0.05"), item("B", "0.05"), item("C", "0.05")], "0.02")
+&gt;       assert discounts(order) == [Decimal("0.01"), Decimal("0.01"), Decimal("0.00")]
+E       AssertionError: assert [Decimal('0.0...cimal('0.01')] == [Decimal('0.0...cimal('0.00')]
+E         
+E         At index 2 diff: Decimal('0.01') != Decimal('0.00')
+E         Use -v to get more diff
+
+test_checkout.py:55: AssertionError</failure></testcase><testcase classname="" name="test_largest_fraction_gets_remaining_cent" time="0.000" /><testcase classname="" name="test_equal_fractions_follow_input_order_not_sku_sorting" time="0.000"><failure message="AssertionError: assert [Decimal('0.3...cimal('0.33')] == [Decimal('0.3...cimal('0.33')]&#10;  &#10;  At index 0 diff: Decimal('0.33') != Decimal('0.34')&#10;  Use -v to get more diff">def test_equal_fractions_follow_input_order_not_sku_sorting():
+        order = checkout([item("Z", "10"), item("A", "10"), item("M", "10")], "1")
+&gt;       assert discounts(order) == [Decimal("0.34"), Decimal("0.33"), Decimal("0.33")]
+E       AssertionError: assert [Decimal('0.3...cimal('0.33')] == [Decimal('0.3...cimal('0.33')]
+E         
+E         At index 0 diff: Decimal('0.33') != Decimal('0.34')
+E         Use -v to get more diff
+
+test_checkout.py:66: AssertionError</failure></testcase><testcase classname="" name="test_shipping_uses_amount_after_coupon[99-0-0]" time="0.000" /><testcase classname="" name="test_shipping_uses_amount_after_coupon[109-10-0]" time="0.000" /><testcase classname="" name="test_shipping_uses_amount_after_coupon[105-10-8]" time="0.000"><failure message="AssertionError: assert Decimal('0.00') == Decimal('8')&#10; +  where Decimal('8') = Decimal('8')">subtotal = '105', coupon = '10', shipping = '8'
+
+    @pytest.mark.parametrize("subtotal,coupon,shipping", [
+        ("99", "0", "0"), ("109", "10", "0"), ("105", "10", "8"),
+        ("99", "0.01", "8"), ("50", "0", "8"), ("20", "20", "8"),
+    ])
+    def test_shipping_uses_amount_after_coupon(subtotal, coupon, shipping):
+        order = checkout([item("A", subtotal)], coupon)
+&gt;       assert order["shipping"] == Decimal(shipping)
+E       AssertionError: assert Decimal('0.00') == Decimal('8')
+E        +  where Decimal('8') = Decimal('8')
+
+test_checkout.py:76: AssertionError</failure></testcase><testcase classname="" name="test_shipping_uses_amount_after_coupon[99-0.01-8]" time="0.000"><failure message="AssertionError: assert Decimal('0.00') == Decimal('8')&#10; +  where Decimal('8') = Decimal('8')">subtotal = '99', coupon = '0.01', shipping = '8'
+
+    @pytest.mark.parametrize("subtotal,coupon,shipping", [
+        ("99", "0", "0"), ("109", "10", "0"), ("105", "10", "8"),
+        ("99", "0.01", "8"), ("50", "0", "8"), ("20", "20", "8"),
+    ])
+    def test_shipping_uses_amount_after_coupon(subtotal, coupon, shipping):
+        order = checkout([item("A", subtotal)], coupon)
+&gt;       assert order["shipping"] == Decimal(shipping)
+E       AssertionError: assert Decimal('0.00') == Decimal('8')
+E        +  where Decimal('8') = Decimal('8')
+
+test_checkout.py:76: AssertionError</failure></testcase><testcase classname="" name="test_shipping_uses_amount_after_coupon[50-0-8]" time="0.000" /><testcase classname="" name="test_shipping_uses_amount_after_coupon[20-20-8]" time="0.000" /><testcase classname="" name="test_mixed_order_summary_matches_line_items" time="0.000"><failure message="AssertionError: assert Decimal('22.50') == Decimal('30.00')&#10; +  where Decimal('30.00') = Decimal('30.00')">def test_mixed_order_summary_matches_line_items():
+        order = checkout([
+            item("A", "30"), item("B", "30"), item("C", "30"),
+            item("GIFT", "30", eligible=False),
+        ], "30")
+&gt;       assert order["discount"] == Decimal("30.00")
+E       AssertionError: assert Decimal('22.50') == Decimal('30.00')
+E        +  where Decimal('30.00') = Decimal('30.00')
+
+test_checkout.py:85: AssertionError</failure></testcase><testcase classname="" name="test_invalid_orders_are_rejected[items0-0]" time="0.000" /><testcase classname="" name="test_invalid_orders_are_rejected[items1-0]" time="0.000" /><testcase classname="" name="test_invalid_orders_are_rejected[items2-0]" time="0.000" /><testcase classname="" name="test_invalid_orders_are_rejected[items3-0]" time="0.000" /><testcase classname="" name="test_invalid_orders_are_rejected[items4-0]" time="0.000" /><testcase classname="" name="test_invalid_orders_are_rejected[items5-0]" time="0.000" /><testcase classname="" name="test_invalid_orders_are_rejected[items6-0]" time="0.000" /><testcase classname="" name="test_invalid_orders_are_rejected[items7--1]" time="0.000" /></testsuite></testsuites>

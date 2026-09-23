@@ -4,12 +4,10 @@ Provides tools for running long-running commands in background threads
 and checking their status later.
 """
 
+import json
 import logging
-import os
 import subprocess
-import tempfile
 import threading
-import time
 import uuid
 from pathlib import Path
 from queue import Queue
@@ -23,14 +21,9 @@ from enterprise_agent.core.agent.tools.contracts import (
     get_tool_contract,
     should_persist_artifact,
 )
-from enterprise_agent.core.agent.tools.shell import (
-    _read_captured_stream,
-    _safe_subprocess_environment,
-    _shell_execution_kwargs,
-    _terminate_process_group,
-    validate_command,
-)
+from enterprise_agent.core.agent.tools.shell import validate_command
 from enterprise_agent.core.agent.tools.workspace import get_user_workspace
+from enterprise_agent.sandbox.executor import ExecutionRequest, execute
 
 
 class BackgroundManager:
@@ -44,7 +37,7 @@ class BackgroundManager:
         self.tasks: dict = {}
         self.notifications: Queue = Queue()
         self._threads: dict[str, threading.Thread] = {}
-        self._processes: dict[str, subprocess.Popen] = {}
+        self._cancel_events: dict[str, threading.Event] = {}
         self._lock = threading.Lock()
         self.session_id = session_id or "background"
         self.user_id = user_id
@@ -61,6 +54,7 @@ class BackgroundManager:
         """
         if timeout is None:
             timeout = settings.COMMAND_TIMEOUT_SECONDS
+        timeout = min(timeout, settings.COMMAND_TIMEOUT_SECONDS)
         error = validate_command(command)
         if error:
             return error
@@ -76,6 +70,7 @@ class BackgroundManager:
         trace_id = control_identity[2] if control_identity else None
 
         task_id = str(uuid.uuid4())[:8]
+        self._cancel_events[task_id] = threading.Event()
         self.tasks[task_id] = {
             "status": "running",
             "command": command,
@@ -91,11 +86,19 @@ class BackgroundManager:
 
         user_id = get_current_user_id()
         workdir = get_user_workspace(user_id)
+        if self.user_id is None:
+            self.user_id = user_id
+        from enterprise_agent.core.execution.evidence import save_receipt
+
+        save_receipt({"execution_id": "background-" + task_id, "trace_id": trace_id,
+                      "phase": "running", "changes": []}, self.user_id, workdir)
 
         # Start execution thread with explicit user_id
+        from contextvars import copy_context
+
         thread = threading.Thread(
-            target=self._execute,
-            args=(task_id, command, timeout, workdir, trace_id),
+            target=copy_context().run,
+            args=(self._execute, task_id, command, timeout, workdir, trace_id),
             daemon=True
         )
         with self._lock:
@@ -122,6 +125,7 @@ class BackgroundManager:
             trace_id: Exact Agent trace that owns the process, when available
         """
         control_token = None
+        self._cancel_events.setdefault(task_id, threading.Event())
         try:
             if trace_id is not None and self.user_id is not None:
                 from enterprise_agent.core.execution.interrupt_control import (
@@ -133,53 +137,31 @@ class BackgroundManager:
                     self.session_id,
                     trace_id,
                 )
-            if self.tasks[task_id].get("status") == "cancelled":
-                return
-            process_group_args = (
-                {"creationflags": subprocess.CREATE_NEW_PROCESS_GROUP}
-                if os.name == "nt"
-                else {"start_new_session": True}
-            )
-            with tempfile.TemporaryFile(mode="w+b") as stdout_file, tempfile.TemporaryFile(
-                mode="w+b"
-            ) as stderr_file:
-                process = subprocess.Popen(
-                    command,
-                    cwd=workdir,
-                    env=_safe_subprocess_environment(workdir),
-                    stdout=stdout_file,
-                    stderr=stderr_file,
-                    **_shell_execution_kwargs(),
-                    **process_group_args,
-                )
-                with self._lock:
-                    self._processes[task_id] = process
-                if self.tasks[task_id].get("status") == "cancelled":
-                    self._terminate_process(task_id)
-                    return
-                deadline = time.monotonic() + timeout
-                while process.poll() is None:
-                    from enterprise_agent.core.execution.interrupt_control import (
-                        is_current_task_cancel_requested_sync,
-                    )
+            from enterprise_agent.core.execution.interrupt_control import is_current_task_cancel_requested_sync
 
-                    if is_current_task_cancel_requested_sync():
-                        self.cancel(task_id)
-                        break
-                    if time.monotonic() >= deadline:
-                        raise subprocess.TimeoutExpired(command, timeout)
-                    try:
-                        process.wait(timeout=0.1)
-                    except subprocess.TimeoutExpired:
-                        continue
-                if self.tasks[task_id].get("status") == "cancelled":
-                    return
-                stdout, stdout_truncated, _ = _read_captured_stream(stdout_file)
-                stderr, stderr_truncated, _ = _read_captured_stream(stderr_file)
-            output = "\n".join(part for part in (stdout, stderr) if part).strip() or "(no output)"
-            source_truncated = stdout_truncated or stderr_truncated
+            def cancelled():
+                return self._cancel_events[task_id].is_set() or is_current_task_cancel_requested_sync()
+
+            execution = execute(ExecutionRequest(command, workdir, self.user_id, trace_id, timeout,
+                                                 execution_id="background-" + task_id), cancelled)
+            self.tasks[task_id]["execution"] = execution
+            self.tasks[task_id].update({key: execution[key] for key in
+                                       ("exit_code", "error_code", "source_truncated", "cleanup_confirmed")
+                                       if key in execution})
+            if execution.get("error_code"):
+                code = execution["error_code"]
+                self.tasks[task_id].update(
+                    status="cancelled" if code == "task_cancelled" else "error",
+                    result=execution.get("stderr") or (f"Timeout after {timeout} seconds" if code == "tool_timeout"
+                                                        else code),
+                    cancellation=execution.get("cancellation"),
+                    termination_mode=execution.get("termination_mode"),
+                )
+                return
+            output = "\n".join(part for part in (execution["stdout"], execution["stderr"]) if part).strip()
+            source_truncated = execution.get("source_truncated", False)
             if self.tasks[task_id].get("status") != "cancelled":
-                status = "success" if process.returncode == 0 else "error"
+                status = "success" if execution["exit_code"] == 0 else "error"
                 receipt = None
                 artifact_error = None
                 if should_persist_artifact(
@@ -209,7 +191,7 @@ class BackgroundManager:
                             "Background result withheld because its evidence artifact "
                             "could not be stored (artifact_write_failed)."
                         ),
-                        "exit_code": process.returncode,
+                        "exit_code": execution["exit_code"],
                         "artifact": None,
                         "artifact_error": artifact_error,
                     })
@@ -219,16 +201,16 @@ class BackgroundManager:
                         output,
                         receipt=receipt,
                         status=status,
-                        error_code="nonzero_exit" if process.returncode else None,
-                        exit_code=process.returncode,
+                        error_code="nonzero_exit" if execution["exit_code"] else None,
+                        exit_code=execution["exit_code"],
                         artifact_error=artifact_error,
                     )
                 else:
                     model_output = output
                 self.tasks[task_id].update({
-                    "status": "completed" if process.returncode == 0 else "error",
+                    "status": "completed" if execution["exit_code"] == 0 else "error",
                     "result": model_output,
-                    "exit_code": process.returncode,
+                    "exit_code": execution["exit_code"],
                     "artifact": receipt.to_dict() if receipt else None,
                     "artifact_error": artifact_error,
                 })
@@ -252,45 +234,31 @@ class BackgroundManager:
 
                 reset_current_task_control_identity(control_token)
             with self._lock:
-                self._processes.pop(task_id, None)
+                self._cancel_events.pop(task_id, None)
                 self._threads.pop(task_id, None)
 
             # Send notification
             self.notifications.put({
                 "task_id": task_id,
                 "status": self.tasks[task_id]["status"],
-                "result": self.tasks[task_id]["result"][:500],
+                "result": (self.tasks[task_id]["result"] or "")[:500],
                 "artifact": self.tasks[task_id].get("artifact"),
                 "artifact_error": self.tasks[task_id].get("artifact_error"),
             })
 
     def _terminate_process(self, task_id: str) -> str:
-        with self._lock:
-            process = self._processes.get(task_id)
-        if not process or process.poll() is not None:
-            return "already_exited"
-        return _terminate_process_group(process)
+        event = self._cancel_events.get(task_id)
+        if event:
+            event.set()
+        return "cleanup_requested"
 
     def cancel(self, task_id: str) -> bool:
-        """Cancel a running child process and retain a truthful terminal result."""
+        """Request cleanup; worker confirms terminal state only after executor returns."""
         task = self.tasks.get(task_id)
         if not task or task.get("status") != "running":
             return False
-        task["status"] = "cancelled"
-        termination_mode = self._terminate_process(task_id)
-        cancellation_mode = (
-            "best_effort"
-            if termination_mode.startswith("best_effort")
-            else "terminated"
-        )
-        task.update({
-            "result": (
-                "Cancelled by user "
-                f"({cancellation_mode}; termination_mode={termination_mode})"
-            ),
-            "cancellation": cancellation_mode,
-            "termination_mode": termination_mode,
-        })
+        self._terminate_process(task_id)
+        task.update(result="Cancellation requested; waiting for execution cleanup", cancellation="requested")
         return True
 
     def shutdown(self, wait_seconds: float = 2.0) -> None:
@@ -334,7 +302,12 @@ class BackgroundManager:
                 return f"Unknown task: {task_id}"
             status = task["status"]
             result = task.get("result") or "(running)"
-            return f"[{status}] {result}"
+            execution = task.get("execution")
+            metadata = ""
+            if execution:
+                metadata = "\n" + json.dumps({k: v for k, v in execution.items()
+                                              if k not in {"stdout", "stderr"}}, ensure_ascii=False)
+            return f"[{status}] {result}{metadata}"
         else:
             # List all tasks
             if not self.tasks:

@@ -1,0 +1,964 @@
+{
+  "kind": "real-container-published-before-task-terminal-api-kill",
+  "source_sha256": "09f808c317008df8b03a9cd3eebdfde01defafcd2693edc1a90a93b50243b0ea",
+  "approvals": 3,
+  "trace_id": "464a01c6-5d31-45be-ae75-ccc8020ce079",
+  "session_id": "4a463bfb-06fe-4623-a1b3-bdbbf7673ce7",
+  "last_status": {
+    "status": "failed",
+    "session_id": "4a463bfb-06fe-4623-a1b3-bdbbf7673ce7",
+    "trace_id": "464a01c6-5d31-45be-ae75-ccc8020ce079",
+    "execution_phase": "executing",
+    "runner_state": null,
+    "stream_fence": null,
+    "cancel_requested": false,
+    "interrupt_type": null,
+    "interrupt": null
+  },
+  "last_error": "fetch failed",
+  "trace": {
+    "current_phase": "executing",
+    "duration_ms": 45361,
+    "error": "Runner lease expired or API restarted. Task was not replayed; inspect changes for unknown side effects.",
+    "events": [
+      {
+        "data": {},
+        "duration_ms": 0,
+        "event_id": "7ebf8b21-f7d6-4694-81a6-acc6bde6c19d",
+        "name": "task_created",
+        "status": "pending",
+        "timestamp": "2026-09-14T06:35:24.785423+00:00",
+        "type": "task"
+      },
+      {
+        "data": {
+          "phase": "parsing",
+          "round_count": 0,
+          "task_status": "running"
+        },
+        "duration_ms": 0,
+        "event_id": "72418f09-f995-48b7-b64e-077cd95ff583",
+        "name": "task_parse",
+        "status": "success",
+        "timestamp": "2026-09-14T06:35:24.800582+00:00",
+        "type": "node"
+      },
+      {
+        "data": {
+          "application_status": "not_attributed",
+          "candidates": [
+            {
+              "collection": "conversations",
+              "distance": 0.779378354549408,
+              "eligible": true,
+              "filter_reason": "eligible",
+              "lexical_match_count": 8,
+              "lexical_score": 0.32,
+              "memory_id": "7ca52ca4-9085-4083-b6c7-89b6ca9d51e5:6761d2f1",
+              "memory_type": "task_outcome",
+              "rank": 1,
+              "semantic_rank": 1
+            }
+          ],
+          "injected_characters": 851,
+          "injected_count": 1,
+          "injected_ids": [
+            "7ca52ca4-9085-4083-b6c7-89b6ca9d51e5:6761d2f1"
+          ],
+          "injected_tokens": 330,
+          "query_summary": "First run python -c \"from pathlib import Path; Path('published-marker.txt').write_text('exactly once')\" using bash. After that command completes, run python sleeper.py using bash. Do not perform any other operations.",
+          "strategy": "semantic_top_k",
+          "threshold": 0.8,
+          "top_k_per_collection": 3
+        },
+        "duration_ms": 84,
+        "event_id": "49b1804c-c3e2-49d8-8369-51de4c646561",
+        "name": "memory_retrieval",
+        "status": "success",
+        "timestamp": "2026-09-14T06:35:24.888482+00:00",
+        "type": "memory"
+      },
+      {
+        "data": {
+          "phase": "parsing",
+          "round_count": 0,
+          "task_status": "running"
+        },
+        "duration_ms": 86,
+        "event_id": "1d7b36aa-15f3-4922-b48e-21f197a01790",
+        "name": "init_context",
+        "status": "success",
+        "timestamp": "2026-09-14T06:35:24.890422+00:00",
+        "type": "node"
+      },
+      {
+        "data": {
+          "phase": "parsing",
+          "round_count": 0,
+          "task_status": "running"
+        },
+        "duration_ms": 0,
+        "event_id": "14d13feb-c735-4bdc-95ac-f2f4e23b9d62",
+        "name": "check_background",
+        "status": "success",
+        "timestamp": "2026-09-14T06:35:24.893877+00:00",
+        "type": "node"
+      },
+      {
+        "data": {
+          "phase": "parsing",
+          "round_count": 0,
+          "task_status": "running"
+        },
+        "duration_ms": 0,
+        "event_id": "1c3aec37-2fc6-4a04-ae47-fd51d6d9c524",
+        "name": "check_inbox",
+        "status": "success",
+        "timestamp": "2026-09-14T06:35:24.895814+00:00",
+        "type": "node"
+      },
+      {
+        "data": {
+          "phase": "planning",
+          "round_count": 0,
+          "task_status": "running"
+        },
+        "duration_ms": 7,
+        "event_id": "a676b3a9-6b1f-4d51-a7f9-af7f53f92e7c",
+        "name": "pre_microcompact",
+        "status": "success",
+        "timestamp": "2026-09-14T06:35:24.905377+00:00",
+        "type": "node"
+      },
+      {
+        "data": {
+          "completion_gate_blocker": null,
+          "completion_gate_recovery_attempts": 0,
+          "context_token_estimate": 5322,
+          "incomplete_response_recovery_attempts": 0,
+          "input_chars": 8294,
+          "input_summary": "First run python -c \"from pathlib import Path; Path('published-marker.txt').write_text('exactly once')\" using bash. After that command completes, run python sleeper.py using bash. Do not perform any other operations.",
+          "input_tokens": 5197,
+          "message_count": 3,
+          "output_summary": "",
+          "output_tokens": 125,
+          "response_complete": true,
+          "retry_count": 0,
+          "stop_reason": "tool_use",
+          "tool_calls": [
+            "bash"
+          ],
+          "total_tokens": 5322
+        },
+        "duration_ms": 1407,
+        "event_id": "df0a0a6c-a9cc-4894-8530-4c5074e9063b",
+        "name": "llm_call",
+        "status": "success",
+        "timestamp": "2026-09-14T06:35:26.316180+00:00",
+        "type": "model"
+      },
+      {
+        "data": {
+          "phase": "executing",
+          "round_count": 1,
+          "task_status": "running"
+        },
+        "duration_ms": 1410,
+        "event_id": "af86c597-2d8b-4d54-8d0f-b6f6df3e7879",
+        "name": "llm_call",
+        "status": "success",
+        "timestamp": "2026-09-14T06:35:26.317719+00:00",
+        "type": "node"
+      },
+      {
+        "data": {
+          "phase": "executing",
+          "round_count": 1,
+          "task_status": "running"
+        },
+        "duration_ms": 1,
+        "event_id": "016d9f92-f7ee-4513-be1c-f9e7d63ffcc0",
+        "name": "prepare_tool_execution",
+        "status": "success",
+        "timestamp": "2026-09-14T06:35:26.322578+00:00",
+        "type": "node"
+      },
+      {
+        "data": {
+          "phase": "executing",
+          "round_count": 1,
+          "task_status": "running"
+        },
+        "duration_ms": 3,
+        "event_id": "a3f38756-9acb-4c5e-ac8f-4165ac6d8316",
+        "name": "tool_confirm",
+        "status": "success",
+        "timestamp": "2026-09-14T06:35:26.328790+00:00",
+        "type": "node"
+      },
+      {
+        "data": {
+          "args_summary": {
+            "command": "python -c \"from pathlib import Path; Path('published-marker.txt').write_text('exactly once')\""
+          },
+          "artifact_bytes": null,
+          "artifact_error": null,
+          "artifact_path": null,
+          "artifact_redacted": false,
+          "artifact_sha256": null,
+          "attempt_count": 1,
+          "error_code": "policy_blocked",
+          "execution_ids": [],
+          "exit_code": 1,
+          "idempotent": false,
+          "model_chars": 221,
+          "model_truncated": false,
+          "original_chars": 221,
+          "output_summary": "{\"stdout\": \"\", \"stderr\": \"Blocked: inline code execution via 'python' is not allowed. Remediation: create a reviewed workspace file first, then execute that relative file.\", \"exit_code\": 1, \"error_code\": \"policy_blocked\"}",
+          "risk": "dangerous",
+          "source_truncated": false,
+          "timeout_seconds": 125,
+          "tool_call_id": "call_00_Sve3fXNOXOFY0wlbNdDu3769"
+        },
+        "duration_ms": 2,
+        "event_id": "dfa392db-1acf-406d-a4e9-99bd17d65ed9",
+        "name": "bash",
+        "status": "blocked",
+        "timestamp": "2026-09-14T06:35:26.335091+00:00",
+        "type": "tool"
+      },
+      {
+        "data": {
+          "phase": "executing",
+          "round_count": 1,
+          "task_status": "running"
+        },
+        "duration_ms": 6,
+        "event_id": "ab5019d9-8851-45e0-b7d2-528f21382cb7",
+        "name": "tool_executor",
+        "status": "success",
+        "timestamp": "2026-09-14T06:35:26.336946+00:00",
+        "type": "node"
+      },
+      {
+        "data": {
+          "phase": "checkpointing",
+          "round_count": 1,
+          "task_status": "running"
+        },
+        "duration_ms": 2,
+        "event_id": "b42924b1-788d-47c3-867b-19647c90e650",
+        "name": "checkpoint_task",
+        "status": "success",
+        "timestamp": "2026-09-14T06:35:26.342560+00:00",
+        "type": "node"
+      },
+      {
+        "data": {
+          "phase": "checkpointing",
+          "round_count": 1,
+          "task_status": "running"
+        },
+        "duration_ms": 0,
+        "event_id": "f411223c-321c-42d6-a866-408415225d39",
+        "name": "save_memory",
+        "status": "success",
+        "timestamp": "2026-09-14T06:35:26.345109+00:00",
+        "type": "node"
+      },
+      {
+        "data": {
+          "phase": "planning",
+          "round_count": 1,
+          "task_status": "running"
+        },
+        "duration_ms": 7,
+        "event_id": "74e1cdac-8044-47dc-9176-508630ff3476",
+        "name": "pre_microcompact",
+        "status": "success",
+        "timestamp": "2026-09-14T06:35:26.355238+00:00",
+        "type": "node"
+      },
+      {
+        "data": {
+          "completion_gate_blocker": null,
+          "completion_gate_recovery_attempts": 0,
+          "context_token_estimate": 7292,
+          "incomplete_response_recovery_attempts": 0,
+          "input_chars": 9151,
+          "input_summary": "First run python -c \"from pathlib import Path; Path('published-marker.txt').write_text('exactly once')\" using bash. After that command completes, run python sleeper.py using bash. Do not perform any other operations.",
+          "input_tokens": 5390,
+          "message_count": 5,
+          "output_summary": "The inline `python -c` form was blocked by the execution policy. The stated remediation is to create a reviewed workspace file and execute that relative file instead, so I'll do that once to accomplish the same write.",
+          "output_tokens": 1902,
+          "response_complete": true,
+          "retry_count": 0,
+          "stop_reason": "tool_use",
+          "tool_calls": [
+            "write_file"
+          ],
+          "total_tokens": 7292
+        },
+        "duration_ms": 9889,
+        "event_id": "17b7f238-00f1-4362-a443-a908a9648c67",
+        "name": "llm_call",
+        "status": "success",
+        "timestamp": "2026-09-14T06:35:36.248639+00:00",
+        "type": "model"
+      },
+      {
+        "data": {
+          "phase": "executing",
+          "round_count": 2,
+          "task_status": "running"
+        },
+        "duration_ms": 9892,
+        "event_id": "e7318295-84ea-48f3-ab3f-55ccb432afbb",
+        "name": "llm_call",
+        "status": "success",
+        "timestamp": "2026-09-14T06:35:36.250964+00:00",
+        "type": "node"
+      },
+      {
+        "data": {
+          "deadline": "2026-09-14T06:40:36.259182+00:00",
+          "tools": [
+            {
+              "name": "write_file",
+              "risk": "review"
+            }
+          ]
+        },
+        "duration_ms": 0,
+        "event_id": "07c49f6a-d75c-4b49-a686-f0dcef526349",
+        "name": "confirmation_requested",
+        "status": "waiting",
+        "timestamp": "2026-09-14T06:35:36.260511+00:00",
+        "type": "confirmation"
+      },
+      {
+        "data": {
+          "phase": "executing",
+          "round_count": 2,
+          "task_status": "waiting_confirmation"
+        },
+        "duration_ms": 3,
+        "event_id": "a5c965e9-978f-4a99-ab8f-692d1af42e90",
+        "name": "prepare_tool_execution",
+        "status": "success",
+        "timestamp": "2026-09-14T06:35:36.262318+00:00",
+        "type": "node"
+      },
+      {
+        "data": {
+          "phase": "executing",
+          "task_status": "waiting_confirmation"
+        },
+        "duration_ms": 7,
+        "event_id": "45966cae-5fb5-4d4d-8217-984de96bf9bb",
+        "name": "tool_confirm",
+        "status": "interrupted",
+        "timestamp": "2026-09-14T06:35:36.272750+00:00",
+        "type": "node"
+      },
+      {
+        "data": {
+          "approved": true,
+          "approved_ids": [
+            "call_00_dlEOJ1XSdrghZ40JKqXi5864"
+          ],
+          "reason": null
+        },
+        "duration_ms": 0,
+        "event_id": "116af7d2-f3ad-48f6-86ff-544e479bc04b",
+        "name": "confirmation_approved",
+        "status": "success",
+        "timestamp": "2026-09-14T06:35:36.471461+00:00",
+        "type": "confirmation"
+      },
+      {
+        "data": {
+          "phase": "executing",
+          "round_count": 2,
+          "task_status": "running"
+        },
+        "duration_ms": 6,
+        "event_id": "049d14fa-3529-4ffb-90fc-215be61e32c4",
+        "name": "tool_confirm",
+        "status": "success",
+        "timestamp": "2026-09-14T06:35:36.474321+00:00",
+        "type": "node"
+      },
+      {
+        "data": {
+          "args_summary": {
+            "content": "from pathlib import Path\n\nPath(\"published-marker.txt\").write_text(\"exactly once\")\n",
+            "path": "write_marker.py"
+          },
+          "artifact_bytes": null,
+          "artifact_error": null,
+          "artifact_path": null,
+          "artifact_redacted": false,
+          "artifact_sha256": null,
+          "attempt_count": 1,
+          "error_code": null,
+          "execution_ids": [
+            "6a78976f385f406bbd86506f85986c55"
+          ],
+          "exit_code": null,
+          "idempotent": false,
+          "model_chars": 134,
+          "model_truncated": false,
+          "original_chars": 134,
+          "output_summary": "Wrote 82 bytes to write_marker.py\n\nVerified preview:\nfrom pathlib import Path\n\nPath(\"published-marker.txt\").write_text(\"exactly once\")",
+          "risk": "review",
+          "source_truncated": false,
+          "timeout_seconds": 30,
+          "tool_call_id": "call_00_dlEOJ1XSdrghZ40JKqXi5864"
+        },
+        "duration_ms": 14,
+        "event_id": "d93bfe08-ac0f-485a-b546-20ce1cbba4d0",
+        "name": "write_file",
+        "status": "success",
+        "timestamp": "2026-09-14T06:35:36.527817+00:00",
+        "type": "tool"
+      },
+      {
+        "data": {
+          "phase": "executing",
+          "round_count": 2,
+          "task_status": "running"
+        },
+        "duration_ms": 22,
+        "event_id": "2d51b7fb-c8b3-4c43-b4ad-3b77451718b8",
+        "name": "tool_executor",
+        "status": "success",
+        "timestamp": "2026-09-14T06:35:36.530876+00:00",
+        "type": "node"
+      },
+      {
+        "data": {
+          "phase": "checkpointing",
+          "round_count": 2,
+          "task_status": "running"
+        },
+        "duration_ms": 0,
+        "event_id": "348ec64e-4aec-4f33-a487-303069a2e1e4",
+        "name": "checkpoint_task",
+        "status": "success",
+        "timestamp": "2026-09-14T06:35:36.534807+00:00",
+        "type": "node"
+      },
+      {
+        "data": {
+          "phase": "checkpointing",
+          "round_count": 2,
+          "task_status": "running"
+        },
+        "duration_ms": 0,
+        "event_id": "bc7577ad-32e6-4c9f-afbd-14ece86f4e0d",
+        "name": "save_memory",
+        "status": "success",
+        "timestamp": "2026-09-14T06:35:36.540607+00:00",
+        "type": "node"
+      },
+      {
+        "data": {
+          "phase": "planning",
+          "round_count": 2,
+          "task_status": "running"
+        },
+        "duration_ms": 12,
+        "event_id": "82bdbbc3-9d19-4789-8f73-90e8284d3503",
+        "name": "pre_microcompact",
+        "status": "success",
+        "timestamp": "2026-09-14T06:35:36.556844+00:00",
+        "type": "node"
+      },
+      {
+        "data": {
+          "completion_gate_blocker": null,
+          "completion_gate_recovery_attempts": 0,
+          "context_token_estimate": 7379,
+          "incomplete_response_recovery_attempts": 0,
+          "input_chars": 18385,
+          "input_summary": "First run python -c \"from pathlib import Path; Path('published-marker.txt').write_text('exactly once')\" using bash. After that command completes, run python sleeper.py using bash. Do not perform any other operations.",
+          "input_tokens": 7338,
+          "message_count": 7,
+          "output_summary": "",
+          "output_tokens": 41,
+          "response_complete": true,
+          "retry_count": 0,
+          "stop_reason": "tool_use",
+          "tool_calls": [
+            "bash"
+          ],
+          "total_tokens": 7379
+        },
+        "duration_ms": 864,
+        "event_id": "11fa79a5-547f-4ff4-bc42-8e57106580d8",
+        "name": "llm_call",
+        "status": "success",
+        "timestamp": "2026-09-14T06:35:37.424660+00:00",
+        "type": "model"
+      },
+      {
+        "data": {
+          "phase": "executing",
+          "round_count": 3,
+          "task_status": "running"
+        },
+        "duration_ms": 868,
+        "event_id": "1544a821-4748-4fcc-99ab-a7669eaf27d9",
+        "name": "llm_call",
+        "status": "success",
+        "timestamp": "2026-09-14T06:35:37.428865+00:00",
+        "type": "node"
+      },
+      {
+        "data": {
+          "deadline": "2026-09-14T06:40:37.433888+00:00",
+          "tools": [
+            {
+              "name": "bash",
+              "risk": "review"
+            }
+          ]
+        },
+        "duration_ms": 0,
+        "event_id": "e620cd60-25fc-4066-a505-36c8fd072811",
+        "name": "confirmation_requested",
+        "status": "waiting",
+        "timestamp": "2026-09-14T06:35:37.434954+00:00",
+        "type": "confirmation"
+      },
+      {
+        "data": {
+          "phase": "executing",
+          "round_count": 3,
+          "task_status": "waiting_confirmation"
+        },
+        "duration_ms": 3,
+        "event_id": "86f52672-9960-49cb-a136-a9a256bb8c0f",
+        "name": "prepare_tool_execution",
+        "status": "success",
+        "timestamp": "2026-09-14T06:35:37.437688+00:00",
+        "type": "node"
+      },
+      {
+        "data": {
+          "phase": "executing",
+          "task_status": "waiting_confirmation"
+        },
+        "duration_ms": 1,
+        "event_id": "34c36d62-8cb7-4f36-921e-46fe840cc12b",
+        "name": "tool_confirm",
+        "status": "interrupted",
+        "timestamp": "2026-09-14T06:35:37.442841+00:00",
+        "type": "node"
+      },
+      {
+        "data": {
+          "approved": true,
+          "approved_ids": [
+            "call_00_ET_Iy2BZ6PMfXtE7REgMIbB8766"
+          ],
+          "reason": null
+        },
+        "duration_ms": 0,
+        "event_id": "71ec5be0-2a70-4845-8e40-e1ec17447185",
+        "name": "confirmation_approved",
+        "status": "success",
+        "timestamp": "2026-09-14T06:35:37.639119+00:00",
+        "type": "confirmation"
+      },
+      {
+        "data": {
+          "phase": "executing",
+          "round_count": 3,
+          "task_status": "running"
+        },
+        "duration_ms": 4,
+        "event_id": "bac2003d-0dbb-4559-bb05-9ecef49020c6",
+        "name": "tool_confirm",
+        "status": "success",
+        "timestamp": "2026-09-14T06:35:37.640955+00:00",
+        "type": "node"
+      },
+      {
+        "data": {
+          "cleanup_confirmed": true,
+          "container_id": "8a7dbb3dc0434b4d7b1afc16b0cfc2af5eee6ca49ff4aaa9fda0f2c0dc21da43",
+          "execution_id": "agent-sandbox-f2295a14dce449848000ec142d2670b3",
+          "executor": "docker",
+          "exit_code": 0,
+          "input_version": "b8dedf194028683d7754d184b1c00138c047159879a6be0eeee1493dc8289cc6",
+          "output_counts_scope": "complete_attached_stream",
+          "preflight": {
+            "available": [
+              "module:pytest",
+              "node",
+              "npm",
+              "pytest",
+              "python",
+              "python3"
+            ],
+            "image_id": "sha256:aa74077b13c2aa75e070b0747371502d583f8cdbe0a8a89a8a1f85eea90c0f12",
+            "probe_scope": "empty container; no workspace mounts",
+            "required": [
+              "python"
+            ],
+            "status": "available"
+          },
+          "published_paths": [
+            "published-marker.txt"
+          ],
+          "receipt": {
+            "cancelled": false,
+            "changes": [
+              {
+                "after": [
+                  "990e96e1550cd63704d35e70650125765c9b0725d7147883d52293f55e522b14",
+                  420
+                ],
+                "before": null,
+                "operation": "added",
+                "path": "published-marker.txt"
+              }
+            ],
+            "command": "python write_marker.py",
+            "command_sha256": "79983568fc742f91ddb5fdf5e397e1c05b938e4f7bb29ec28277f216d20f8326",
+            "cwd": ".",
+            "error_code": null,
+            "execution_id": "fab3048c239b479884a786a91808e70b",
+            "executor": "docker",
+            "exit_code": 0,
+            "fresh": false,
+            "input_stamp": "481bf5e65c0abfe38e5f03c9805926cbade187dcc092a773bd1e6db90c394985",
+            "input_version": "b8dedf194028683d7754d184b1c00138c047159879a6be0eeee1493dc8289cc6",
+            "ok": false,
+            "output_sha256": "02a713f76226c52a198adae80526740fc4d6057636326bc8dec49635db8ae7a7",
+            "output_stamp": "429f8dccc9cdffb27a8ffb8eca94c1abbc095c609785f0f0a1e513118811e21e",
+            "output_version": "c824e4cc3d58d82f9bbd5b6c9f19269d2263695d5d0cecfca334948c29fd3a6a",
+            "phase": "finished",
+            "recorded_at": 1789367737.9088163,
+            "seq": 4,
+            "snapshot_status": "available",
+            "timed_out": false,
+            "tool_call_id": "call_00_ET_Iy2BZ6PMfXtE7REgMIbB8766",
+            "trace_id": "464a01c6-5d31-45be-ae75-ccc8020ce079",
+            "validation": null
+          },
+          "source_truncated": false,
+          "stderr_original_bytes": 0,
+          "stdout_original_bytes": 0,
+          "trace_id": "464a01c6-5d31-45be-ae75-ccc8020ce079",
+          "validation_input_changed": true
+        },
+        "duration_ms": 261,
+        "event_id": "09daaf7d-da7f-4198-b0db-1f6c737d4c03",
+        "name": "agent_executor",
+        "status": "success",
+        "timestamp": "2026-09-14T06:35:37.910080+00:00",
+        "type": "execution"
+      },
+      {
+        "data": {
+          "args_summary": {
+            "command": "python write_marker.py"
+          },
+          "artifact_bytes": null,
+          "artifact_error": null,
+          "artifact_path": null,
+          "artifact_redacted": false,
+          "artifact_sha256": null,
+          "attempt_count": 1,
+          "error_code": null,
+          "execution_ids": [
+            "fab3048c239b479884a786a91808e70b"
+          ],
+          "exit_code": 0,
+          "idempotent": false,
+          "model_chars": 2030,
+          "model_truncated": false,
+          "original_chars": 2030,
+          "output_summary": "{\"stdout\": \"(no output)\", \"stderr\": \"\", \"exit_code\": 0, \"executor\": \"docker\", \"execution_id\": \"agent-sandbox-f2295a14dce449848000ec142d2670b3\", \"trace_id\": \"464a01c6-5d31-45be-ae75-ccc8020ce079\", \"source_truncated\": false, \"preflight\": {\"status\": \"available\", \"image_id\": \"sha256:aa74077b13c2aa75e070b0747371502d583f8cdbe0a8a89a8a1f85eea90c0f12\", \"required\": [\"python\"], \"available\": [\"module:pytest\", \"node\", \"npm\", \"pytest\", \"python\", \"python3\"], \"probe_scope\": \"empty container; no workspace mounts\"}, \"input_version\": \"b8dedf194028683d7754d184b1c00138c047159879a6be0eeee1493dc8289cc6\", \"container_id\": \"8a7dbb3dc0434b4d7b1afc16b0cfc2af5eee6ca49ff4aaa9fda0f2c0dc21da43\", \"stdout_original_bytes\": 0, \"stderr_original_bytes\": 0, \"output_counts_scope\": \"complete_attached_stream\", \"validation_input_changed\": true, \"published_paths\": [\"published-marker.txt\"], \"cleanup_confirmed\": true, \"receipt\": {\"execution_id\": \"fab3048c239b479884a786a91808e70b\", \"trace_id\": \"464a01c6-5d31-45be-ae75-ccc8020ce079",
+          "risk": "review",
+          "source_truncated": false,
+          "timeout_seconds": 125,
+          "tool_call_id": "call_00_ET_Iy2BZ6PMfXtE7REgMIbB8766"
+        },
+        "duration_ms": 265,
+        "event_id": "33f83e6b-526f-48c5-84f3-3d991b18d676",
+        "name": "bash",
+        "status": "success",
+        "timestamp": "2026-09-14T06:35:37.912617+00:00",
+        "type": "tool"
+      },
+      {
+        "data": {
+          "phase": "executing",
+          "round_count": 3,
+          "task_status": "running"
+        },
+        "duration_ms": 272,
+        "event_id": "618f4753-7a4e-4039-97e0-dd02106d536d",
+        "name": "tool_executor",
+        "status": "success",
+        "timestamp": "2026-09-14T06:35:37.917291+00:00",
+        "type": "node"
+      },
+      {
+        "data": {
+          "phase": "checkpointing",
+          "round_count": 3,
+          "task_status": "running"
+        },
+        "duration_ms": 2,
+        "event_id": "f9d99e1a-df7b-4207-bbe3-50a547673866",
+        "name": "checkpoint_task",
+        "status": "success",
+        "timestamp": "2026-09-14T06:35:37.924310+00:00",
+        "type": "node"
+      },
+      {
+        "data": {
+          "phase": "checkpointing",
+          "round_count": 3,
+          "task_status": "running"
+        },
+        "duration_ms": 0,
+        "event_id": "91f1c82e-f368-4586-ad92-99e2b7abbb16",
+        "name": "save_memory",
+        "status": "success",
+        "timestamp": "2026-09-14T06:35:37.927815+00:00",
+        "type": "node"
+      },
+      {
+        "data": {
+          "phase": "planning",
+          "round_count": 3,
+          "task_status": "running"
+        },
+        "duration_ms": 9,
+        "event_id": "c3e7588e-b4a8-4607-8cfc-71ee527d6e7f",
+        "name": "pre_microcompact",
+        "status": "success",
+        "timestamp": "2026-09-14T06:35:37.942103+00:00",
+        "type": "node"
+      },
+      {
+        "data": {
+          "completion_gate_blocker": null,
+          "completion_gate_recovery_attempts": 0,
+          "context_token_estimate": 8339,
+          "incomplete_response_recovery_attempts": 0,
+          "input_chars": 20683,
+          "input_summary": "First run python -c \"from pathlib import Path; Path('published-marker.txt').write_text('exactly once')\" using bash. After that command completes, run python sleeper.py using bash. Do not perform any other operations.",
+          "input_tokens": 8244,
+          "message_count": 9,
+          "output_summary": "The marker file was written. Now running the second command.",
+          "output_tokens": 95,
+          "response_complete": true,
+          "retry_count": 0,
+          "stop_reason": "tool_use",
+          "tool_calls": [
+            "bash"
+          ],
+          "total_tokens": 8339
+        },
+        "duration_ms": 1257,
+        "event_id": "2745f62b-602f-4817-b5d8-dac8d3ebb628",
+        "name": "llm_call",
+        "status": "success",
+        "timestamp": "2026-09-14T06:35:39.204425+00:00",
+        "type": "model"
+      },
+      {
+        "data": {
+          "phase": "executing",
+          "round_count": 4,
+          "task_status": "running"
+        },
+        "duration_ms": 1261,
+        "event_id": "7a375774-4c3b-45f8-8042-d0afb5e5925a",
+        "name": "llm_call",
+        "status": "success",
+        "timestamp": "2026-09-14T06:35:39.207519+00:00",
+        "type": "node"
+      },
+      {
+        "data": {
+          "deadline": "2026-09-14T06:40:39.211721+00:00",
+          "tools": [
+            {
+              "name": "bash",
+              "risk": "review"
+            }
+          ]
+        },
+        "duration_ms": 0,
+        "event_id": "86fca127-524d-42c7-88b4-6393fae4d6e3",
+        "name": "confirmation_requested",
+        "status": "waiting",
+        "timestamp": "2026-09-14T06:35:39.212660+00:00",
+        "type": "confirmation"
+      },
+      {
+        "data": {
+          "phase": "executing",
+          "round_count": 4,
+          "task_status": "waiting_confirmation"
+        },
+        "duration_ms": 2,
+        "event_id": "d8a6066f-6817-45d0-b1a9-6de87550ab72",
+        "name": "prepare_tool_execution",
+        "status": "success",
+        "timestamp": "2026-09-14T06:35:39.213976+00:00",
+        "type": "node"
+      },
+      {
+        "data": {
+          "phase": "executing",
+          "task_status": "waiting_confirmation"
+        },
+        "duration_ms": 4,
+        "event_id": "89156b61-e0dd-4bdf-9fd2-a1c38a4af6d1",
+        "name": "tool_confirm",
+        "status": "interrupted",
+        "timestamp": "2026-09-14T06:35:39.221197+00:00",
+        "type": "node"
+      },
+      {
+        "data": {
+          "approved": true,
+          "approved_ids": [
+            "call_00_PPKGkZOvirupWHU7sEmE5758"
+          ],
+          "reason": null
+        },
+        "duration_ms": 0,
+        "event_id": "40e661fa-89f8-44b7-befc-fc2a70ad072b",
+        "name": "confirmation_approved",
+        "status": "success",
+        "timestamp": "2026-09-14T06:35:39.484812+00:00",
+        "type": "confirmation"
+      },
+      {
+        "data": {
+          "phase": "executing",
+          "round_count": 4,
+          "task_status": "running"
+        },
+        "duration_ms": 3,
+        "event_id": "fdf01f70-daf4-4d35-a1a8-1a2c4cccb3cf",
+        "name": "tool_confirm",
+        "status": "success",
+        "timestamp": "2026-09-14T06:35:39.486305+00:00",
+        "type": "node"
+      },
+      {
+        "data": {
+          "error": "Runner lease expired or API restarted. Task was not replayed; inspect changes for unknown side effects."
+        },
+        "duration_ms": 45361,
+        "event_id": "d4e44291-5c5a-4e1b-8fd1-606425c1d433",
+        "name": "task_finished",
+        "status": "failed",
+        "timestamp": "2026-09-14T06:36:10.147284+00:00",
+        "type": "task"
+      }
+    ],
+    "finished_at": "2026-09-14T06:36:10.147284+00:00",
+    "metrics": {
+      "confirmation_count": 3,
+      "input_tokens": 26169,
+      "memory_candidates": 1,
+      "memory_injected": 1,
+      "memory_injected_tokens": 330,
+      "memory_retrieval_queries": 1,
+      "model_calls": 4,
+      "model_duration_ms": 13417,
+      "node_count": 32,
+      "node_duration_ms": 13893,
+      "output_tokens": 2163,
+      "pause_count": 0,
+      "paused_duration_ms": 0,
+      "resume_count": 0,
+      "retry_count": 0,
+      "safety_interceptions": 1,
+      "tool_calls": 3,
+      "tool_duration_ms": 281,
+      "tool_failures": 1,
+      "tool_successes": 2,
+      "total_tokens": 28332
+    },
+    "mode": "single_agent",
+    "request_summary": "First run python -c \"from pathlib import Path; Path('published-marker.txt').write_text('exactly once')\" using bash. After that command completes, run python sleeper.py using bash. Do not perform any other operations.",
+    "result_summary": null,
+    "schema_version": 1,
+    "session_id": "4a463bfb-06fe-4623-a1b3-bdbbf7673ce7",
+    "started_at": "2026-09-14T06:35:24.785423+00:00",
+    "status": "failed",
+    "storage_trust": "service_control",
+    "trace_id": "464a01c6-5d31-45be-ae75-ccc8020ce079",
+    "user_id": 9
+  },
+  "marker": {
+    "path": "published-marker.txt",
+    "content": "exactly once",
+    "size": 12,
+    "lines": 1,
+    "offset": 0,
+    "limit": 500,
+    "binary": false,
+    "sha256": "990e96e1550cd63704d35e70650125765c9b0725d7147883d52293f55e522b14"
+  },
+  "changes": {
+    "trace_id": "464a01c6-5d31-45be-ae75-ccc8020ce079",
+    "version": "dcd890ffdfd450f5bd1bc20e1e86e65ab7cbc6ca4351a8f7926d8b52646346fd",
+    "files": [
+      {
+        "path": "write_marker.py",
+        "before": null,
+        "after": [
+          "ba0e7448383176ecbc0d7d8e301983a54093c97b4fd8b0e584164f3f7c070ff4",
+          384
+        ],
+        "operation": "added",
+        "continuous": true,
+        "restorable": true,
+        "conflict": false,
+        "supported": true,
+        "reason": null,
+        "diff": "--- before/write_marker.py\n+++ after/write_marker.py\n@@ -0,0 +1,3 @@\n+from pathlib import Path\n+\n+Path(\"published-marker.txt\").write_text(\"exactly once\")\n"
+      },
+      {
+        "path": "published-marker.txt",
+        "before": null,
+        "after": [
+          "990e96e1550cd63704d35e70650125765c9b0725d7147883d52293f55e522b14",
+          420
+        ],
+        "operation": "added",
+        "continuous": true,
+        "restorable": true,
+        "conflict": false,
+        "supported": true,
+        "reason": null,
+        "diff": "--- before/published-marker.txt\n+++ after/published-marker.txt\n@@ -0,0 +1 @@\n+exactly once"
+      }
+    ],
+    "validations": [],
+    "pending_execution": true,
+    "restore": null,
+    "coverage": {
+      "max_file_bytes": 262144,
+      "max_task_bytes": 4194304,
+      "max_files": 100,
+      "retention_days": 7,
+      "scope": "UTF-8 text files only; excludes sensitive paths, detected secrets and links. External effects are not restored."
+    }
+  },
+  "result": "passed"
+}

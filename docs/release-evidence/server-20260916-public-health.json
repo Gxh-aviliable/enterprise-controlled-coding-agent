@@ -1,0 +1,1 @@
+{"status":"healthy","version":"0.1.0","build":{"source_sha256":"be68d5c881bc728c855275077bec954505f8ccfc4021d1527f805a349f8dbd3e","qualification":"diagnostic-snapshot","git":{"commit":"0648e72dad083e21a70eb8811e1e0dc890bd5714","branch":"feature/verified-agent-delivery","dirty":true}},"name":"Enterprise Agent","checks":{"mysql":"ok","redis":"ok"}}

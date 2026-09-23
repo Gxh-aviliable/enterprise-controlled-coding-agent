@@ -18,6 +18,7 @@ from enterprise_agent.core.agent.tools.workspace import (
     resolve_path,
 )
 from enterprise_agent.core.agent.tools.workspace_lock import workspace_write_lock
+from enterprise_agent.core.execution.evidence import observe_file_mutation
 
 MAX_DELETE_PATHS = 100
 PROTECTED_DELETE_PARTS = {
@@ -203,7 +204,7 @@ def write_file(path: str, content: str) -> str:
         Success message with first N lines preview (trust but verify)
     """
     try:
-        with workspace_write_lock():
+        with workspace_write_lock(), observe_file_mutation():
             _validate_agent_file_path(path)
             # Resolve only after acquiring the shared lock so a concurrent
             # browser move/delete cannot invalidate the checked target.
@@ -236,7 +237,7 @@ def edit_file(path: str, old_text: str, new_text: str) -> str:
         Success message with diff preview (trust but verify)
     """
     try:
-        with workspace_write_lock():
+        with workspace_write_lock(), observe_file_mutation():
             _validate_agent_file_path(path)
             fp = resolve_path(path)
             content = fp.read_text(encoding="utf-8")
@@ -353,7 +354,7 @@ def delete_paths(paths: list[str], reason: str) -> str:
         return "Error: A deletion reason of at least 3 characters is required"
 
     try:
-        with workspace_write_lock():
+        with workspace_write_lock(), observe_file_mutation():
             return _delete_paths_locked(paths, normalized_reason)
     except Exception as exc:
         return f"Error: {exc}"

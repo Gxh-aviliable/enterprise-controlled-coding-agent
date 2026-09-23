@@ -45,6 +45,13 @@ logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/workspace", tags=["workspace"])
 
 
+def _resolve_read_path(path: str, user_id: int) -> Path:
+    try:
+        return resolve_path(path, user_id)
+    except (ValueError, PermissionError) as exc:
+        raise HTTPException(status_code=400, detail="Invalid workspace path") from exc
+
+
 def _workspace_busy_error(exc: Exception) -> HTTPException:
     return HTTPException(
         status_code=423,
@@ -262,7 +269,7 @@ async def get_tree(
 
     Returns a nested JSON structure representing the file tree.
     """
-    resolved = resolve_path(path, user_id)
+    resolved = _resolve_read_path(path, user_id)
     if not resolved.exists():
         raise HTTPException(status_code=404, detail=f"Path not found: {path}")
 
@@ -298,6 +305,8 @@ async def read_file(
         raise HTTPException(status_code=404, detail=f"File not found: {path}") from exc
     except IsADirectoryError as exc:
         raise HTTPException(status_code=400, detail=f"Path is not a file: {path}") from exc
+    except (ValueError, PermissionError) as exc:
+        raise HTTPException(status_code=400, detail="Invalid workspace path or encoding") from exc
     if result["binary"]:
         result["content"] = f"[Binary file ({result['size']} bytes)]"
     return result
@@ -309,7 +318,7 @@ async def get_open_url(
     user_id: int = Depends(get_current_user),
 ):
     """Return a URL that opens the file in local or web VSCode."""
-    resolved = resolve_path(path, user_id)
+    resolved = _resolve_read_path(path, user_id)
 
     if not resolved.exists():
         raise HTTPException(status_code=404, detail=f"File not found: {path}")
@@ -453,7 +462,7 @@ async def download_file(
     user_id: int = Depends(get_current_user),
 ):
     """Download a single file from user workspace."""
-    resolved = resolve_path(path, user_id)
+    resolved = _resolve_read_path(path, user_id)
 
     if not resolved.exists():
         raise HTTPException(status_code=404, detail=f"File not found: {path}")
@@ -478,7 +487,7 @@ async def download_zip(
     workspace_root = get_user_workspace(user_id).resolve()
     with zipfile.ZipFile(buf, "w", zipfile.ZIP_DEFLATED) as zf:
         for rel_path in selected:
-            resolved = resolve_path(rel_path, user_id)
+            resolved = _resolve_read_path(rel_path, user_id)
             if not resolved.exists():
                 continue
             if resolved.is_dir():

@@ -36,6 +36,7 @@ const TreeNodeStub = {
   emits: ['select', 'delete', 'rename', 'download', 'open'],
   template: `
     <div>
+      <button data-test="select-node" @click="$emit('select', node)">Select</button>
       <button data-test="delete-node" @click="$emit('delete', node)">Delete</button>
       <button data-test="rename-node" @click="$emit('rename', node)">Rename</button>
     </div>
@@ -100,6 +101,72 @@ describe('FileTree selected-file mutation guard', () => {
       affectsSelected: false,
       selectedPath: 'README.md'
     }))
+    wrapper.unmount()
+  })
+
+  it('uses the clicked folder for picker uploads and can return to the root', async () => {
+    api.fetchTree.mockResolvedValue({ children: [{ type: 'dir', path: 'GXH', name: 'GXH', children: [] }] })
+    const wrapper = mountTree()
+    await flushPromises()
+    await wrapper.get('[data-test="select-node"]').trigger('click')
+    expect(wrapper.get('[aria-label="Upload directory"]').element.value).toBe('GXH')
+    const files = [new File(['code'], 'checkout.py')]
+    const input = wrapper.get('input[type="file"]')
+    assignFiles(input, files)
+    await input.trigger('change')
+    await flushPromises()
+    expect(api.uploadFiles).toHaveBeenCalledWith(files, 'GXH', expect.any(Function))
+    expect(wrapper.emitted('mutated')[0][0].paths).toEqual(['GXH/checkout.py'])
+    await wrapper.get('[title="Upload to workspace root"]').trigger('click')
+    expect(wrapper.get('[aria-label="Upload directory"]').element.value).toBe('')
+    wrapper.unmount()
+  })
+
+  it('guards a nested overwrite using its complete destination path', async () => {
+    const beforeMutation = vi.fn(() => false)
+    const wrapper = mountTree({ selectedPath: 'GXH/checkout.py', beforeMutation })
+    await flushPromises()
+    await wrapper.get('[aria-label="Upload directory"]').setValue('GXH')
+    const input = wrapper.get('input[type="file"]')
+    assignFiles(input, [new File(['replacement'], 'checkout.py')])
+    await input.trigger('change')
+    expect(beforeMutation).toHaveBeenCalledWith(expect.objectContaining({
+      paths: ['GXH/checkout.py'], affectsSelected: true
+    }))
+    expect(api.uploadFiles).not.toHaveBeenCalled()
+    wrapper.unmount()
+  })
+
+  it('uses the explicit nested directory for dropped files and reports partial completion', async () => {
+    const wrapper = mountTree({ selectedPath: 'GXH/src/checkout.py' })
+    await flushPromises()
+    await wrapper.get('[aria-label="Upload directory"]').setValue('GXH/src')
+    const files = [new File(['code'], 'checkout.py'), new File(['test'], 'test_checkout.py')]
+    api.uploadFiles.mockImplementationOnce(async (_files, _path, progress) => {
+      progress(1)
+      throw new Error('Second upload failed')
+    })
+    await wrapper.get('.tree-body').trigger('drop', { dataTransfer: { files } })
+    await flushPromises()
+    expect(api.uploadFiles).toHaveBeenCalledWith(files, 'GXH/src', expect.any(Function))
+    expect(wrapper.emitted('mutated')[0][0]).toMatchObject({
+      partial: true, affectsSelected: true, selectedPath: 'GXH/src/checkout.py'
+    })
+    wrapper.unmount()
+  })
+
+  it('uses the parent directory when selecting a file and creating a folder', async () => {
+    api.fetchTree.mockResolvedValue({ children: [{ ...fileNode, path: 'GXH/README.md' }] })
+    api.createDir.mockResolvedValue({})
+    const prompt = vi.spyOn(window, 'prompt').mockReturnValue('examples')
+    const wrapper = mountTree()
+    await flushPromises()
+    await wrapper.get('[data-test="select-node"]').trigger('click')
+    expect(wrapper.get('[aria-label="Upload directory"]').element.value).toBe('GXH')
+    await wrapper.get('[title="New Folder"]').trigger('click')
+    await flushPromises()
+    expect(api.createDir).toHaveBeenCalledWith('GXH/examples')
+    prompt.mockRestore()
     wrapper.unmount()
   })
 

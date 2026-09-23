@@ -1,0 +1,15 @@
+{
+  "synthetic": true,
+  "passed": true,
+  "restored_files": 1,
+  "checksums": {
+    "traces/98765/backup-drill.json": "c06f7b794983a013b68204dc9e552948c3ad9a55b24455888b19a239d6364cda"
+  },
+  "checks": [
+    "redaction",
+    "private backup",
+    "new staging restore",
+    "reverified checksums",
+    "no live replacement"
+  ]
+}

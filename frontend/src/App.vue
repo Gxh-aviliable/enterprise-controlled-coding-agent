@@ -40,6 +40,7 @@
       <TraceViewer
         v-else-if="mainView === 'trace'"
       />
+      <SkillsPanel v-else-if="mainView === 'skills'" />
       <AdminConsole
         v-else-if="mainView === 'admin'"
         @close="mainView = 'chat'"
@@ -61,6 +62,7 @@ const ChatPanel = defineAsyncComponent(() => import('./components/ChatPanel.vue'
 const FileViewer = defineAsyncComponent(() => import('./components/FileViewer.vue'))
 const MemoryViewer = defineAsyncComponent(() => import('./components/MemoryViewer.vue'))
 const TraceViewer = defineAsyncComponent(() => import('./components/TraceViewer.vue'))
+const SkillsPanel = defineAsyncComponent(() => import('./components/SkillsPanel.vue'))
 const AdminConsole = defineAsyncComponent(() => import('./components/admin/AdminConsole.vue'))
 
 const sessions = ref([])
@@ -151,6 +153,7 @@ function onTabChange(tab) {
   if (tab === 'sessions') { mainView.value = 'chat'; selectedFile.value = null }
   else if (tab === 'files') { /* keep current view, let file tree control it */ }
   else if (tab === 'memory') { mainView.value = 'memory'; selectedFile.value = null }
+  else if (tab === 'skills') { mainView.value = 'skills'; selectedFile.value = null }
   else if (tab === 'trace') { mainView.value = 'trace'; selectedFile.value = null }
 }
 

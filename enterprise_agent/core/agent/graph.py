@@ -42,7 +42,6 @@ from enterprise_agent.core.agent.nodes import (
     llm_call_node,
     manual_compress_node,
     persist_memory_node,
-    plan_task_node,
     pre_llm_microcompact_node,
     prepare_tool_execution_node,
     route_after_llm,
@@ -222,8 +221,6 @@ def build_agent_graph():
     # Explicit task lifecycle phases
     add_node("task_parse", task_parse_node)
     add_node("init_context", init_context_node)
-    add_node("plan_task", plan_task_node)
-
     # Pre-LLM microcompact keeps tool output growth bounded.
     add_node("pre_microcompact", pre_llm_microcompact_node)
 
@@ -257,8 +254,7 @@ def build_agent_graph():
 
     # Pre-processing before LLM
     graph.add_edge("check_background", "check_inbox")   # Inject inbox messages
-    graph.add_edge("check_inbox", "plan_task")          # Planning phase marker
-    graph.add_edge("plan_task", "pre_microcompact")
+    graph.add_edge("check_inbox", "pre_microcompact")
     graph.add_conditional_edges(
         "pre_microcompact",
         route_after_microcompact,
@@ -335,7 +331,6 @@ def build_simple_agent_graph(checkpointer=None):
     # Add nodes
     add_node("task_parse", task_parse_node)
     add_node("init_context", init_context_node)
-    add_node("plan_task", plan_task_node)
     add_node("pre_microcompact", pre_llm_microcompact_node)
     add_node("llm_call", llm_call_node)
     add_node("prepare_tool_execution", prepare_tool_execution_node)
@@ -352,8 +347,7 @@ def build_simple_agent_graph(checkpointer=None):
     # Entry flow (no load_memory — RedisSaver restores state automatically)
     graph.set_entry_point("task_parse")
     graph.add_edge("task_parse", "init_context")
-    graph.add_edge("init_context", "plan_task")
-    graph.add_edge("plan_task", "pre_microcompact")
+    graph.add_edge("init_context", "pre_microcompact")
     graph.add_conditional_edges(
         "pre_microcompact",
         route_after_microcompact,

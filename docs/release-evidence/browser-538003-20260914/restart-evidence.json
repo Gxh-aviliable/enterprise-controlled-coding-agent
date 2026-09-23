@@ -1,0 +1,325 @@
+{
+  "kind": "real-browser-api-kill",
+  "source_sha256": "538003babd0e4ddea490a212eebd8d9dad9a192dafba7acce0612982b7e4d3c7",
+  "approvals": 1,
+  "trace_id": "d32aea9c-21f7-4b45-a620-792237f81bdb",
+  "session_id": "97173d82-d326-411f-8893-12ec494d80ea",
+  "last_status": {
+    "status": "failed",
+    "session_id": "97173d82-d326-411f-8893-12ec494d80ea",
+    "trace_id": "d32aea9c-21f7-4b45-a620-792237f81bdb",
+    "execution_phase": "executing",
+    "runner_state": null,
+    "stream_fence": null,
+    "cancel_requested": false,
+    "interrupt_type": null,
+    "interrupt": null
+  },
+  "last_error": "fetch failed",
+  "trace": {
+    "current_phase": "executing",
+    "duration_ms": 62552,
+    "error": "Runner lease expired or API restarted. Task was not replayed; inspect changes for unknown side effects.",
+    "events": [
+      {
+        "data": {},
+        "duration_ms": 0,
+        "event_id": "b624784e-a8c9-428f-8867-51bf32151017",
+        "name": "task_created",
+        "status": "pending",
+        "timestamp": "2026-09-14T05:48:30.538347+00:00",
+        "type": "task"
+      },
+      {
+        "data": {
+          "phase": "parsing",
+          "round_count": 0,
+          "task_status": "running"
+        },
+        "duration_ms": 0,
+        "event_id": "b8f9de7f-1cae-4feb-a2c5-8f84cfc88f0b",
+        "name": "task_parse",
+        "status": "success",
+        "timestamp": "2026-09-14T05:48:30.554286+00:00",
+        "type": "node"
+      },
+      {
+        "data": {
+          "application_status": "not_attributed",
+          "candidates": [],
+          "injected_characters": 101,
+          "injected_count": 0,
+          "injected_ids": [],
+          "injected_tokens": 57,
+          "query_summary": "First use write_file to create crash-marker.txt with exactly once. Then run python sleeper.py using bash. Do not perform any other operations.",
+          "strategy": "semantic_top_k",
+          "threshold": 0.8,
+          "top_k_per_collection": 3
+        },
+        "duration_ms": 96,
+        "event_id": "75dfc66d-bbe0-4a60-9b47-07a8cbda9428",
+        "name": "memory_retrieval",
+        "status": "success",
+        "timestamp": "2026-09-14T05:48:30.653500+00:00",
+        "type": "memory"
+      },
+      {
+        "data": {
+          "phase": "parsing",
+          "round_count": 0,
+          "task_status": "running"
+        },
+        "duration_ms": 98,
+        "event_id": "f289d68e-1f8c-4707-b741-36f42f02aa73",
+        "name": "init_context",
+        "status": "success",
+        "timestamp": "2026-09-14T05:48:30.654167+00:00",
+        "type": "node"
+      },
+      {
+        "data": {
+          "phase": "parsing",
+          "round_count": 0,
+          "task_status": "running"
+        },
+        "duration_ms": 0,
+        "event_id": "918e00df-1c3b-416c-b162-8a0921125000",
+        "name": "check_background",
+        "status": "success",
+        "timestamp": "2026-09-14T05:48:30.659957+00:00",
+        "type": "node"
+      },
+      {
+        "data": {
+          "phase": "parsing",
+          "round_count": 0,
+          "task_status": "running"
+        },
+        "duration_ms": 0,
+        "event_id": "e66d9660-d488-459f-bac8-d907a8c178db",
+        "name": "check_inbox",
+        "status": "success",
+        "timestamp": "2026-09-14T05:48:30.661428+00:00",
+        "type": "node"
+      },
+      {
+        "data": {
+          "phase": "planning",
+          "round_count": 0,
+          "task_status": "running"
+        },
+        "duration_ms": 8,
+        "event_id": "bbc5b814-add0-488e-970d-044c7dd4f492",
+        "name": "pre_microcompact",
+        "status": "success",
+        "timestamp": "2026-09-14T05:48:30.670907+00:00",
+        "type": "node"
+      },
+      {
+        "data": {
+          "completion_gate_blocker": null,
+          "completion_gate_recovery_attempts": 0,
+          "context_token_estimate": 5260,
+          "incomplete_response_recovery_attempts": 0,
+          "input_chars": 7384,
+          "input_summary": "First use write_file to create crash-marker.txt with exactly once. Then run python sleeper.py using bash. Do not perform any other operations.",
+          "input_tokens": 4936,
+          "message_count": 3,
+          "output_summary": "",
+          "output_tokens": 324,
+          "response_complete": true,
+          "retry_count": 0,
+          "stop_reason": "tool_use",
+          "tool_calls": [
+            "write_file",
+            "bash"
+          ],
+          "total_tokens": 5260
+        },
+        "duration_ms": 2233,
+        "event_id": "11ecd542-3141-4bcd-ba55-395ec05128f1",
+        "name": "llm_call",
+        "status": "success",
+        "timestamp": "2026-09-14T05:48:32.906537+00:00",
+        "type": "model"
+      },
+      {
+        "data": {
+          "phase": "executing",
+          "round_count": 1,
+          "task_status": "running"
+        },
+        "duration_ms": 2234,
+        "event_id": "e95902a4-b6e8-47fb-bfaa-36016539f2c9",
+        "name": "llm_call",
+        "status": "success",
+        "timestamp": "2026-09-14T05:48:32.907643+00:00",
+        "type": "node"
+      },
+      {
+        "data": {
+          "deadline": "2026-09-14T05:53:32.913107+00:00",
+          "tools": [
+            {
+              "name": "write_file",
+              "risk": "review"
+            },
+            {
+              "name": "bash",
+              "risk": "review"
+            }
+          ]
+        },
+        "duration_ms": 0,
+        "event_id": "46c2984f-ef10-44c9-80e1-d552cc3e5dae",
+        "name": "confirmation_requested",
+        "status": "waiting",
+        "timestamp": "2026-09-14T05:48:32.914046+00:00",
+        "type": "confirmation"
+      },
+      {
+        "data": {
+          "phase": "executing",
+          "round_count": 1,
+          "task_status": "waiting_confirmation"
+        },
+        "duration_ms": 2,
+        "event_id": "071ba166-ecee-4cf9-8224-7508731030f7",
+        "name": "prepare_tool_execution",
+        "status": "success",
+        "timestamp": "2026-09-14T05:48:32.915176+00:00",
+        "type": "node"
+      },
+      {
+        "data": {
+          "phase": "executing",
+          "task_status": "waiting_confirmation"
+        },
+        "duration_ms": 0,
+        "event_id": "6c557380-eb5c-463d-b41f-544d57d210bc",
+        "name": "tool_confirm",
+        "status": "interrupted",
+        "timestamp": "2026-09-14T05:48:32.918923+00:00",
+        "type": "node"
+      },
+      {
+        "data": {
+          "approved": true,
+          "approved_ids": [
+            "call_00_Xq1WnCTDYnPJuLQJwjFE0835",
+            "call_01_QOogTbqbXtppvFVixVho9070"
+          ],
+          "reason": null
+        },
+        "duration_ms": 0,
+        "event_id": "b1ed1eb8-82f2-4e6b-a999-690604cb61c0",
+        "name": "confirmation_approved",
+        "status": "success",
+        "timestamp": "2026-09-14T05:48:33.023247+00:00",
+        "type": "confirmation"
+      },
+      {
+        "data": {
+          "phase": "executing",
+          "round_count": 1,
+          "task_status": "running"
+        },
+        "duration_ms": 5,
+        "event_id": "5b9d714d-3477-46d9-8af5-c55ee79f0846",
+        "name": "tool_confirm",
+        "status": "success",
+        "timestamp": "2026-09-14T05:48:33.028003+00:00",
+        "type": "node"
+      },
+      {
+        "data": {
+          "args_summary": {
+            "content": "exactly once",
+            "path": "crash-marker.txt"
+          },
+          "artifact_bytes": null,
+          "artifact_error": null,
+          "artifact_path": null,
+          "artifact_redacted": false,
+          "artifact_sha256": null,
+          "attempt_count": 1,
+          "error_code": null,
+          "execution_ids": [
+            "dd6c6a92d80a4810b7417df33f22baef"
+          ],
+          "exit_code": null,
+          "idempotent": false,
+          "model_chars": 66,
+          "model_truncated": false,
+          "original_chars": 66,
+          "output_summary": "Wrote 12 bytes to crash-marker.txt\n\nVerified preview:\nexactly once",
+          "risk": "review",
+          "source_truncated": false,
+          "timeout_seconds": 30,
+          "tool_call_id": "call_00_Xq1WnCTDYnPJuLQJwjFE0835"
+        },
+        "duration_ms": 10,
+        "event_id": "9613b799-e6cc-4951-82e3-1a42271730ed",
+        "name": "write_file",
+        "status": "success",
+        "timestamp": "2026-09-14T05:48:33.046049+00:00",
+        "type": "tool"
+      },
+      {
+        "data": {
+          "error": "Runner lease expired or API restarted. Task was not replayed; inspect changes for unknown side effects."
+        },
+        "duration_ms": 62552,
+        "event_id": "5e5bdbf8-7167-4327-bef6-2714940b78f9",
+        "name": "task_finished",
+        "status": "failed",
+        "timestamp": "2026-09-14T05:49:33.091202+00:00",
+        "type": "task"
+      }
+    ],
+    "finished_at": "2026-09-14T05:49:33.091202+00:00",
+    "metrics": {
+      "confirmation_count": 1,
+      "input_tokens": 4936,
+      "memory_candidates": 0,
+      "memory_injected": 0,
+      "memory_injected_tokens": 57,
+      "memory_retrieval_queries": 1,
+      "model_calls": 1,
+      "model_duration_ms": 2233,
+      "node_count": 9,
+      "node_duration_ms": 2347,
+      "output_tokens": 324,
+      "pause_count": 0,
+      "paused_duration_ms": 0,
+      "resume_count": 0,
+      "retry_count": 0,
+      "safety_interceptions": 0,
+      "tool_calls": 1,
+      "tool_duration_ms": 10,
+      "tool_failures": 0,
+      "tool_successes": 1,
+      "total_tokens": 5260
+    },
+    "mode": "single_agent",
+    "request_summary": "First use write_file to create crash-marker.txt with exactly once. Then run python sleeper.py using bash. Do not perform any other operations.",
+    "result_summary": null,
+    "schema_version": 1,
+    "session_id": "97173d82-d326-411f-8893-12ec494d80ea",
+    "started_at": "2026-09-14T05:48:30.538347+00:00",
+    "status": "failed",
+    "trace_id": "d32aea9c-21f7-4b45-a620-792237f81bdb",
+    "user_id": 3
+  },
+  "marker": {
+    "path": "crash-marker.txt",
+    "content": "exactly once",
+    "size": 12,
+    "lines": 1,
+    "offset": 0,
+    "limit": 500,
+    "binary": false,
+    "sha256": "990e96e1550cd63704d35e70650125765c9b0725d7147883d52293f55e522b14"
+  },
+  "result": "passed"
+}

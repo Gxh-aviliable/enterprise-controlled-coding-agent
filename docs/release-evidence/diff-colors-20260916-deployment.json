@@ -1,0 +1,29 @@
+{
+  "frontend_source_sha256": "4ed991a6265192d4d706654f3332691ea23f7398feac824f1d9957fa004c32d5",
+  "backend_containers_preserved": true,
+  "compose_override": "/home/ubuntu/mini-claude-releases/20260916-diff-colors/docker/frontend-hotfix.yml",
+  "frontend_image": "mini-claude-frontend:20260916-diff-colors",
+  "frontend_image_id": "sha256:2fd1442ff649a2fbaf9bdbbccb31b66f345b33d86d68600c48953d267d041c84",
+  "previous_frontend_image": "mini-claude-frontend:20260916-ui-fixes",
+  "api_health": {
+    "status": "healthy",
+    "version": "0.1.0",
+    "build": {
+      "source_sha256": "17a7741ddcf204a69d91fb73f58785c356d9aa652d21135d45f2e130cf579126",
+      "qualification": "diagnostic-snapshot",
+      "git": {
+        "commit": "0648e72dad083e21a70eb8811e1e0dc890bd5714",
+        "branch": "feature/verified-agent-delivery",
+        "dirty": true
+      }
+    },
+    "name": "Enterprise Agent",
+    "checks": {
+      "mysql": "ok",
+      "redis": "ok"
+    }
+  },
+  "frontend_version": {
+    "build_id": "2026-09-15T22:34:07.714Z"
+  }
+}

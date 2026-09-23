@@ -1,0 +1,35 @@
+{
+  "synthetic": true,
+  "single_writer": true,
+  "results": [
+    {
+      "event_count": 101,
+      "writes": 100,
+      "bytes": 223817,
+      "write_p50_ms": 0.5545619642361999,
+      "write_p95_ms": 0.8908750023692846,
+      "query_ms": 0.20054203923791647,
+      "projected_1000_tasks_bytes": 223817000
+    },
+    {
+      "event_count": 501,
+      "writes": 500,
+      "bytes": 1114917,
+      "write_p50_ms": 1.666437485255301,
+      "write_p95_ms": 2.7032089419662952,
+      "query_ms": 0.9054170222952962,
+      "projected_1000_tasks_bytes": 1114917000
+    },
+    {
+      "event_count": 2001,
+      "writes": 2000,
+      "bytes": 4456550,
+      "write_p50_ms": 6.419896031729877,
+      "write_p95_ms": 11.80920796468854,
+      "query_ms": 3.5037079360336065,
+      "projected_1000_tasks_bytes": 4456550000
+    }
+  ],
+  "migration_trigger": "multiple API writers, or production p95 write >=50ms at observed task size",
+  "note": "1000-task disk growth is a projection, not observed traffic."
+}

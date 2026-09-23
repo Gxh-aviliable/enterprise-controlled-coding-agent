@@ -1,0 +1,4 @@
+# Preserve raw test output and patch context; their hashes are release evidence.
+docs/release-evidence/**/*.xml -whitespace
+docs/release-evidence/**/*.txt -whitespace
+docs/release-evidence/**/*.patch -whitespace

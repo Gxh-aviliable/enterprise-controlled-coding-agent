@@ -8,8 +8,10 @@ central database/OpenTelemetry backend for multi-replica production deploys.
 from __future__ import annotations
 
 import json
+import logging
 import os
 import re
+import stat
 import threading
 import uuid
 from datetime import datetime, timezone
@@ -17,8 +19,12 @@ from pathlib import Path
 from typing import Any
 
 from enterprise_agent.core.agent.tools.workspace import get_user_workspace
+from enterprise_agent.core.agent.tools.workspace_lock import _require_plain_directory, _workspace_lock_directory
 
 TRACE_SCHEMA_VERSION = 1
+MAX_TRACE_BYTES = 8 * 1024 * 1024
+MAX_TRACE_EVENTS = 5000
+logger = logging.getLogger(__name__)
 TRACE_ID_PATTERN = re.compile(r"^[A-Za-z0-9_-]{1,100}$")
 SENSITIVE_KEYS = {
     "api_key",
@@ -78,29 +84,83 @@ class TraceStore:
         self._lock = threading.RLock()
 
     def _trace_dir(self, user_id: int) -> Path:
-        directory = get_user_workspace(user_id) / ".agent" / "traces"
-        directory.mkdir(parents=True, exist_ok=True)
+        if int(user_id) < 0:
+            raise ValueError("Invalid trace owner")
+        base = _workspace_lock_directory() / "traces"
+        base.mkdir(mode=0o700, exist_ok=True)
+        _require_plain_directory(base, label="Trace control directory")
+        directory = base / str(int(user_id))
+        directory.mkdir(mode=0o700, exist_ok=True)
+        _require_plain_directory(directory, label="Trace owner directory")
         return directory
 
     def _path(self, user_id: int, trace_id: str) -> Path:
         if not TRACE_ID_PATTERN.fullmatch(trace_id):
             raise ValueError("Invalid trace ID")
-        return self._trace_dir(user_id) / f"{trace_id}.json"
+        path = self._trace_dir(user_id) / f"{trace_id}.json"
+        if path.is_symlink():
+            raise PermissionError("Trace file cannot be a symlink")
+        return path
 
     def _read(self, user_id: int, trace_id: str) -> dict[str, Any]:
         path = self._path(user_id, trace_id)
         if not path.exists():
+            path = get_user_workspace(user_id) / ".agent" / "traces" / f"{trace_id}.json"
+            for parent in (path.parent.parent, path.parent):
+                if parent.is_symlink():
+                    raise FileNotFoundError(trace_id)
+            legacy = True
+        else:
+            legacy = False
+        with os.fdopen(os.open(path, os.O_RDONLY | os.O_NOFOLLOW), "rb") as stream:
+            metadata = os.fstat(stream.fileno())
+            if not stat.S_ISREG(metadata.st_mode) or metadata.st_nlink != 1:
+                raise PermissionError("Trace must be a plain private file")
+            data = stream.read(MAX_TRACE_BYTES + 1)
+        if len(data) > MAX_TRACE_BYTES:
+            raise ValueError("Trace exceeds read budget; administrator archival required")
+        trace = json.loads(data)
+        if trace.get("user_id") != int(user_id) or trace.get("trace_id") != trace_id:
             raise FileNotFoundError(trace_id)
-        return json.loads(path.read_text(encoding="utf-8"))
+        if legacy:
+            # User-writable historical files remain visible, never promoted to
+            # trusted approval/restore evidence. Do not delete their source.
+            trace = {**redact_value({k: v for k, v in trace.items() if k != "events"}),
+                     "events": [redact_value(e) for e in trace.get("events", [])[:MAX_TRACE_EVENTS]],
+                     "storage_trust": "legacy_unverified"}
+        return trace
 
     def _write(self, user_id: int, trace: dict[str, Any]) -> None:
         path = self._path(user_id, trace["trace_id"])
+        # ponytail: bounded whole-file JSON for one API writer; migrate to MySQL
+        # incremental events if measured latency or multiple writers require it.
+        events = trace["events"]
+        removed = max(0, len(events) - MAX_TRACE_EVENTS)
+        if removed:
+            del events[:removed]
+        payload = json.dumps(trace, ensure_ascii=False, sort_keys=True)
+        while len(payload.encode()) > MAX_TRACE_BYTES and events:
+            count = max(1, len(events) // 4)
+            del events[:count]
+            removed += count
+            payload = json.dumps(trace, ensure_ascii=False, sort_keys=True)
+        if removed:
+            trace["events_dropped"] = trace.get("events_dropped", 0) + removed
+            trace["events_truncated"] = True
+            logger.warning("Trace event retention cap reached for owner %s", user_id)
+            payload = json.dumps(trace, ensure_ascii=False, sort_keys=True)
+        if len(payload.encode()) > MAX_TRACE_BYTES:
+            raise ValueError("Trace summary exceeds storage budget")
         temporary = path.with_name(f".{path.name}.{os.getpid()}.{threading.get_ident()}.tmp")
-        temporary.write_text(
-            json.dumps(trace, ensure_ascii=False, indent=2, sort_keys=True),
-            encoding="utf-8",
-        )
-        temporary.replace(path)
+        try:
+            with temporary.open("w", encoding="utf-8") as stream:
+                os.chmod(temporary, 0o600)
+                stream.write(payload)
+                stream.flush()
+                os.fsync(stream.fileno())
+            temporary.replace(path)
+        finally:
+            temporary.unlink(missing_ok=True)
 
     def start_trace(
         self,
@@ -114,6 +174,7 @@ class TraceStore:
         now = utc_now_iso()
         trace = {
             "schema_version": TRACE_SCHEMA_VERSION,
+            "storage_trust": "service_control",
             "trace_id": trace_id,
             "session_id": session_id,
             "user_id": user_id,
@@ -305,20 +366,29 @@ class TraceStore:
 
     def list_traces(self, user_id: int, limit: int = 50) -> list[dict[str, Any]]:
         summaries = []
-        for path in self._trace_dir(user_id).glob("*.json"):
+        current = self._trace_dir(user_id)
+        legacy = get_user_workspace(user_id) / ".agent" / "traces"
+        paths = list(current.glob("*.json"))
+        if not legacy.is_symlink() and not legacy.parent.is_symlink():
+            paths.extend(p for p in legacy.glob("*.json") if not (current / p.name).exists())
+        for path in paths:
             try:
-                trace = json.loads(path.read_text(encoding="utf-8"))
+                trace = self.get_trace(user_id, path.stem)
                 summary = {key: value for key, value in trace.items() if key != "events"}
                 summary["event_count"] = len(trace.get("events", []))
                 summaries.append(summary)
-            except (OSError, json.JSONDecodeError):
+            except (OSError, ValueError):
                 continue
         summaries.sort(key=lambda item: item.get("started_at", ""), reverse=True)
         return summaries[: max(1, min(limit, 500))]
 
     def aggregate_metrics(self, user_id: int) -> dict[str, Any]:
         traces = self.list_traces(user_id, limit=500)
-        completed = [trace for trace in traces if trace.get("status") in {"succeeded", "failed", "cancelled"}]
+        completed = [
+            trace for trace in traces
+            if trace.get("status") in {"succeeded", "failed", "cancelled"}
+            and trace.get("storage_trust") != "legacy_unverified"
+        ]
         task_count = len(completed)
         succeeded = sum(trace.get("status") == "succeeded" for trace in completed)
         tool_calls = sum(trace["metrics"].get("tool_calls", 0) for trace in completed)

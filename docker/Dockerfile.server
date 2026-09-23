@@ -1,0 +1,16 @@
+FROM python:3.11-slim
+WORKDIR /app
+RUN sed -i 's|http://deb.debian.org/debian-security|https://mirrors.tuna.tsinghua.edu.cn/debian-security|g;s|http://deb.debian.org/debian|https://mirrors.tuna.tsinghua.edu.cn/debian|g' /etc/apt/sources.list.d/debian.sources && apt-get update && apt-get install -y --no-install-recommends gcc git ca-certificates && rm -rf /var/lib/apt/lists/*
+RUN pip install --no-cache-dir --disable-pip-version-check --timeout 120 -i https://pypi.tuna.tsinghua.edu.cn/simple uv==0.8.15
+COPY pyproject.toml uv.lock ./
+RUN sed -i 's|https://files.pythonhosted.org/packages/|https://pypi.tuna.tsinghua.edu.cn/packages/|g' uv.lock
+RUN --mount=type=cache,target=/root/.cache/uv UV_HTTP_TIMEOUT=120 uv sync --frozen --no-dev --no-install-project --link-mode=copy
+RUN useradd --create-home --uid 10001 agent && mkdir -p /workspaces /data/chroma /data/huggingface /data/shared-skills && chown -R agent:agent /workspaces /data
+COPY enterprise_agent ./enterprise_agent
+COPY migrations ./migrations
+COPY alembic.ini ./alembic.ini
+RUN --mount=type=cache,target=/root/.cache/uv uv sync --frozen --no-dev --offline --no-build-isolation --link-mode=copy
+ENV PYTHONUNBUFFERED=1 PYTHONDONTWRITEBYTECODE=1 WORKSPACE_BASE=/workspaces CHROMA_PERSIST_DIR=/data/chroma HF_HOME=/data/huggingface MANAGED_SHARED_SKILLS_DIR=/data/shared-skills
+USER agent
+EXPOSE 8000
+CMD ["sh", "-c", "/app/.venv/bin/alembic upgrade head && exec /app/.venv/bin/python -m uvicorn enterprise_agent.api.main:app --host 0.0.0.0 --port 8000"]

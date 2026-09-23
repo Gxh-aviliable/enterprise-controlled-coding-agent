@@ -1,0 +1,23 @@
+{
+  "base": "http://127.0.0.1:3017",
+  "colors": [
+    {
+      "theme": "light",
+      "added": "rgb(22, 101, 52)",
+      "removed": "rgb(185, 28, 28)",
+      "addedBackground": "rgba(34, 197, 94, 0.12)",
+      "removedBackground": "rgba(239, 68, 68, 0.12)",
+      "text": "--- before/GXH/checkout.py\n+++ after/GXH/checkout.py\n@@ -1,3 +1,3 @@\n unchanged\n-from decimal import Decimal\n+from decimal import Decimal, ROUND_DOWN\n"
+    },
+    {
+      "theme": "dark",
+      "added": "rgb(134, 239, 172)",
+      "removed": "rgb(252, 165, 165)",
+      "addedBackground": "rgba(34, 197, 94, 0.12)",
+      "removedBackground": "rgba(239, 68, 68, 0.12)",
+      "text": "--- before/GXH/checkout.py\n+++ after/GXH/checkout.py\n@@ -1,3 +1,3 @@\n unchanged\n-from decimal import Decimal\n+from decimal import Decimal, ROUND_DOWN\n"
+    }
+  ],
+  "page_errors": [],
+  "backend": "mocked data; actual frontend rendering"
+}

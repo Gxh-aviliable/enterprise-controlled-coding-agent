@@ -7,7 +7,7 @@ Tools are organized by module:
 - task: todo_update, task_create, task_get, task_update, task_list, claim_task
 - subagent: task (subagent delegation)
 - background: background_run, check_background
-- skills: load_skill, list_skills, reload_skills
+- skills: load_skill, list_skills, read_skill_resource, reload_skills
 - team: spawn_teammate, list_teammates, send_message, read_inbox,
         broadcast, shutdown_request, plan_approval, idle
 - context_tools: compress, list_transcripts, get_transcript, read_tool_artifact,
@@ -56,6 +56,7 @@ from enterprise_agent.core.agent.tools.shell import bash
 from enterprise_agent.core.agent.tools.skills import (
     list_skills,
     load_skill,
+    read_skill_resource,
     reload_skills,
 )
 
@@ -205,6 +206,7 @@ ALL_TOOLS = [
 
     # Skills
     load_skill,
+    read_skill_resource,
     list_skills,
     reload_skills,
 
@@ -261,7 +263,7 @@ def get_tools_for_permissions(
         "tools:basic": [
             read_file, write_file, edit_file, delete_paths,
             todo_update, task_create, task_get, task_update, task_list, claim_task,
-            load_skill, list_skills,
+            load_skill, list_skills, read_skill_resource,
             compress, list_transcripts, get_transcript, read_tool_artifact, context_status,
             search_memory, list_memories,
         ],
@@ -276,7 +278,7 @@ def get_tools_for_permissions(
         "tools:task": [todo_update, task_create, task_get, task_update, task_list, claim_task],
         "tools:subagent": [subagent_task, delegate_task],
         "tools:background": [background_run, check_background],
-        "tools:skills": [load_skill, list_skills, reload_skills],
+        "tools:skills": [load_skill, list_skills, read_skill_resource, reload_skills],
         "tools:team": [
             spawn_teammate, list_teammates, send_message, read_inbox,
             broadcast, shutdown_request, plan_approval, idle,
@@ -293,7 +295,7 @@ def get_tools_for_permissions(
         return [
             read_file, write_file, edit_file, delete_paths,
             todo_update, task_create, task_get, task_update, task_list,
-            load_skill, list_skills,
+            load_skill, list_skills, read_skill_resource,
             compress, read_tool_artifact, context_status
         ]
 
@@ -313,6 +315,8 @@ def get_tools_for_permissions(
 
     if enable_multi_agent is None:
         enable_multi_agent = settings.ENABLE_MULTI_AGENT
+    # Plan A exposes one creation tool; legacy team calls fail closed on replay.
+    unique_tools = [t for t in unique_tools if t.name not in MULTI_AGENT_TOOL_NAMES or t.name == "delegate_task"]
     if not enable_multi_agent:
         unique_tools = [tool for tool in unique_tools if tool.name not in MULTI_AGENT_TOOL_NAMES]
 

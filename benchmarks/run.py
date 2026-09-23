@@ -1715,6 +1715,14 @@ async def run_platform_case(case: dict[str, Any], index: int, mode: str) -> dict
         "step_count": len(case.get("platform_steps", [])),
         "task_status": state.get("task_status"),
         "response_summary": response[:1000],
+        "task_budget": {
+            "limit_tokens": settings.TASK_TOKEN_BUDGET,
+            "used_tokens": state.get("task_token_count", 0),
+            "remaining_tokens": max(0, settings.TASK_TOKEN_BUDGET - state.get("task_token_count", 0)),
+            "limit_tool_calls": settings.MAX_TOOL_CALLS_PER_TASK,
+            "used_tool_calls": state.get("tool_call_count", 0),
+            "child_tasks": state.get("child_tasks", {}),
+        },
         "evaluations": evaluations,
         "post_checks": post_checks,
         "workspace": {
@@ -1933,6 +1941,14 @@ async def run_agent_case(case: dict[str, Any], index: int, mode: str) -> dict[st
         "confirmation_resumes": confirmation_resumes,
         "task_status": state.get("task_status"),
         "response_summary": response[:1000],
+        "task_budget": {
+            "limit_tokens": settings.TASK_TOKEN_BUDGET,
+            "used_tokens": state.get("task_token_count", 0),
+            "remaining_tokens": max(0, settings.TASK_TOKEN_BUDGET - state.get("task_token_count", 0)),
+            "limit_tool_calls": settings.MAX_TOOL_CALLS_PER_TASK,
+            "used_tool_calls": state.get("tool_call_count", 0),
+            "child_tasks": state.get("child_tasks", {}),
+        },
         "evaluations": evaluations,
         "post_checks": post_checks,
         "workspace": {
@@ -2188,6 +2204,9 @@ async def run_suite(
     suite_path: Path | None = None,
     official: bool = False,
 ) -> dict[str, Any]:
+    from enterprise_agent.observability.release import source_manifest
+
+    source_before = source_manifest(ROOT)
     if backend == "platform" and mode == "multi":
         raise ValueError(
             "The deterministic platform backend supports single mode only; "
@@ -2311,6 +2330,14 @@ async def run_suite(
         finished_at=finished_at,
         official=official,
     )
+    source_after = source_manifest(ROOT)
+    run_metadata["source_snapshot"] = {
+        "qualification": "official" if official else "diagnostic-snapshot",
+        "before_sha256": source_before["source_sha256"],
+        "after_sha256": source_after["source_sha256"],
+        "unchanged": source_before["source_sha256"] == source_after["source_sha256"],
+        "files": source_before["files"],
+    }
     summary = summarize_results(results)
     report = {
         "schema_version": suite["schema_version"],
@@ -2327,6 +2354,7 @@ async def run_suite(
                 and summary["skipped"] == 0
                 and summary["infrastructure_errors"] == 0
                 and summary["system_errors"] == 0
+                and run_metadata["source_snapshot"]["unchanged"]
             ),
         },
         "run_metadata": run_metadata,

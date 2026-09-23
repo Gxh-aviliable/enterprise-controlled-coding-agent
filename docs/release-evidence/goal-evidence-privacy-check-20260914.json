@@ -1,0 +1,6 @@
+{
+  "known_configured_secrets_checked": true,
+  "credential_matches": [],
+  "files_checked": 212,
+  "limits": "Exact configured-secret scan, plus fixture exclusion; not a proof against all possible sensitive content."
+}

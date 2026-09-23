@@ -2,6 +2,7 @@
 
 > Current implementation baseline: 2026-08-28; evaluated source commit `1d637c5753e93c72989c3fdae2ab5edf50e078eb`
 > Scope: architecture in the current implementation baseline; planned components are explicitly labelled.
+> 2026-09-09 update: container execution sandbox MVP on uncommitted `feature/container-agent-sandbox`; see [validation evidence](docs/release-evidence/sandbox-mvp.md).
 
 ## 1. System context
 
@@ -80,7 +81,7 @@ Current request sequence:
 
 ## 4. Tool and workspace boundary
 
-All file tools resolve paths through `resolve_path()`, which canonicalizes the target and rejects paths outside the current user workspace. Shell commands execute with the workspace as `cwd`, an output limit, and a timeout. Foreground and background execution share one interpreter selector: explicit Bash on POSIX and `cmd.exe` on Windows. The prompt exposes `.` rather than the tenant's absolute server path.
+Python file tools remain trusted API operations using `resolve_path()` and the workspace lock. Foreground Shell and background tasks now share a replaceable Executor, defaulting to one non-root Docker container per command with a filtered workspace snapshot mounted at `/workspace`. The container has a read-only root filesystem, bounded tmpfs, dropped capabilities, no-new-privileges, no network, and CPU/memory/PID/time/output limits. Completed ordinary files publish under the workspace lock after conflict checks; execution never mounts the original user directory, other users, API credentials or Docker socket. Explicit `local` mode is unisolated development execution (Bash on POSIX, cmd.exe on Windows); Docker errors never fall back to it. See [sandbox architecture and deployment](docs/agent-sandbox.md).
 
 Current properties and limitations:
 
@@ -89,7 +90,7 @@ Current properties and limitations:
 - Unknown tools never reach risk resolution or execution. They are returned to the model and Trace as `unknown_tool`; known but unauthorized tools become `blocked/permission_denied`.
 - Shell/background confirmation is resolved from concrete arguments: safe inspection/test/build calls skip HITL, review-level calls interrupt for the current batch, and dangerous calls bypass the approval UI because executor policy must block them.
 - Policy rejections return `policy_blocked` plus a safe remediation. Absolute paths point back to the existing workspace `cwd`, output suppression/FD merging points to captured streams, and `rm` points to recoverable `delete_paths`; non-zero program exits remain distinct `nonzero_exit` evidence.
-- Shell safety is a parsed user-space policy, not a kernel sandbox. A workspace `cwd` and command validator do not provide the isolation of a rootless container, seccomp/AppArmor, resource limits, or an outbound-network policy; those remain explicit hardening work.
+- Existing Shell policy and HITL remain upstream of container isolation. The API and independent reaper control Docker through a Unix socket and retain host-administrator-equivalent trust; execution containers never receive that socket. Containers share the daemon kernel, staging lacks a runtime disk hard quota, and snapshot publishing is not a multi-file atomic transaction. This is a single-host MVP, not an absolute security boundary.
 - Authenticated browser reads return a SHA-256 receipt. `PUT /workspace/write` accepts the same path, new content and `expected_sha256`; it atomically replaces the file only when the receipt still matches, otherwise returning a structured `409 version_conflict` instead of silently overwriting a concurrent change.
 - Browser editing is deliberately narrower than Agent file tools: only an existing regular UTF-8 file of at most 1 MiB is writable. Sensitive names, Agent-owned operational directories, path escapes, symlinks and binary/oversized files are rejected. This is a direct user Workspace operation and is not presented as an Agent HITL or task Trace event.
 
@@ -144,11 +145,12 @@ task. Only a stopped runner may release its exact lease. Runner/fence identity
 also prevents late delta, tool, done or checkpoint callbacks from an old Trace
 from mutating the new timeline.
 
-Foreground POSIX Shell uses a process group and TERM/KILL escalation when
-possible. Operations without an immediate interruption primitive are recorded
-as best-effort cancellation. Managed `background_run` processes are terminated
-for the exact Trace on Stop. Tool batches check Redis cancellation immediately
-before every call.
+Docker foreground/background execution removes the exact command container on
+Stop, including detached descendants. Async tool timeout/cancellation propagates
+an Event into the synchronous worker. The independent reaper removes expired
+deployment-labeled containers after API failure; cleanup failures remain explicit.
+The opt-in local POSIX executor retains process-group TERM/KILL best effort.
+Tool batches continue checking exact-trace Redis cancellation before every call.
 
 Sensitive-tool confirmation remains the sole resumable interrupt. Approval,
 rejection and timeout revalidate checkpoint identity, keep the original
@@ -178,7 +180,7 @@ flowchart LR
     GATE -->|Yes| OUT["Lead synthesis + Trace"]
 ```
 
-The `delegate_task` path is a bounded real subagent call. Natural-language Multi execution intent cannot silently enter Single mode, and a Multi task cannot mutate the workspace or report success before one real delegation succeeds. `task_create` remains operational tracking only. The older teammate/message-bus tools remain experimental and are not required for the reliable specialist-delegation baseline.
+The `delegate_task` path now uses the trace-scoped Plan A child runtime (`core/execution/children.py`): bounded parallel analysis or immutable-snapshot exploration, Redis-fenced receipts, cancellation and cumulative usage accounting. See [Plan A implementation and evidence](docs/multi-agent-plan-a.md). The lead retains all writes and container Shell execution. Natural-language Multi execution intent cannot silently enter Single mode, and a Multi task cannot mutate the workspace or report success before one real delegation succeeds. `task_create` remains operational tracking only. Legacy task/teammate/message-bus entrypoints are excluded from model bindings; old pending calls fail explicitly. Delegation failure or empty output cannot satisfy the structured completion gate.
 
 Validation evidence is recorded independently from delegation evidence. In
 particular, successful `python -m py_compile` runs count as code validation,

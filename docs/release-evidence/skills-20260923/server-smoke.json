@@ -1,0 +1,31 @@
+{
+  "public_health": {
+    "status": "healthy",
+    "version": "0.1.0",
+    "build": {
+      "source_sha256": "6a3f9d002a980e3164538f21fd5d4c732b42c72da425afe7542c1eb786009237",
+      "qualification": "diagnostic-snapshot",
+      "git": {
+        "commit": "0648e72dad083e21a70eb8811e1e0dc890bd5714",
+        "branch": "feature/enterprise-skills",
+        "dirty": true
+      }
+    },
+    "name": "Enterprise Agent",
+    "checks": {
+      "mysql": "ok",
+      "redis": "ok"
+    }
+  },
+  "unauthenticated_denied": true,
+  "zip_install_files": 3,
+  "cross_user_read_write_denied": true,
+  "toggle_and_stale_version_conflict": true,
+  "catalog_count": 5,
+  "catalog_errors": [],
+  "temporary_user_ids": [
+    11,
+    12
+  ],
+  "real_model_called": false
+}

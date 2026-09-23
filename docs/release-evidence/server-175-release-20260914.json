@@ -1,0 +1,81 @@
+{
+  "uid": 10001,
+  "executor": "docker",
+  "multi_enabled": true,
+  "github_enabled": true,
+  "database_revision": "20260914_0006",
+  "github_schema_version": 1,
+  "github_connections": 0,
+  "live_model": {
+    "response_nonempty": true,
+    "passed": true
+  },
+  "verified_runtime_files": 101,
+  "business_row_counts_preserved": true,
+  "http": {
+    "/": 200,
+    "/healthz": 200,
+    "/api/health": 200,
+    "/version.json": 200
+  },
+  "github_routes": [
+    "/github/settings",
+    "/github/connection",
+    "/github/connection/verify",
+    "/github/repositories",
+    "/github/selection",
+    "/github/approvals/{approval_id}"
+  ],
+  "anonymous_github_denied": 401,
+  "images": {
+    "/mini-claude-api-1": {
+      "image": "mini-claude-api:20260914-github-mvp",
+      "id": "sha256:7e5774801c2a3d86ae69689016397a49c31e5d8b5f3e425a0d8eea654ee0b7df",
+      "state": "running",
+      "health": "healthy"
+    },
+    "/mini-claude-frontend-1": {
+      "image": "mini-claude-frontend:20260914-github-mvp",
+      "id": "sha256:3a22a2d5222674506c8580b613b9a0798f34eda22bf868c700ff3ffa154cd4bb",
+      "state": "running",
+      "health": "healthy"
+    },
+    "/mini-claude-sandbox-reaper-1": {
+      "image": "mini-claude-sandbox-reaper:20260914-github-mvp",
+      "id": "sha256:74a1dcd9ebaf23de0f5a48ffead4b5793ce9a11c3d0ca1173250a4c1c81657ed",
+      "state": "running",
+      "health": null
+    }
+  },
+  "release": "20260914-github-mvp",
+  "source_package_sha256": "631829b6a8c1daeeb0e40d3d76d145ef73bb1c3885b9d12df7cabbdd8e47ca86",
+  "deployed_at": "2026-09-14T01:20:40.357267+08:00",
+  "docker_tests_passed": 24,
+  "migration_tests_passed": 9,
+  "github_live_transfer_verified": false,
+  "production_authenticated_http_chat_verified": false,
+  "backup_directory": "/home/ubuntu/mini-claude-backup-20260914-github-mvp",
+  "release_directory": "/home/ubuntu/mini-claude-releases/20260914-github-mvp",
+  "backups": [
+    {
+      "file": "database.sql",
+      "bytes": 151110,
+      "sha256": "918cdf9568f6a12b5c48febcb52781a0eeaf0961631b32ef81224d633f8c4105"
+    },
+    {
+      "file": "workspaces-and-memory.tar.gz",
+      "bytes": 150242,
+      "sha256": "16f75ba952c95f0754876d83dd4e33d278d7faa63fa64c83d47c8ddd6e56248d"
+    },
+    {
+      "file": "redis.rdb",
+      "bytes": 1004309,
+      "sha256": "715207729295f0c916a5b226870d97d46b4fef1080354509e4d66c4477b9a166"
+    },
+    {
+      "file": "source-and-config.tar.gz",
+      "bytes": 86776231,
+      "sha256": "42ce812b1a7f3c8a724a74838ae2fea4b0c928d8cfaa5e5fca739e7efb6e95c6"
+    }
+  ]
+}

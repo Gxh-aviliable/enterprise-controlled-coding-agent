@@ -9,6 +9,8 @@ from enterprise_agent.models.admin import (
     AdminAuditLog,
     SharedSkill,
     SharedSkillVersion,
+    SkillImportPreview,
+    SkillInstallation,
     UserQuota,
     UserUsageDaily,
 )
@@ -29,6 +31,8 @@ __all__ = [
     "AdminAuditLog",
     "SharedSkill",
     "SharedSkillVersion",
+    "SkillImportPreview",
+    "SkillInstallation",
     "UserQuota",
     "UserUsageDaily",
 ]

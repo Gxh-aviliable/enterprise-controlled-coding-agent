@@ -1,0 +1,53 @@
+{
+  "health": {
+    "status": "healthy",
+    "version": "0.1.0",
+    "build": {
+      "source_sha256": "a7bbb693f7c3b0940c3ba5e12b51cde8ec5be32f742243c64abdd6c7364b1ea3",
+      "qualification": "diagnostic-snapshot",
+      "git": {
+        "commit": "0648e72dad083e21a70eb8811e1e0dc890bd5714",
+        "branch": "feature/verified-agent-delivery",
+        "dirty": true
+      }
+    },
+    "name": "Enterprise Agent",
+    "checks": {
+      "mysql": "ok",
+      "redis": "ok"
+    }
+  },
+  "github_routes_removed_for_free_user": true,
+  "capabilities": {
+    "default_mode": "single_agent",
+    "available_modes": [
+      "single_agent",
+      "multi_agent"
+    ],
+    "multi_agent_enabled": true,
+    "multi_agent_permitted": true,
+    "multi_agent_reason": null
+  },
+  "github_routes_removed_for_admin": true,
+  "file_edit_and_stale_write_rejection": true,
+  "real_shell": {
+    "executor": "docker",
+    "cleanup_confirmed": true,
+    "network_enabled": true,
+    "consecutive_calls_persist": true
+  },
+  "online_package_commands": [
+    {
+      "command": "python -m pip install --no-deps cowsay==6.1",
+      "exit_code": 0,
+      "cleanup_confirmed": true
+    },
+    {
+      "command": "python installed_package.py",
+      "exit_code": 0,
+      "cleanup_confirmed": true
+    }
+  ],
+  "passed": true,
+  "temporary_account_removed": true
+}

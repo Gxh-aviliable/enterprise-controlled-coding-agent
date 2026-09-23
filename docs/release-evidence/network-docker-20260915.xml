@@ -1,0 +1,42 @@
+<?xml version="1.0" encoding="utf-8"?><testsuites name="pytest tests"><testsuite name="pytest" errors="0" failures="1" skipped="0" tests="19" time="17.083" timestamp="2026-09-15T00:19:23.763889+08:00" hostname="GXHdeMacBook-Air.local"><testcase classname="tests.sandbox.test_docker" name="test_demo_file_tools_modify_test_result" time="1.246" /><testcase classname="tests.sandbox.test_docker" name="test_validation_receipts_bind_real_container_input" time="1.817" /><testcase classname="tests.sandbox.test_docker" name="test_secrets_other_users_host_socket_network_and_readonly" time="0.205" /><testcase classname="tests.sandbox.test_docker" name="test_limits_timeout_output_and_oom" time="1.729" /><testcase classname="tests.sandbox.test_docker" name="test_foreground_cancel_descendants_and_parallel_independence" time="0.287" /><testcase classname="tests.sandbox.test_docker" name="test_background_cancel_and_normal_completion" time="0.304" /><testcase classname="tests.sandbox.test_docker" name="test_unavailable_never_runs_on_host" time="0.030" /><testcase classname="tests.sandbox.test_docker" name="test_reaper_recovers_expired_container_only" time="0.299" /><testcase classname="tests.sandbox.test_docker" name="test_pid_limit_tmpfs_and_large_output" time="0.495" /><testcase classname="tests.sandbox.test_docker" name="test_python_file_writer_conflicts_with_running_shell" time="1.216" /><testcase classname="tests.sandbox.test_docker" name="test_container_link_is_never_published_and_cancel_drops_mutations" time="0.813" /><testcase classname="tests.sandbox.test_docker" name="test_default_configuration_is_docker_and_unauthorized_workspace_rejected" time="0.024" /><testcase classname="tests.sandbox.test_docker" name="test_async_cancellation_reaches_real_sync_executor_and_trace" time="0.221" /><testcase classname="tests.sandbox.test_docker" name="test_independent_reaper_service_recovers_orphan" time="0.595" /><testcase classname="tests.sandbox.test_docker" name="test_early_exit_137_is_not_misreported_as_timeout" time="0.210" /><testcase classname="tests.sandbox.test_docker" name="test_real_shell_diff_and_safe_restore" time="0.198" /><testcase classname="tests.sandbox.test_docker" name="test_runtime_preflight_detects_missing_node_without_executing_project" time="0.196" /><testcase classname="tests.sandbox.test_docker" name="test_runtime_preflight_mixed_image_has_python_and_node" time="0.824" /><testcase classname="tests.sandbox.test_docker" name="test_online_pip_npm_install_persist_between_containers" time="4.529"><failure message="AssertionError: {'error_code': 'policy_blocked', 'exit_code': 1, 'stderr': &quot;Blocked: inline code execution via 'python' is not allowed. Remediation: create a reviewed workspace file first, then execute that relative file.&quot;, 'stdout': ''}&#10;assert (1 == 0)">sandbox = (&lt;enterprise_agent.sandbox.executor.DockerExecutor object at 0x11dc64b60&gt;, PosixPath('/private/var/folders/c9/bkb9zzzn5pn251gl0w1bpmqc0000gn/T/pytest-of-gxh/pytest-188/test_online_pip_npm_install_pe0/workspaces/user_901'))
+monkeypatch = &lt;_pytest.monkeypatch.MonkeyPatch object at 0x11dc66cf0&gt;
+
+    def test_online_pip_npm_install_persist_between_containers(sandbox, monkeypatch):
+        if os.getenv("RUN_SANDBOX_NETWORK_TESTS") != "1":
+            pytest.skip("Explicit PyPI/npm network opt-in required")
+        from enterprise_agent.core.execution.evidence import task_evidence, current_evidence
+        from enterprise_agent.sandbox.dependencies import dependency_directory
+    
+        executor, workspace = sandbox
+        monkeypatch.setattr(settings, "SANDBOX_NETWORK_ENABLED", True)
+        monkeypatch.setattr(settings, "SANDBOX_IMAGE", os.environ.get(
+            "SANDBOX_MIXED_TEST_IMAGE", "enterprise-agent-sandbox-python-node:1"))
+        (workspace / "test_ok.py").write_text("def test_ok(): assert 1 + 1 == 2\n")
+        token = current_evidence.set({"trace_id": "online-deps", "tool_call_id": "install", "receipts": []})
+        try:
+            def shell(command):
+                result = json.loads(bash.invoke({"command": command}))
+                assert result["exit_code"] == 0 and not result.get("error_code"), result
+                assert result["cleanup_confirmed"]
+                return result
+    
+            shell("python -B -m pytest -q")
+            state = {"user_id": 901, "trace_id": "online-deps"}
+            assert task_evidence(state)["validation_satisfied"]
+            installed = shell("python -m pip install --no-deps cowsay==6.1")
+            assert installed["receipt"]["dependencies_changed"]
+            assert not task_evidence(state)["validation_satisfied"]
+&gt;           shell("python -c \"import cowsay; assert cowsay.__file__.startswith('/opt/python-user/'); print('pip-reused')\"")
+
+tests/sandbox/test_docker.py:520: 
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+
+command = 'python -c "import cowsay; assert cowsay.__file__.startswith(\'/opt/python-user/\'); print(\'pip-reused\')"'
+
+    def shell(command):
+        result = json.loads(bash.invoke({"command": command}))
+&gt;       assert result["exit_code"] == 0 and not result.get("error_code"), result
+E       AssertionError: {'error_code': 'policy_blocked', 'exit_code': 1, 'stderr': "Blocked: inline code execution via 'python' is not allowed. Remediation: create a reviewed workspace file first, then execute that relative file.", 'stdout': ''}
+E       assert (1 == 0)
+
+tests/sandbox/test_docker.py:510: AssertionError</failure></testcase></testsuite></testsuites>
